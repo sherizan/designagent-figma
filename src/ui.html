@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DesignAgent</title>
+    <style>
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div
+        style="
+          font-family: 'IBM Plex Sans', 'Avenir Next', 'Segoe UI', sans-serif;
+          font-size: 12px;
+          color: #2a2f23;
+          padding: 12px;
+        "
+      >
+        Loading DesignAgent...
+      </div>
+    </div>
+    <script>
+      (function () {
+        function showBootError(message) {
+          var root = document.getElementById('root');
+          if (!root) return;
+          root.innerHTML =
+            '<div style=\"font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; font-size:12px; color:#8a1f1f; padding:12px;\">' +
+            'DesignAgent UI failed to load.<br/>' +
+            String(message || 'Unknown error') +
+            '</div>';
+        }
+        window.addEventListener('error', function (event) {
+          showBootError(event && event.message ? event.message : 'Script error');
+        });
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event && event.reason ? event.reason : 'Unhandled promise rejection';
+          showBootError(reason && reason.message ? reason.message : reason);
+        });
+      })();
+    </script>
+    <!-- UI_SCRIPT -->
+  </body>
+</html>
