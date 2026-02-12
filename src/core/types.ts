@@ -1,8 +1,22 @@
 export type Intent = 'screen' | 'component' | 'section';
 
-export type Preset = 'nextjs-tailwind-shadcn' | 'react-native-expo-nativewind';
+export type Preset =
+  | 'nextjs-tailwind-shadcn'
+  | 'react-native-expo-nativewind'
+  | 'web-html-css'
+  | 'swiftui-ios'
+  | 'jetpack-compose-android';
 
-export type Mode = 'system-first' | 'fidelity';
+export type Mode = 'system-first' | 'fidelity-first';
+
+export type PresetTarget =
+  | 'web-nextjs'
+  | 'native-rn-expo'
+  | 'web-html-css'
+  | 'native-swiftui'
+  | 'native-compose';
+
+export type PresetIcon = 'globe' | 'smartphone' | 'file-code' | 'apple' | 'bot';
 
 export type ScoreCategory =
   | 'Component Coverage'
@@ -15,6 +29,8 @@ export interface PresetDefinition {
   id: Preset;
   label: string;
   runtime: 'web' | 'native';
+  target: PresetTarget;
+  icon: PresetIcon;
   projectContext: string;
   taskHint: string;
 }
@@ -22,8 +38,10 @@ export interface PresetDefinition {
 export const PRESET_DEFINITIONS: Record<Preset, PresetDefinition> = {
   'nextjs-tailwind-shadcn': {
     id: 'nextjs-tailwind-shadcn',
-    label: 'Next.js + Tailwind + shadcn',
+    label: 'Next.js + Tailwind + shadcn (Web)',
     runtime: 'web',
+    target: 'web-nextjs',
+    icon: 'globe',
     projectContext:
       'Use Next.js App Router, TypeScript, Tailwind CSS, and shadcn/ui components. Favor composition, server-safe defaults, and reusable primitives.',
     taskHint:
@@ -31,12 +49,47 @@ export const PRESET_DEFINITIONS: Record<Preset, PresetDefinition> = {
   },
   'react-native-expo-nativewind': {
     id: 'react-native-expo-nativewind',
-    label: 'React Native + Expo + NativeWind',
+    label: 'React Native (Expo) + NativeWind',
     runtime: 'native',
+    target: 'native-rn-expo',
+    icon: 'smartphone',
     projectContext:
       'Use Expo + React Native with TypeScript and NativeWind. Prefer React Native core + DS wrappers, and keep navigation wiring as placeholders when unclear.',
     taskHint:
       'Produce screen/component code using RN layout rules, NativeWind classes, and explicit navigation placeholders where needed.'
+  },
+  'web-html-css': {
+    id: 'web-html-css',
+    label: 'Web (Pure HTML/CSS)',
+    runtime: 'web',
+    target: 'web-html-css',
+    icon: 'file-code',
+    projectContext:
+      'Use semantic HTML and plain CSS. Avoid framework-specific abstractions unless explicitly requested.',
+    taskHint:
+      'Produce clean HTML structure with maintainable CSS, keeping component extraction minimal and deterministic.'
+  },
+  'swiftui-ios': {
+    id: 'swiftui-ios',
+    label: 'SwiftUI (iOS)',
+    runtime: 'native',
+    target: 'native-swiftui',
+    icon: 'apple',
+    projectContext:
+      'Use SwiftUI for iOS with a clear View hierarchy, reusable View components, and tokenized styling via design system constants. Follow Apple Human Interface patterns.',
+    taskHint:
+      'Produce SwiftUI views with deterministic layout using VStack/HStack/ZStack, semantic modifiers, and explicit state bindings.'
+  },
+  'jetpack-compose-android': {
+    id: 'jetpack-compose-android',
+    label: 'Jetpack Compose (Android)',
+    runtime: 'native',
+    target: 'native-compose',
+    icon: 'bot',
+    projectContext:
+      'Use Kotlin + Jetpack Compose with Material 3 where applicable. Favor reusable composables, explicit state hoisting, and tokenized theming.',
+    taskHint:
+      'Produce composables with deterministic Modifier chains, layout primitives (Row/Column/Box), and clear state/event contracts.'
   }
 };
 
@@ -164,25 +217,32 @@ export interface SelectedNodeInfo {
   type: string;
   width?: number;
   height?: number;
+  link?: string;
 }
 
 export interface AnalysisPayload {
   hasSelection: true;
   preset: Preset;
+  mode: Mode;
   selectedNode: SelectedNodeInfo;
   intent: Intent;
+  flowCapable: boolean;
   uiSpec: UiSpec;
   score: ScoreResult;
   checklist: ChecklistItem[];
   checklistByCategory: Record<ScoreCategory, ChecklistItem[]>;
-  mode: Mode;
-  fallbackReasons: string[];
+  coverageWarnings: string[];
+  platformWarnings: string[];
   prompt: string;
+  promptShort: string;
+  promptStrict: string;
 }
 
 export interface EmptyAnalysis {
   hasSelection: false;
   preset: Preset;
+  mode: Mode;
+  flowCapable: false;
   message: string;
 }
 

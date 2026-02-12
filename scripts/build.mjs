@@ -25,7 +25,7 @@ await Promise.all([
     bundle: true,
     platform: 'browser',
     format: 'iife',
-    target: ['es2017'],
+    target: ['es2015'],
     define: {
       'process.env.NODE_ENV': '"production"'
     },
@@ -39,11 +39,11 @@ await Promise.all([
     bundle: true,
     platform: 'browser',
     format: 'iife',
-    target: ['es2017'],
+    target: ['es2015'],
     define: {
       'process.env.NODE_ENV': '"production"'
     },
-    minify: true,
+    minify: false,
     sourcemap: true,
     logLevel: 'info'
   })

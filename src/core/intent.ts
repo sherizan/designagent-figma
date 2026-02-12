@@ -13,7 +13,7 @@ function isInComponentSetContext(node: SceneNode): boolean {
   return false;
 }
 
-function isLikelyScreen(node: SceneNode): boolean {
+export function isScreenLikeNode(node: SceneNode): boolean {
   if (node.type !== 'FRAME') {
     return false;
   }
@@ -30,11 +30,16 @@ function isLikelyScreen(node: SceneNode): boolean {
 }
 
 export function classifyIntent(node: SceneNode): Intent {
-  if (node.type === 'INSTANCE' || isInComponentSetContext(node)) {
+  if (
+    node.type === 'INSTANCE' ||
+    node.type === 'COMPONENT' ||
+    node.type === 'COMPONENT_SET' ||
+    isInComponentSetContext(node)
+  ) {
     return 'component';
   }
 
-  if (isLikelyScreen(node)) {
+  if (isScreenLikeNode(node)) {
     return 'screen';
   }
 

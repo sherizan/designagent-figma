@@ -14,6 +14,8 @@ interface MutableStats extends UiSpecStats {
   rawValueCandidates: number;
 }
 
+const GHOST_NAME_PATTERN = /\b(ghost|hidden)\b/i;
+
 function isMixed<T>(value: T | PluginAPI['mixed']): value is PluginAPI['mixed'] {
   return value === figma.mixed;
 }
@@ -358,6 +360,10 @@ function countRawValueHints(node: SceneNode): number {
   return raw;
 }
 
+function shouldIgnoreForTokenScoring(node: SceneNode): boolean {
+  return !node.visible || GHOST_NAME_PATTERN.test(node.name);
+}
+
 function extractVisualSummary(node: SceneNode): VisualSummary | undefined {
   if (!('fills' in node || 'strokes' in node || 'effects' in node || 'cornerRadius' in node)) {
     return undefined;
@@ -400,11 +406,13 @@ function updateGlobalStats(node: SceneNode, stats: MutableStats, tokenHints: Tok
 }
 
 function extractNode(node: SceneNode, stats: MutableStats): UiNodeSpec {
-  const tokenHints: TokenHints = {
-    styleRefs: getNodeStyleRefCount(node),
-    variableRefs: getNodeVariableRefCount(node),
-    rawValueHints: countRawValueHints(node)
-  };
+  const tokenHints: TokenHints = shouldIgnoreForTokenScoring(node)
+    ? { styleRefs: 0, variableRefs: 0, rawValueHints: 0 }
+    : {
+        styleRefs: getNodeStyleRefCount(node),
+        variableRefs: getNodeVariableRefCount(node),
+        rawValueHints: countRawValueHints(node)
+      };
 
   updateGlobalStats(node, stats, tokenHints);
 

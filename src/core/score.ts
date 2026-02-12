@@ -1,6 +1,5 @@
 import type {
   ChecklistItem,
-  Mode,
   ScoreCategory,
   ScoreResult,
   UiNodeSpec,
@@ -9,7 +8,7 @@ import type {
 
 interface FlatNode {
   node: UiNodeSpec;
-  parent: UiNodeSpec | null;
+  parentId: string | null;
 }
 
 const INTERACTIVE_NAME_HINT =
@@ -17,13 +16,16 @@ const INTERACTIVE_NAME_HINT =
 
 const GENERIC_NAME_PATTERN =
   /^(rectangle|frame|group|text|ellipse|line|vector|polygon|star|section|instance|component)\s*\d+$/i;
+const GHOST_NAME_PATTERN = /\b(ghost|hidden)\b/i;
+const DEVICE_CHROME_NAME_PATTERN =
+  /^(status[\s-]*bar(?:\s*[-–]\s*iphone)?\b|home[\s-]*indicator\b)/i;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
 function flattenTree(root: UiNodeSpec): FlatNode[] {
-  const queue: FlatNode[] = [{ node: root, parent: null }];
+  const queue: FlatNode[] = [{ node: root, parentId: null }];
   const result: FlatNode[] = [];
 
   while (queue.length > 0) {
@@ -35,7 +37,7 @@ function flattenTree(root: UiNodeSpec): FlatNode[] {
     result.push(current);
 
     for (const child of current.node.children) {
-      queue.push({ node: child, parent: current.node });
+      queue.push({ node: child, parentId: current.node.id });
     }
   }
 
@@ -49,6 +51,101 @@ function isInteractiveCandidate(node: UiNodeSpec): boolean {
 function hasVariantProps(node: UiNodeSpec): boolean {
   const properties = node.instance?.componentProperties;
   return Boolean(properties && Object.keys(properties).length > 0);
+}
+
+function isSkippableByType(node: UiNodeSpec): boolean {
+  return node.type === 'COMPONENT' || node.type === 'COMPONENT_SET';
+}
+
+function isScorableNode(
+  node: UiNodeSpec,
+  nodeById: Map<string, UiNodeSpec>,
+  parentById: Map<string, string | null>
+): boolean {
+  if (!node.visible) {
+    return false;
+  }
+  if (hasHiddenAncestor(node.id, nodeById, parentById)) {
+    return false;
+  }
+  if (GHOST_NAME_PATTERN.test(node.name)) {
+    return false;
+  }
+  if (DEVICE_CHROME_NAME_PATTERN.test(node.name.trim())) {
+    return false;
+  }
+  if (isSkippableByType(node)) {
+    return false;
+  }
+  // Skip nodes inside component set definitions (variant authoring context).
+  if (hasAncestorType(node.id, 'COMPONENT_SET', nodeById, parentById)) {
+    return false;
+  }
+  return true;
+}
+
+function hasAncestorType(
+  nodeId: string,
+  type: string,
+  nodeById: Map<string, UiNodeSpec>,
+  parentById: Map<string, string | null>
+): boolean {
+  let cursor = parentById.get(nodeId) ?? null;
+
+  while (cursor) {
+    const parentNode = nodeById.get(cursor);
+    if (!parentNode) {
+      return false;
+    }
+
+    if (parentNode.type === type) {
+      return true;
+    }
+
+    cursor = parentById.get(cursor) ?? null;
+  }
+
+  return false;
+}
+
+function hasHiddenAncestor(
+  nodeId: string,
+  nodeById: Map<string, UiNodeSpec>,
+  parentById: Map<string, string | null>
+): boolean {
+  let cursor = parentById.get(nodeId) ?? null;
+
+  while (cursor) {
+    const parentNode = nodeById.get(cursor);
+    if (!parentNode) {
+      return false;
+    }
+
+    if (!parentNode.visible) {
+      return true;
+    }
+
+    cursor = parentById.get(cursor) ?? null;
+  }
+
+  return false;
+}
+
+function isMappedComponentCandidate(
+  node: UiNodeSpec,
+  nodeById: Map<string, UiNodeSpec>,
+  parentById: Map<string, string | null>
+): boolean {
+  if (node.type === 'INSTANCE' || node.type === 'COMPONENT' || node.type === 'COMPONENT_SET') {
+    return true;
+  }
+
+  // Children inside an instance are implementation details of a mapped DS component.
+  if (hasAncestorType(node.id, 'INSTANCE', nodeById, parentById)) {
+    return true;
+  }
+
+  return false;
 }
 
 function checklistItem(
@@ -80,43 +177,59 @@ export interface ScoreComputationResult {
   score: ScoreResult;
   checklist: ChecklistItem[];
   checklistByCategory: Record<ScoreCategory, ChecklistItem[]>;
-  mode: Mode;
-  fallbackReasons: string[];
+  coverageWarnings: string[];
 }
 
 export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
   const nodes = flattenTree(uiSpec.root);
+  const nodeById = new Map(nodes.map(({ node }) => [node.id, node]));
+  const parentById = new Map(nodes.map(({ node, parentId }) => [node.id, parentId]));
+  const scorableNodes = nodes.filter(({ node }) =>
+    isScorableNode(node, nodeById, parentById)
+  );
   const checklist: ChecklistItem[] = [];
 
-  const interactiveCandidates = nodes.filter(({ node }) => isInteractiveCandidate(node));
-  const interactiveInstances = interactiveCandidates.filter(({ node }) => node.type === 'INSTANCE');
+  const interactiveCandidates = scorableNodes.filter(
+    ({ node }) =>
+      isInteractiveCandidate(node) &&
+      !hasAncestorType(node.id, 'INSTANCE', nodeById, parentById)
+  );
+  const mappedInteractiveCandidates = interactiveCandidates.filter(({ node }) =>
+    isMappedComponentCandidate(node, nodeById, parentById)
+  );
 
   const componentCoverageRatio =
     interactiveCandidates.length > 0
-      ? interactiveInstances.length / interactiveCandidates.length
+      ? mappedInteractiveCandidates.length / interactiveCandidates.length
       : 1;
   const componentCoverage = Math.round(componentCoverageRatio * 30);
 
   for (const candidate of interactiveCandidates) {
-    if (candidate.node.type !== 'INSTANCE') {
+    if (!isMappedComponentCandidate(candidate.node, nodeById, parentById)) {
       checklist.push(
         checklistItem(
           'Component Coverage',
           candidate.node,
-          'Interactive candidate is not mapped to a design system instance.',
+          'This interactive layer may not be using a reusable design-system component.',
           'Replace with DS component instance (Button/Input/Control) from your component library.'
         )
       );
     }
   }
 
-  const tokenRefs = uiSpec.tokenization.styleRefs + uiSpec.tokenization.variableRefs;
-  const rawTokenCandidates = uiSpec.tokenization.rawValueCandidates;
+  const tokenRefs = scorableNodes.reduce(
+    (sum, { node }) => sum + node.tokenHints.styleRefs + node.tokenHints.variableRefs,
+    0
+  );
+  const rawTokenCandidates = scorableNodes.reduce(
+    (sum, { node }) => sum + node.tokenHints.rawValueHints,
+    0
+  );
   const tokenizationRatio =
     tokenRefs + rawTokenCandidates > 0 ? tokenRefs / (tokenRefs + rawTokenCandidates) : 0.5;
   const tokenizationCoverage = Math.round(tokenizationRatio * 25);
 
-  for (const { node } of nodes) {
+  for (const { node } of scorableNodes) {
     const hasRawValues = node.tokenHints.rawValueHints > 0;
     const hasTokenRefs = node.tokenHints.styleRefs + node.tokenHints.variableRefs > 0;
     if (hasRawValues && !hasTokenRefs) {
@@ -133,21 +246,21 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
     }
   }
 
-  const frameLikeNodes = nodes.filter(({ node }) =>
+  const frameLikeNodes = scorableNodes.filter(({ node }) =>
     ['FRAME', 'SECTION', 'COMPONENT', 'COMPONENT_SET', 'INSTANCE'].includes(node.type)
   );
-  const autoLayoutNodes = nodes.filter(
+  const autoLayoutNodes = scorableNodes.filter(
     ({ node }) => node.layout?.layoutMode && node.layout.layoutMode !== 'NONE'
   );
-  const absoluteNodes = nodes.filter(
+  const absoluteNodes = scorableNodes.filter(
     ({ node }) => node.layout?.layoutPositioning === 'ABSOLUTE'
   );
-  const groupNodes = nodes.filter(({ node }) => node.type === 'GROUP');
+  const groupNodes = scorableNodes.filter(({ node }) => node.type === 'GROUP');
 
   const autoLayoutRatio =
     frameLikeNodes.length > 0 ? autoLayoutNodes.length / frameLikeNodes.length : 0;
-  const absoluteRatio = nodes.length > 0 ? absoluteNodes.length / nodes.length : 0;
-  const groupRatio = nodes.length > 0 ? groupNodes.length / nodes.length : 0;
+  const absoluteRatio = scorableNodes.length > 0 ? absoluteNodes.length / scorableNodes.length : 0;
+  const groupRatio = scorableNodes.length > 0 ? groupNodes.length / scorableNodes.length : 0;
 
   const layoutComposite = clamp(
     autoLayoutRatio * 0.7 + (1 - absoluteRatio) * 0.2 + (1 - groupRatio) * 0.1,
@@ -180,8 +293,9 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
     }
   }
 
-  const genericNames = nodes.filter(({ node }) => GENERIC_NAME_PATTERN.test(node.name));
-  const semanticNameRatio = nodes.length > 0 ? 1 - genericNames.length / nodes.length : 1;
+  const genericNames = scorableNodes.filter(({ node }) => GENERIC_NAME_PATTERN.test(node.name));
+  const semanticNameRatio =
+    scorableNodes.length > 0 ? 1 - genericNames.length / scorableNodes.length : 1;
   const namingSemantics = Math.round(clamp(semanticNameRatio, 0, 1) * 15);
 
   for (const { node } of genericNames) {
@@ -195,7 +309,7 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
     );
   }
 
-  const instances = nodes.filter(({ node }) => node.type === 'INSTANCE');
+  const instances = scorableNodes.filter(({ node }) => node.type === 'INSTANCE');
   const completeVariants = instances.filter(({ node }) => hasVariantProps(node));
   const variantRatio = instances.length > 0 ? completeVariants.length / instances.length : 1;
   const variantCompleteness = Math.round(variantRatio * 10);
@@ -225,18 +339,22 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
   const tokenCoverageLowTrigger = tokenizationCoverage < 13;
   const layoutAmbiguousTrigger = absoluteRatio > 0.35 || layoutSemantics < 10;
 
-  const fallbackReasons: string[] = [];
+  const coverageWarnings: string[] = [];
   if (noComponentMatchTrigger) {
-    fallbackReasons.push('No reliable component match for interactive candidates.');
+    coverageWarnings.push(
+      'Some buttons or inputs are not using design system components yet.'
+    );
   }
   if (tokenCoverageLowTrigger) {
-    fallbackReasons.push('Token coverage is low, with many raw style values.');
+    coverageWarnings.push(
+      'Many colors and text styles look hard-coded instead of using shared tokens.'
+    );
   }
   if (layoutAmbiguousTrigger) {
-    fallbackReasons.push('Layout semantics are ambiguous due to absolute/group-heavy structure.');
+    coverageWarnings.push(
+      'Layout uses a lot of manual positioning, so structure may be hard to reproduce.'
+    );
   }
-
-  const mode: Mode = fallbackReasons.length > 0 ? 'fidelity' : 'system-first';
 
   const score: ScoreResult = {
     total,
@@ -249,7 +367,7 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
     },
     details: {
       interactiveCandidates: interactiveCandidates.length,
-      interactiveInstances: interactiveInstances.length,
+      interactiveInstances: mappedInteractiveCandidates.length,
       tokenRefs,
       rawTokenCandidates,
       autoLayoutRatio: Number(autoLayoutRatio.toFixed(3)),
@@ -269,7 +387,6 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
     score,
     checklist: dedupedChecklist,
     checklistByCategory: groupChecklist(dedupedChecklist),
-    mode,
-    fallbackReasons
+    coverageWarnings
   };
 }
