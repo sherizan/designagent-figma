@@ -20,6 +20,7 @@ interface PromptInput {
   preset: Preset;
   mode: Mode;
   intent: Intent;
+  flowCapable: boolean;
   selectedNode: SelectedNodeInfo;
   uiSpec: UiSpec;
   score: ScoreResult;
@@ -38,21 +39,21 @@ function getStackFields(target: PresetTarget): StackFields {
     case 'web-nextjs':
       return {
         platformName: 'Web React',
-        stackName: 'Next.js App Router + TypeScript + Tailwind + shadcn/ui',
-        stylingSystem: 'Tailwind CSS utility classes + shadcn/ui component styling',
+        stackName: 'Next.js App Router + TypeScript + Tailwind',
+        stylingSystem: 'Tailwind CSS utility classes (shadcn/ui optional)',
         navConvention:
           'Use Next.js App Router route placeholders only when required by the selected UI; otherwise omit navigation'
       };
     case 'native-rn-expo':
       return {
-        platformName: 'React Native (Expo)',
-        stackName: 'Expo + TypeScript + NativeWind',
+        platformName: 'React Native',
+        stackName: 'Expo + TypeScript',
         stylingSystem: 'NativeWind classes with React Native primitives',
         navConvention: 'Use expo-router placeholders only when required by the selected UI'
       };
     case 'web-html-css':
       return {
-        platformName: 'Web (Pure HTML/CSS)',
+        platformName: 'Web (HTML/CSS)',
         stackName: 'Semantic HTML + plain CSS',
         stylingSystem: 'CSS classes and variables (no framework assumptions)',
         navConvention:
@@ -237,96 +238,154 @@ function buildSelectionContext(input: PromptInput): string {
 function buildTemplatePrompt(input: PromptInput): string {
   const definition = PRESET_DEFINITIONS[input.preset];
   const stack = getStackFields(definition.target);
-  const implementationScope =
-    input.intent === 'screen'
-      ? 'screen'
-      : input.intent === 'component'
-      ? 'component'
-        : 'section module/view';
-  const platformLayoutRule =
-    definition.target === 'native-swiftui'
-      ? [
-          '   - SwiftUI layout mapping: use VStack/HStack/ZStack according to MCP hierarchy, axis direction, and nesting.'
-        ]
-      : [];
+  const selectionType = input.flowCapable
+    ? 'flow'
+    : input.intent === 'screen'
+    ? 'screen'
+    : input.intent === 'component'
+    ? 'component'
+    : 'section';
+  const selectionLink = input.selectedNode.link ?? '[REQUIRED] paste "Copy link to selection" URL';
+  const flowOutputHeader = input.flowCapable
+    ? [
+        '### (1) Flow Spec',
+        '- Screen order',
+        '- Transitions (From → To + trigger)',
+        '- Routes/params (or NO_NAV)',
+        ''
+      ]
+    : [];
+  const flowBuildSection = selectionType === 'screen'
+    ? []
+    : [
+        '### 5.1 Selection type = flow (multi-screen)',
+        '1) Produce a Flow Spec (internally) before coding:',
+        '   - Screen order (explicit list; if ORDER_UNKNOWN, derive from prototype links)',
+        '   - Transitions: From → To + trigger',
+        '   - Routes/params (or NO_NAV if navigation not required)',
+        '   - Shared components to extract (only if repeated 2+ times)',
+        '2) Implement shared layer first:',
+        '   - token bridge (only if needed)',
+        '   - repeated components (only if repetition is proven by MCP)',
+        '3) Implement screens in Flow Spec order:',
+        '   - one file per screen',
+        '   - wire navigation minimally and consistently (only if required)',
+        '4) Interaction logic:',
+        '   - implement only evidenced interactions (prototype links, interactive instances, component variants)',
+        '   - no invented states beyond default + pressed/disabled if evidenced',
+        ''
+      ];
 
   return [
-    'You are an implementation agent. Your job is to produce production-quality code that matches the user\'s selected Figma screen/component, using the **Figma MCP** server as the only ground-truth oracle.',
+    'You are an implementation agent.',
     '',
-    '## 0) Hard constraints (must follow)',
+    `Implement this ${input.selectedNode.name} (${selectionType}) as production-quality code.`,
+    '',
+    `Link: ${selectionLink}`,
+    '',
+    'Use the **Figma MCP** server as the ONLY ground-truth for design + interactions.',
+    '',
+    '## 1) Hard constraints (must follow)',
     '- Use **Figma MCP** tools only for design truth. Do NOT use any other MCP/server/tool for design extraction.',
-    '- Do NOT guess values that can be retrieved from **Figma MCP** (layout, spacing, typography, colors, tokens, component bindings).',
-    '- If information is missing/ambiguous, query **Figma MCP**. If still unresolved, mark as TODO with the exact missing detail.',
-    '- Prefer design-system components and tokens over primitives. Only use primitives when DS mapping is not supported by **Figma MCP** evidence.',
-    '- If Code Connect mapping exists for a node, you MUST use that mapped component.',
+    '- Do NOT guess values that can be retrieved from **Figma MCP** (layout, spacing, typography, colors, tokens, component bindings, interactions).',
+    '- If missing/ambiguous, query **Figma MCP**. If still unresolved, add a TODO with exact missing detail + node id.',
+    '- Prefer design-system components and tokens over primitives. Use primitives only when DS mapping is not supported by MCP evidence.',
+    '- If Code Connect mapping exists for a node, you MUST use that mapped component/snippet.',
     '- You MAY NOT introduce new reusable components unless the same structure appears 2+ times in the MCP hierarchy.',
     '- Keep output deterministic: no alternate designs, no extra features, no speculative flows.',
     '',
-    '## 1) Target platform / stack (fill these)',
+    '## 2) Target stack',
     `- Platform: ${stack.platformName}`,
-    `- Stack / framework: ${stack.stackName}`,
-    `- Styling system: ${stack.stylingSystem}`,
-    `- Navigation: ${stack.navConvention}`,
+    `- Stack: ${stack.stackName}`,
+    `- Styling: ${stack.stylingSystem}`,
+    '- Navigation:',
+    '  - Only if selection type = flow OR prototype links require it.',
+    `  - ${stack.navConvention}`,
     '',
-    '## 2) Figma MCP tool usage plan (must execute in order)',
-    'A) Call **Figma MCP**: get_design_context for the current user selection',
-    '   - Include full hierarchy, auto-layout semantics, constraints, text styles, fills/strokes, effects, corner radii, spacing.',
-    'B) Call **Figma MCP**: get_variable_defs for the same selection',
-    '   - Extract all variables + styles actually used by the selection.',
-    'C) Call **Figma MCP**: get_code_connect_map for the selection',
-    '   - If mappings exist, use them as the primary component mapping.',
-    'D) Call **Figma MCP**: get_screenshot for the selection',
-    '   - Use only to resolve visual ambiguities not represented in structured properties.',
+    '## 3) Figma MCP usage plan (token-efficient; execute in order)',
+    'IMPORTANT: Use the actual Figma MCP tool names available. If names differ, use the closest equivalents.',
     '',
-    'Stop and re-query **Figma MCP** for any child node ONLY when required to resolve a missing/ambiguous property.',
+    'A) SHALLOW DESIGN CONTEXT FIRST',
+    '- Fetch design context for the selection scope with shallow depth:',
+    '  - root node + immediate children + key layout properties (auto-layout, padding/gap, constraints), text styles, fills/strokes/effects, radii.',
+    '- Only descend into child nodes when needed to resolve:',
+    '  - interactive elements, component instances, or ambiguous layout.',
     '',
-    '## 3) Build procedure (deterministic)',
-    '1) Produce a “Design Extraction Summary” from **Figma MCP**:',
-    '   - Screen sections (top-to-bottom)',
-    '   - For each section: layout type, spacing, key components, and token usage',
-    '   - You MUST avoid re-ordering sections; follow MCP child order.',
-    '2) Produce a “Component & Token Mapping Table”:',
-    `   - Figma node → ${stack.platformName} component (or DS component if Code Connect map exists)`,
-    '   - Tokens/variables used (names/ids). Never guess raw values if tokens exist.',
-    `3) Implement the ${implementationScope} for ${stack.platformName}:`,
-    `   - Create the primary ${implementationScope} entry file appropriate for ${stack.platformName}/${stack.stackName}`,
-    ...platformLayoutRule,
-    '   - Create reusable subcomponents only if the **Figma MCP** hierarchy shows repetition (2+ instances).',
-    '   - Create a tokens bridge only if needed:',
-    '     - If variables resolve to semantic tokens, reference them (do not invent raw values)',
-    '     - If **Figma MCP** provides raw values without tokens, encode them as constants in a single theme file',
-    '4) States:',
-    '   - Implement only safe minimal states derived from **Figma MCP**: default + pressed/disabled if evidenced.',
-    '5) Accessibility:',
-    '   - Add platform-appropriate accessibility semantics for interactive elements',
-    '   - Ensure minimum touch target ~44x44 and add hitSlop/spacing where needed',
+    'B) TOKENS / VARIABLES / STYLES (USED ONLY)',
+    '- Fetch variables/styles that are actually USED by the selection(s).',
+    '- Record variable/style ids + names. Prefer referencing token identities over dumping raw values.',
     '',
-    '## 4) Output format (must match exactly)',
-    'Return in this order:',
+    'C) CODE CONNECT',
+    '- Fetch Code Connect mappings for the selection(s).',
+    '- If mapping exists, treat it as authoritative imports/components/props guidance.',
     '',
-    '### (1) Figma MCP Calls Performed',
-    'List each **Figma MCP** call you made with:',
-    '- tool name',
-    '- selection scope (current selection / node ids returned)',
-    '- why it was needed',
+    'D) INTERACTIONS / PROTOTYPE',
+    '- Fetch prototype interactions/reactions for the relevant nodes/screens.',
+    '- Derive a deterministic interaction contract: event → state change → navigation transition.',
     '',
-    '### (2) Design Extraction Summary',
-    'Bullet summary of hierarchy and layout decisions (grounded in **Figma MCP**).',
+    'E) SCREENSHOT (LAST RESORT ONLY)',
+    '- Fetch screenshot only if a critical visual ambiguity cannot be resolved via structured MCP properties.',
     '',
-    '### (3) Component & Token Mapping Table',
-    'A compact table: Node → Implementation → Tokens/Vars → Notes (UNKNOWN/TODO if any)',
+    'Stop and re-query MCP for deeper descendants ONLY when strictly required.',
     '',
-    '### (4) File Tree',
-    'Show the exact files you created/modified.',
+    '## 4) Assets (IMPORTANT: manual/local saving)',
+    'Figma MCP may return image URLs. You MUST ensure assets are referenced locally in the codebase:',
+    '- The best way to ensure images are always available is to download them to the codebase and reference local files instead.',
+    '- You can do this by visiting each URL and saving the files manually, OR (depending on the client) ask the AI agent to save them to the folder of your choice.',
+    'Implementation rules:',
+    '- If the design contains raster images (PNG/JPG/WebP), plan to save them under: /assets/images/',
+    '- If the design contains icons/illustrations intended as vectors, save as: /assets/icons/ (prefer SVG where applicable)',
+    '- In code, reference the local asset paths (do not reference remote URLs in production code).',
+    '- If you cannot download/save files in this environment, output ASSET_TODO items listing:',
+    '  - node id',
+    '  - asset type (png/svg/etc.)',
+    '  - suggested filename',
+    '  - target folder path',
+    '  - the source URL returned by MCP (if provided)',
     '',
-    '### (5) Code',
-    'Provide complete code for each file in separate fenced blocks, labeled with the filepath.',
+    '## 5) Build procedure (deterministic)',
     '',
-    '## 5) Acceptance checks (self-check before final)',
-    '- DS/token discipline: no raw values when **Figma MCP** tokens/vars exist.',
-    '- Layout fidelity: auto-layout direction, spacing, padding, alignment matches **Figma MCP**.',
-    '- No invented features or flows.',
-    '- Any uncertainty is explicitly captured as TODO + what **Figma MCP** data was missing.',
+    ...flowBuildSection,
+    `### 5.2 Selection type = ${input.intent === 'screen' ? 'screen' : input.intent === 'component' ? 'component' : 'section'}`,
+    input.intent === 'screen'
+      ? '- Implement one screen file.'
+      : input.intent === 'component'
+      ? '- Implement component with props/variants based on MCP + Code Connect (if present).'
+      : '- Implement this section as a reusable module and show how it mounts into a screen.',
+    'Interaction logic:',
+    '- implement only evidenced interactions (pressed/disabled if evidenced; prototype actions if present).',
+    '',
+    'Accessibility:',
+    '- Add accessibilityLabel/accessibilityRole and hitSlop for small controls.',
+    '- Ensure minimum touch target ~44x44.',
+    '',
+    '## 6) Interaction contract (derive from MCP; implement only what is evidenced)',
+    'For each interactive element (buttons, chips, tabs, inputs, list items) that MCP indicates:',
+    '- Node id + label/name',
+    '- Event (tap/press/select/submit/change/back/close/swipe) only if evidenced',
+    '- State changes (selected/expanded/input value/loading/error) only if evidenced',
+    '- Navigation (route + params) only if in Flow Spec',
+    'If uncertain, query MCP interactions; otherwise mark TODO.',
+    '',
+    '## 7) Output format (token-efficient; must follow)',
+    'Return ONLY:',
+    '',
+    ...flowOutputHeader,
+    '### (2) File Tree',
+    '- List file paths created/modified (paths only)',
+    '',
+    '### (3) Code',
+    '- Provide complete code for each file in separate fenced blocks labeled with filepath',
+    '',
+    '### (4) Open TODOs (ONLY if any)',
+    '- Bullet list of unresolved items with exact missing MCP detail + node id',
+    '',
+    '## 8) Self-check (do silently; do not print)',
+    '- No raw values when MCP vars/tokens exist',
+    '- Layout matches MCP auto-layout semantics (direction, padding/gap, alignment)',
+    '- No invented screens/features/flows',
+    '- Interactions match MCP/prototype evidence',
+    '- Any uncertainty becomes TODO with node id + missing MCP detail',
     '',
     'Execute now.'
   ].join('\n');
@@ -338,11 +397,11 @@ function buildShortPrompt(input: PromptInput): string {
 
   return [
     'You are an implementation agent using only Figma MCP for design truth.',
-    `Platform: ${stack.platformName}`,
-    `Stack: ${stack.stackName}`,
-    `Scope: ${toIntentScope(input.intent)} for node ${input.selectedNode.id} (${input.selectedNode.name})`,
-    'Use get_design_context -> get_variable_defs -> get_code_connect_map -> get_screenshot in that order.',
-    'Output: MCP calls, extraction summary, mapping table, file tree, full code, acceptance checks.'
+    `Implement ${input.selectedNode.name} (${input.flowCapable ? 'flow' : toIntentScope(input.intent)}).`,
+    `Link: ${input.selectedNode.link ?? '[REQUIRED] paste selection link'}`,
+    `Platform: ${stack.platformName} | Stack: ${stack.stackName}`,
+    'Use MCP in order: shallow context -> used tokens/styles -> code connect -> interactions (if needed) -> screenshot (last resort).',
+    'Output only: flow spec (if flow), file tree, code, open TODOs.'
   ].join('\n');
 }
 

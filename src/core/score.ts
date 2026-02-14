@@ -267,7 +267,7 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
     0,
     1
   );
-  const layoutSemantics = Math.round(layoutComposite * 20);
+  const layoutChecklistStartIndex = checklist.length;
 
   for (const { node } of absoluteNodes) {
     checklist.push(
@@ -292,6 +292,8 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
       );
     }
   }
+  const layoutIssueCount = checklist.length - layoutChecklistStartIndex;
+  const layoutSemantics = layoutIssueCount === 0 ? 20 : Math.round(layoutComposite * 20);
 
   const genericNames = scorableNodes.filter(({ node }) => GENERIC_NAME_PATTERN.test(node.name));
   const semanticNameRatio =

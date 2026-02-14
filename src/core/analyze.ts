@@ -185,6 +185,7 @@ export function composeAnalysisPayload(
     preset,
     mode,
     intent: core.intent,
+    flowCapable,
     selectedNode: core.selectedNode,
     uiSpec: core.uiSpec,
     score: core.score,

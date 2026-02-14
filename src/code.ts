@@ -4,7 +4,7 @@ import type { EmptyAnalysis, Mode, Preset } from './core/types';
 import { PRESET_DEFINITIONS } from './core/types';
 import type { ToPluginMessage, ToUIMessage } from './shared/messages';
 
-const DEFAULT_PRESET: Preset = 'nextjs-tailwind-shadcn';
+const DEFAULT_PRESET: Preset = 'swiftui-ios';
 const DEFAULT_MODE: Mode = 'system-first';
 const PANEL_SIZE = {
   width: 560,
@@ -48,7 +48,7 @@ function toEmptyAnalysis(preset: Preset, mode: Mode, message?: string): EmptyAna
     preset,
     mode,
     flowCapable: false,
-    message: message ?? 'Select a frame, instance, or section to generate DesignAgent prompts.'
+    message: message ?? 'Select a frame, instance or section.'
   };
 }
 

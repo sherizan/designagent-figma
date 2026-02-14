@@ -38,18 +38,18 @@ export interface PresetDefinition {
 export const PRESET_DEFINITIONS: Record<Preset, PresetDefinition> = {
   'nextjs-tailwind-shadcn': {
     id: 'nextjs-tailwind-shadcn',
-    label: 'Next.js + Tailwind + shadcn (Web)',
+    label: 'Next.js + Tailwind',
     runtime: 'web',
     target: 'web-nextjs',
     icon: 'globe',
     projectContext:
-      'Use Next.js App Router, TypeScript, Tailwind CSS, and shadcn/ui components. Favor composition, server-safe defaults, and reusable primitives.',
+      'Use Next.js App Router, TypeScript, and Tailwind CSS. Favor composition, server-safe defaults, and reusable primitives.',
     taskHint:
-      'Produce App Router-friendly files and map design components to shadcn/ui first before custom primitives.'
+      'Produce App Router-friendly files and map design components to reusable web UI components; shadcn/ui is optional.'
   },
   'react-native-expo-nativewind': {
     id: 'react-native-expo-nativewind',
-    label: 'React Native (Expo) + NativeWind',
+    label: 'React Native Expo',
     runtime: 'native',
     target: 'native-rn-expo',
     icon: 'smartphone',
@@ -60,7 +60,7 @@ export const PRESET_DEFINITIONS: Record<Preset, PresetDefinition> = {
   },
   'web-html-css': {
     id: 'web-html-css',
-    label: 'Web (Pure HTML/CSS)',
+    label: 'Web (HTML/CSS)',
     runtime: 'web',
     target: 'web-html-css',
     icon: 'file-code',
@@ -71,7 +71,7 @@ export const PRESET_DEFINITIONS: Record<Preset, PresetDefinition> = {
   },
   'swiftui-ios': {
     id: 'swiftui-ios',
-    label: 'SwiftUI (iOS)',
+    label: 'SwiftUI',
     runtime: 'native',
     target: 'native-swiftui',
     icon: 'apple',
@@ -82,7 +82,7 @@ export const PRESET_DEFINITIONS: Record<Preset, PresetDefinition> = {
   },
   'jetpack-compose-android': {
     id: 'jetpack-compose-android',
-    label: 'Jetpack Compose (Android)',
+    label: 'Jetpack Compose',
     runtime: 'native',
     target: 'native-compose',
     icon: 'bot',
