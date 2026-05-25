@@ -1,10 +1,11 @@
-import { extractUiSpec } from './extract';
+import { enrichUiSpec, exportAssetsForNode, extractUiSpec, loadAnnotationCategories } from './extract';
 import { classifyIntent } from './intent';
 import { generatePromptBundle } from './prompt';
 import { scoreUiSpec } from './score';
 import type {
   AnalysisPayload,
   ChecklistItem,
+  ExportedAsset,
   Intent,
   Mode,
   Preset,
@@ -17,6 +18,8 @@ import { PRESET_DEFINITIONS } from './types';
 
 interface AnalyzeOptions {
   linkBase?: string;
+  includeAssets?: boolean;
+  annotationCategories?: Map<string, string>;
 }
 
 export interface AnalysisCore {
@@ -27,6 +30,7 @@ export interface AnalysisCore {
   checklist: ChecklistItem[];
   checklistByCategory: Record<ScoreCategory, ChecklistItem[]>;
   coverageWarnings: string[];
+  assets?: ExportedAsset[];
 }
 
 type DetectedFrameFamily = 'ios' | 'android' | 'unknown';
@@ -174,6 +178,26 @@ export function analyzeNodeCore(node: SceneNode, options?: AnalyzeOptions): Anal
   };
 }
 
+export async function analyzeNodeCoreAsync(
+  node: SceneNode,
+  options?: AnalyzeOptions
+): Promise<AnalysisCore> {
+  const core = analyzeNodeCore(node, options);
+  const categories = options?.annotationCategories ?? (await loadAnnotationCategories());
+  await enrichUiSpec(core.uiSpec, node, { categories });
+  if (options?.includeAssets !== false) {
+    try {
+      const assets = await exportAssetsForNode(node);
+      if (assets.length > 0) {
+        core.assets = assets;
+      }
+    } catch {
+      // export is best-effort
+    }
+  }
+  return core;
+}
+
 export function composeAnalysisPayload(
   core: AnalysisCore,
   preset: Preset,
@@ -189,7 +213,8 @@ export function composeAnalysisPayload(
     selectedNode: core.selectedNode,
     uiSpec: core.uiSpec,
     score: core.score,
-    coverageWarnings: core.coverageWarnings
+    coverageWarnings: core.coverageWarnings,
+    assets: core.assets
   });
 
   return {
@@ -205,6 +230,7 @@ export function composeAnalysisPayload(
     checklistByCategory: core.checklistByCategory,
     coverageWarnings: core.coverageWarnings,
     platformWarnings,
+    assets: core.assets,
     prompt: prompts.full,
     promptShort: prompts.short,
     promptStrict: prompts.strict

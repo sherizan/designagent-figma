@@ -140,6 +140,29 @@ export interface TokenHints {
   rawValueHints: number;
 }
 
+export interface AnnotationEntry {
+  label: string;
+  category?: string;
+  properties?: Record<string, string>;
+}
+
+export interface ResolvedVariable {
+  id: string;
+  name: string;
+  collection: string;
+  resolvedType: string;
+  modes: Record<string, string>;
+}
+
+export interface ExportedAsset {
+  nodeId: string;
+  nodeName: string;
+  format: 'PNG' | 'SVG';
+  scale: number;
+  dataUrl: string;
+  byteLength: number;
+}
+
 export interface UiNodeSpec {
   id: string;
   name: string;
@@ -152,6 +175,9 @@ export interface UiNodeSpec {
   tokenHints: TokenHints;
   text?: TextSummary;
   instance?: InstanceSummary;
+  css?: Record<string, string>;
+  annotations?: AnnotationEntry[];
+  devStatus?: 'READY_FOR_DEV' | 'COMPLETED' | 'NONE';
   children: UiNodeSpec[];
 }
 
@@ -169,6 +195,7 @@ export interface TokenizationSummary {
   variableRefs: number;
   rawValueCandidates: number;
   coverage: number;
+  resolvedVariables?: ResolvedVariable[];
 }
 
 export interface UiSpec {
@@ -233,6 +260,7 @@ export interface AnalysisPayload {
   checklistByCategory: Record<ScoreCategory, ChecklistItem[]>;
   coverageWarnings: string[];
   platformWarnings: string[];
+  assets?: ExportedAsset[];
   prompt: string;
   promptShort: string;
   promptStrict: string;

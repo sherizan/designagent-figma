@@ -1,5 +1,8 @@
 import type {
+  AnnotationEntry,
+  ExportedAsset,
   LayoutSummary,
+  ResolvedVariable,
   TextSummary,
   TokenHints,
   UiNodeSpec,
@@ -230,12 +233,20 @@ function extractInstanceSummary(node: SceneNode) {
 
   const props: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(node.componentProperties ?? {})) {
-    props[key] = value.value as string | number | boolean;
+    // INSTANCE_SWAP props resolve to opaque node IDs (e.g. "1347:1015") that
+    // are useless to a code-generating agent. Drop them.
+    if (value.type === 'INSTANCE_SWAP') {
+      continue;
+    }
+    // Component-property keys come as "Label#1234:0" — strip the trailing
+    // disambiguation suffix so prompts read cleanly.
+    const cleanKey = key.split('#')[0] ?? key;
+    props[cleanKey] = value.value as string | number | boolean;
   }
 
+  // mainComponent is resolved asynchronously in enrichUiSpec because the
+  // plugin uses documentAccess: "dynamic-page", which forbids the sync getter.
   return {
-    mainComponentName: node.mainComponent?.name,
-    mainComponentKey: node.mainComponent?.key,
     componentProperties: Object.keys(props).length > 0 ? props : undefined
   };
 }
@@ -460,6 +471,555 @@ function extractNode(node: SceneNode, stats: MutableStats): UiNodeSpec {
   return spec;
 }
 
+function collectVariableIds(value: unknown, out: Set<string>): void {
+  if (value == null) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectVariableIds(item, out);
+    }
+    return;
+  }
+
+  if (typeof value !== 'object') {
+    return;
+  }
+
+  const maybeBinding = value as { id?: unknown; type?: unknown };
+  if (
+    typeof maybeBinding.id === 'string' &&
+    maybeBinding.id.length > 0 &&
+    maybeBinding.type === 'VARIABLE_ALIAS'
+  ) {
+    out.add(maybeBinding.id);
+    return;
+  }
+
+  if (typeof maybeBinding.id === 'string' && maybeBinding.id.startsWith('VariableID:')) {
+    out.add(maybeBinding.id);
+    return;
+  }
+
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    collectVariableIds(nested, out);
+  }
+}
+
+function collectVariableIdsFromNode(node: SceneNode, out: Set<string>): void {
+  if ('boundVariables' in node) {
+    collectVariableIds(node.boundVariables, out);
+  }
+
+  const paintCollections: Array<ReadonlyArray<Paint> | PluginAPI['mixed'] | undefined> = [];
+  if ('fills' in node) {
+    paintCollections.push(node.fills);
+  }
+  if ('strokes' in node) {
+    paintCollections.push(node.strokes);
+  }
+  for (const collection of paintCollections) {
+    if (!collection || isMixed(collection)) {
+      continue;
+    }
+    for (const paint of collection) {
+      collectVariableIds((paint as Paint & { boundVariables?: unknown }).boundVariables, out);
+    }
+  }
+}
+
+function rgbToHex(color: RGB | RGBA): string {
+  const toHex = (value: number): string => {
+    const clamped = Math.max(0, Math.min(255, Math.round(value * 255)));
+    return clamped.toString(16).padStart(2, '0');
+  };
+  const hex = `#${toHex(color.r)}${toHex(color.g)}${toHex(color.b)}`;
+  if ('a' in color && color.a !== 1) {
+    return `${hex} (alpha ${Number(color.a.toFixed(2))})`;
+  }
+  return hex;
+}
+
+function formatVariableValue(value: VariableValue, resolvedType: string): string {
+  if (value == null) {
+    return 'null';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return resolvedType === 'FLOAT' ? String(Math.round(value * 1000) / 1000) : String(value);
+  }
+  if (typeof value === 'boolean') {
+    return String(value);
+  }
+  if (typeof value === 'object' && 'r' in value && 'g' in value && 'b' in value) {
+    return rgbToHex(value as RGBA);
+  }
+  if (typeof value === 'object' && 'type' in value && (value as { type: string }).type === 'VARIABLE_ALIAS') {
+    return `→ alias(${(value as { id: string }).id})`;
+  }
+  return JSON.stringify(value);
+}
+
+function isVariableAlias(value: unknown): value is { type: 'VARIABLE_ALIAS'; id: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { type?: unknown }).type === 'VARIABLE_ALIAS' &&
+    typeof (value as { id?: unknown }).id === 'string'
+  );
+}
+
+function pickAliasedModeId(
+  collection: VariableCollection | null,
+  preferredModeName: string
+): string | undefined {
+  if (!collection) {
+    return undefined;
+  }
+  const lower = preferredModeName.toLowerCase();
+  const byName = collection.modes.find((mode) => mode.name.toLowerCase() === lower);
+  if (byName) {
+    return byName.modeId;
+  }
+  return collection.defaultModeId ?? collection.modes[0]?.modeId;
+}
+
+const MAX_ALIAS_DEPTH = 8;
+
+export async function resolveVariablesForNode(
+  root: SceneNode,
+  maxNodes = 400
+): Promise<ResolvedVariable[]> {
+  const ids = new Set<string>();
+  const queue: SceneNode[] = [root];
+  let visited = 0;
+  while (queue.length > 0 && visited < maxNodes) {
+    const node = queue.shift();
+    if (!node) {
+      continue;
+    }
+    visited += 1;
+    collectVariableIdsFromNode(node, ids);
+    if ('children' in node) {
+      for (const child of node.children) {
+        queue.push(child);
+      }
+    }
+  }
+
+  if (ids.size === 0) {
+    return [];
+  }
+
+  const variableCache = new Map<string, Variable | null>();
+  async function loadVariable(id: string): Promise<Variable | null> {
+    if (variableCache.has(id)) {
+      return variableCache.get(id) ?? null;
+    }
+    const variable = await figma.variables.getVariableByIdAsync(id).catch(() => null);
+    variableCache.set(id, variable);
+    return variable;
+  }
+
+  const collectionsCache = new Map<string, VariableCollection | null>();
+  async function getCollection(id: string): Promise<VariableCollection | null> {
+    if (collectionsCache.has(id)) {
+      return collectionsCache.get(id) ?? null;
+    }
+    const collection = await figma.variables.getVariableCollectionByIdAsync(id).catch(() => null);
+    collectionsCache.set(id, collection);
+    return collection;
+  }
+
+  async function resolveAliasChain(
+    value: VariableValue,
+    preferredModeName: string,
+    visitedAliases: Set<string>,
+    depth: number
+  ): Promise<{ terminal: VariableValue | null; resolvedType: string | null }> {
+    if (depth > MAX_ALIAS_DEPTH) {
+      return { terminal: null, resolvedType: null };
+    }
+    if (!isVariableAlias(value)) {
+      return { terminal: value, resolvedType: null };
+    }
+    if (visitedAliases.has(value.id)) {
+      return { terminal: null, resolvedType: null };
+    }
+    visitedAliases.add(value.id);
+
+    const aliased = await loadVariable(value.id);
+    if (!aliased) {
+      return { terminal: null, resolvedType: null };
+    }
+    const aliasedCollection = await getCollection(aliased.variableCollectionId);
+    const modeId = pickAliasedModeId(aliasedCollection, preferredModeName);
+    if (!modeId) {
+      return { terminal: null, resolvedType: aliased.resolvedType };
+    }
+    const nextValue = aliased.valuesByMode[modeId];
+    if (nextValue === undefined) {
+      return { terminal: null, resolvedType: aliased.resolvedType };
+    }
+    const downstream = await resolveAliasChain(
+      nextValue,
+      preferredModeName,
+      visitedAliases,
+      depth + 1
+    );
+    return {
+      terminal: downstream.terminal,
+      resolvedType: downstream.resolvedType ?? aliased.resolvedType
+    };
+  }
+
+  const seeds = await Promise.all(Array.from(ids).map(loadVariable));
+
+  const resolved: ResolvedVariable[] = [];
+  for (const variable of seeds) {
+    if (!variable) {
+      continue;
+    }
+    const collection = await getCollection(variable.variableCollectionId);
+    const modeNames = new Map<string, string>();
+    if (collection) {
+      for (const mode of collection.modes) {
+        modeNames.set(mode.modeId, mode.name);
+      }
+    }
+
+    const modes: Record<string, string> = {};
+    for (const [modeId, rawValue] of Object.entries(variable.valuesByMode)) {
+      const modeName = modeNames.get(modeId) ?? modeId;
+      if (isVariableAlias(rawValue)) {
+        const { terminal, resolvedType } = await resolveAliasChain(
+          rawValue as VariableValue,
+          modeName,
+          new Set<string>(),
+          0
+        );
+        modes[modeName] =
+          terminal !== null
+            ? formatVariableValue(terminal, resolvedType ?? variable.resolvedType)
+            : 'unresolved';
+      } else {
+        modes[modeName] = formatVariableValue(rawValue as VariableValue, variable.resolvedType);
+      }
+    }
+
+    resolved.push({
+      id: variable.id,
+      name: variable.name,
+      collection: collection?.name ?? 'unknown',
+      resolvedType: variable.resolvedType,
+      modes
+    });
+  }
+
+  resolved.sort((a, b) => a.name.localeCompare(b.name));
+  return resolved;
+}
+
+type AnnotationCategoryLookup = Map<string, string>;
+
+export async function loadAnnotationCategories(): Promise<AnnotationCategoryLookup> {
+  const lookup: AnnotationCategoryLookup = new Map();
+  if (!figma.annotations) {
+    return lookup;
+  }
+  try {
+    const categories = await figma.annotations.getAnnotationCategoriesAsync();
+    for (const category of categories) {
+      lookup.set(category.id, category.label);
+    }
+  } catch {
+    // Annotations API may not be available; ignore.
+  }
+  return lookup;
+}
+
+function extractAnnotationsForNode(
+  node: SceneNode,
+  categories: AnnotationCategoryLookup
+): AnnotationEntry[] | undefined {
+  if (!('annotations' in node)) {
+    return undefined;
+  }
+  const list = (node as SceneNode & AnnotationsMixin).annotations;
+  if (!list || list.length === 0) {
+    return undefined;
+  }
+  const entries: AnnotationEntry[] = [];
+  for (const annotation of list) {
+    const label = (annotation.label ?? '').trim();
+    if (!label) {
+      continue;
+    }
+    const entry: AnnotationEntry = { label };
+    if (annotation.categoryId) {
+      const categoryName = categories.get(annotation.categoryId);
+      if (categoryName) {
+        entry.category = categoryName;
+      }
+    }
+    if (annotation.properties && annotation.properties.length > 0) {
+      const props: Record<string, string> = {};
+      for (const prop of annotation.properties) {
+        props[prop.type] = String((prop as { value?: unknown }).value ?? '');
+      }
+      if (Object.keys(props).length > 0) {
+        entry.properties = props;
+      }
+    }
+    entries.push(entry);
+  }
+  return entries.length > 0 ? entries : undefined;
+}
+
+function getNodeDevStatus(node: SceneNode): UiNodeSpec['devStatus'] {
+  if (!('devStatus' in node)) {
+    return undefined;
+  }
+  const status = (node as SceneNode & { devStatus?: { type?: string } | null }).devStatus;
+  if (!status || !status.type) {
+    return undefined;
+  }
+  if (status.type === 'READY_FOR_DEV' || status.type === 'COMPLETED' || status.type === 'NONE') {
+    return status.type;
+  }
+  return undefined;
+}
+
+const CSS_KEYS_OF_INTEREST = new Set([
+  'width',
+  'height',
+  'min-width',
+  'min-height',
+  'max-width',
+  'max-height',
+  'padding',
+  'padding-top',
+  'padding-right',
+  'padding-bottom',
+  'padding-left',
+  'gap',
+  'row-gap',
+  'column-gap',
+  'display',
+  'flex-direction',
+  'align-items',
+  'justify-content',
+  'background',
+  'background-color',
+  'background-image',
+  'border',
+  'border-radius',
+  'box-shadow',
+  'opacity',
+  'color',
+  'font-family',
+  'font-size',
+  'font-weight',
+  'font-style',
+  'line-height',
+  'letter-spacing',
+  'text-align',
+  'text-transform'
+]);
+
+function compactCss(css: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(css)) {
+    if (CSS_KEYS_OF_INTEREST.has(key) && value && value !== 'none' && value !== '0px') {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+export interface EnrichOptions {
+  attachCssTo?: 'all' | 'leaves-and-text';
+  categories?: AnnotationCategoryLookup;
+  maxNodesForCss?: number;
+}
+
+export async function enrichUiSpec(
+  spec: UiSpec,
+  root: SceneNode,
+  options: EnrichOptions = {}
+): Promise<UiSpec> {
+  const categories = options.categories ?? (await loadAnnotationCategories());
+  const maxNodesForCss = options.maxNodesForCss ?? 120;
+  let cssBudget = maxNodesForCss;
+
+  async function walk(specNode: UiNodeSpec, sceneNode: SceneNode): Promise<void> {
+    const annotations = extractAnnotationsForNode(sceneNode, categories);
+    if (annotations) {
+      specNode.annotations = annotations;
+    }
+
+    const devStatus = getNodeDevStatus(sceneNode);
+    if (devStatus) {
+      specNode.devStatus = devStatus;
+    }
+
+    if (sceneNode.type === 'INSTANCE' && specNode.instance) {
+      try {
+        const main = await sceneNode.getMainComponentAsync();
+        if (main) {
+          // If the component is a variant inside a COMPONENT_SET, the set's
+          // name is the canonical component name; the variant name is just a
+          // serialised property string like "Type=top navigation".
+          const parent = main.parent;
+          const displayName =
+            parent && parent.type === 'COMPONENT_SET' ? parent.name : main.name;
+          specNode.instance.mainComponentName = displayName;
+          specNode.instance.mainComponentKey = main.key;
+        }
+      } catch {
+        // main component may be inaccessible (deleted, library not loaded); skip
+      }
+    }
+
+    if (cssBudget > 0 && 'getCSSAsync' in sceneNode) {
+      const sceneChildren = 'children' in sceneNode ? sceneNode.children : undefined;
+      const shouldAttach =
+        options.attachCssTo === 'all' ||
+        !sceneChildren ||
+        sceneChildren.length === 0 ||
+        sceneNode.type === 'TEXT' ||
+        sceneNode.type === 'INSTANCE' ||
+        sceneNode.type === 'FRAME' ||
+        sceneNode.type === 'COMPONENT' ||
+        sceneNode.type === 'COMPONENT_SET';
+      if (shouldAttach) {
+        cssBudget -= 1;
+        try {
+          const css = await sceneNode.getCSSAsync();
+          const compact = compactCss(css);
+          if (Object.keys(compact).length > 0) {
+            specNode.css = compact;
+          }
+        } catch {
+          // ignore per-node failures
+        }
+      }
+    }
+
+    if ('children' in sceneNode) {
+      const sceneChildren = sceneNode.children;
+      for (let i = 0; i < specNode.children.length; i += 1) {
+        const childSpec = specNode.children[i];
+        const childScene = sceneChildren[i];
+        if (childSpec && childScene) {
+          await walk(childSpec, childScene);
+        }
+      }
+    }
+  }
+
+  await walk(spec.root, root);
+
+  try {
+    const resolvedVariables = await resolveVariablesForNode(root);
+    if (resolvedVariables.length > 0) {
+      spec.tokenization.resolvedVariables = resolvedVariables;
+    }
+  } catch {
+    // Variables API may be unavailable in some files; skip silently.
+  }
+
+  return spec;
+}
+
+export interface ExportOptions {
+  maxBytesPerAsset?: number;
+  maxTotalBytes?: number;
+  includeSvg?: boolean;
+}
+
+const PNG_MAX_BYTES_DEFAULT = 512 * 1024;
+const TOTAL_MAX_BYTES_DEFAULT = 4 * 1024 * 1024;
+
+function bytesToBase64(bytes: Uint8Array): string {
+  return figma.base64Encode(bytes);
+}
+
+export async function exportAssetsForNode(
+  node: SceneNode,
+  options: ExportOptions = {}
+): Promise<ExportedAsset[]> {
+  if (!('exportAsync' in node)) {
+    return [];
+  }
+
+  const maxPerAsset = options.maxBytesPerAsset ?? PNG_MAX_BYTES_DEFAULT;
+  const maxTotal = options.maxTotalBytes ?? TOTAL_MAX_BYTES_DEFAULT;
+  const assets: ExportedAsset[] = [];
+  let totalBytes = 0;
+
+  async function tryPng(scale: number): Promise<void> {
+    try {
+      const bytes = await node.exportAsync({
+        format: 'PNG',
+        constraint: { type: 'SCALE', value: scale }
+      });
+      if (bytes.byteLength > maxPerAsset && scale > 1) {
+        return;
+      }
+      if (totalBytes + bytes.byteLength > maxTotal) {
+        return;
+      }
+      const base64 = bytesToBase64(bytes);
+      assets.push({
+        nodeId: node.id,
+        nodeName: node.name,
+        format: 'PNG',
+        scale,
+        dataUrl: `data:image/png;base64,${base64}`,
+        byteLength: bytes.byteLength
+      });
+      totalBytes += bytes.byteLength;
+    } catch {
+      // skip
+    }
+  }
+
+  await tryPng(1);
+
+  const isIconLike =
+    options.includeSvg !== false &&
+    'width' in node &&
+    'height' in node &&
+    node.width <= 256 &&
+    node.height <= 256;
+  if (isIconLike) {
+    try {
+      const svg = await node.exportAsync({ format: 'SVG_STRING' });
+      const bytes = new TextEncoder().encode(svg).byteLength;
+      if (totalBytes + bytes <= maxTotal) {
+        const base64 = bytesToBase64(new TextEncoder().encode(svg));
+        assets.push({
+          nodeId: node.id,
+          nodeName: node.name,
+          format: 'SVG',
+          scale: 1,
+          dataUrl: `data:image/svg+xml;base64,${base64}`,
+          byteLength: bytes
+        });
+        totalBytes += bytes;
+      }
+    } catch {
+      // skip
+    }
+  }
+
+  return assets;
+}
+
 export function extractUiSpec(root: SceneNode): UiSpec {
   const stats: MutableStats = {
     totalNodes: 0,
@@ -480,7 +1040,7 @@ export function extractUiSpec(root: SceneNode): UiSpec {
   const coverage = totalTokenSignals > 0 ? tokenRefs / totalTokenSignals : 0.5;
 
   return {
-    version: '1.0.0',
+    version: '1.1.0',
     root: rootSpec,
     stats: {
       totalNodes: stats.totalNodes,

@@ -1,4 +1,8 @@
-import { analyzeNodeCore, composeAnalysisPayload, type AnalysisCore } from './core/analyze';
+import {
+  analyzeNodeCoreAsync,
+  composeAnalysisPayload,
+  type AnalysisCore
+} from './core/analyze';
 import { isScreenLikeNode } from './core/intent';
 import type { EmptyAnalysis, Mode, Preset } from './core/types';
 import { PRESET_DEFINITIONS } from './core/types';
@@ -23,6 +27,8 @@ let activeMode: Mode = DEFAULT_MODE;
 let fallbackLinkBase: string | undefined;
 let cache: AnalysisCache | null = null;
 let annotationCategoryId: string | undefined;
+let activeAnalysisToken = 0;
+let lastFocusedNodeId: string | undefined;
 
 function parseFigmaLinkBase(input: string): string | undefined {
   const value = input.trim();
@@ -432,7 +438,7 @@ async function tryFixIssue(message: {
       detail: result.message
     });
     invalidateCache();
-    computeAndPostAnalysis();
+    void computeAndPostAnalysis();
   }
 }
 
@@ -503,16 +509,24 @@ async function createAnnotationForNode(message: {
   }
 }
 
-function computeAndPostAnalysis(): void {
+function resolvePrimaryNode(selection: readonly SceneNode[]): SceneNode | null {
+  if (selection.length > 0 && selection[0]) {
+    return selection[0];
+  }
+  // Dev Mode: fall back to focusedNode when nothing is explicitly selected.
+  const focused = (figma.currentPage as { focusedNode?: SceneNode | null }).focusedNode;
+  if (focused && 'visible' in focused) {
+    return focused;
+  }
+  return null;
+}
+
+async function computeAndPostAnalysis(): Promise<void> {
+  const token = ++activeAnalysisToken;
   try {
     const selection = figma.currentPage.selection;
+    const primaryNode = resolvePrimaryNode(selection);
 
-    if (selection.length === 0) {
-      postToUI({ type: 'ANALYSIS_RESULT', payload: toEmptyAnalysis(activePreset, activeMode) });
-      return;
-    }
-
-    const primaryNode = selection[0];
     if (!primaryNode) {
       postToUI({ type: 'ANALYSIS_RESULT', payload: toEmptyAnalysis(activePreset, activeMode) });
       return;
@@ -530,8 +544,9 @@ function computeAndPostAnalysis(): void {
       return;
     }
 
-    const flowCapable = detectFlowCapable(selection);
-    const selectionSignature = getSelectionSignature(selection);
+    const flowCapable = detectFlowCapable(selection.length > 0 ? selection : [primaryNode]);
+    const selectionSignature =
+      selection.length > 0 ? getSelectionSignature(selection) : `focused:${primaryNode.id}`;
 
     const reusableCache =
       cache &&
@@ -541,11 +556,25 @@ function computeAndPostAnalysis(): void {
         ? cache
         : null;
 
+    if (!reusableCache) {
+      postToUI({
+        type: 'ANALYSIS_STARTED',
+        nodeId: primaryNode.id,
+        nodeName: primaryNode.name,
+        nodeType: primaryNode.type
+      });
+    }
+
     const core = reusableCache
       ? reusableCache.core
-      : analyzeNodeCore(primaryNode, {
+      : await analyzeNodeCoreAsync(primaryNode, {
           linkBase: fallbackLinkBase
         });
+
+    if (token !== activeAnalysisToken) {
+      // A newer analysis run started; discard this stale result.
+      return;
+    }
 
     if (!reusableCache) {
       cache = {
@@ -559,6 +588,9 @@ function computeAndPostAnalysis(): void {
     const analysis = composeAnalysisPayload(core, activePreset, activeMode, flowCapable);
     postToUI({ type: 'ANALYSIS_RESULT', payload: analysis });
   } catch (error) {
+    if (token !== activeAnalysisToken) {
+      return;
+    }
     const message = error instanceof Error ? error.message : 'Unknown plugin error';
     postToUI({ type: 'ERROR', message });
   }
@@ -572,26 +604,51 @@ figma.showUI(__html__, {
 
 figma.on('selectionchange', () => {
   invalidateCache();
-  computeAndPostAnalysis();
+  void computeAndPostAnalysis();
 });
 
 figma.on('currentpagechange', () => {
   invalidateCache();
-  computeAndPostAnalysis();
+  void computeAndPostAnalysis();
 });
+
+// Dev Mode: poll currentPage.focusedNode so analysis follows the developer's
+// inspect focus even when no explicit selection is made. There is no dedicated
+// "focusednodechange" event yet, so a low-frequency poll is the supported path.
+const FOCUSED_POLL_MS = 750;
+function tickFocusedNode(): void {
+  try {
+    if (figma.editorType !== 'dev') {
+      return;
+    }
+    const focused = (figma.currentPage as { focusedNode?: SceneNode | null }).focusedNode;
+    const focusedId = focused?.id;
+    if (focusedId === lastFocusedNodeId) {
+      return;
+    }
+    lastFocusedNodeId = focusedId;
+    if (focusedId && figma.currentPage.selection.length === 0) {
+      invalidateCache();
+      void computeAndPostAnalysis();
+    }
+  } catch {
+    // ignore
+  }
+}
+setInterval(tickFocusedNode, FOCUSED_POLL_MS);
 
 figma.ui.onmessage = (message: ToPluginMessage) => {
   if (message.type === 'SET_PRESET') {
     if (message.preset in PRESET_DEFINITIONS) {
       activePreset = message.preset;
-      computeAndPostAnalysis();
+      void computeAndPostAnalysis();
     }
     return;
   }
 
   if (message.type === 'SET_MODE') {
     activeMode = message.mode;
-    computeAndPostAnalysis();
+    void computeAndPostAnalysis();
     return;
   }
 
@@ -601,7 +658,7 @@ figma.ui.onmessage = (message: ToPluginMessage) => {
       fallbackLinkBase = parsed;
       invalidateCache();
     }
-    computeAndPostAnalysis();
+    void computeAndPostAnalysis();
     return;
   }
 
@@ -636,8 +693,8 @@ figma.ui.onmessage = (message: ToPluginMessage) => {
 
   if (message.type === 'REFRESH_REQUEST') {
     invalidateCache();
-    computeAndPostAnalysis();
+    void computeAndPostAnalysis();
   }
 };
 
-computeAndPostAnalysis();
+void computeAndPostAnalysis();

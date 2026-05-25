@@ -1,6 +1,12 @@
 import type { AnalysisResult, Mode, Preset } from '../core/types';
 
 export type ToUIMessage =
+  | {
+      type: 'ANALYSIS_STARTED';
+      nodeId: string;
+      nodeName: string;
+      nodeType: string;
+    }
   | { type: 'ANALYSIS_RESULT'; payload: AnalysisResult }
   | {
       type: 'ISSUE_FIX_RESULT';

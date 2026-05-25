@@ -1,4 +1,5 @@
 import type {
+  ExportedAsset,
   Intent,
   Mode,
   Preset,
@@ -25,6 +26,7 @@ interface PromptInput {
   uiSpec: UiSpec;
   score: ScoreResult;
   coverageWarnings: string[];
+  assets?: ExportedAsset[];
 }
 
 interface StackFields {
@@ -103,89 +105,139 @@ function flattenNodes(root: UiNodeSpec): UiNodeSpec[] {
   return result;
 }
 
-function buildTreeSummary(root: UiNodeSpec, maxLines = 40): string {
+function buildResolvedTokensSection(uiSpec: UiSpec): string | null {
+  const resolved = uiSpec.tokenization.resolvedVariables;
+  if (!resolved || resolved.length === 0) {
+    return null;
+  }
+
+  // De-dupe by collection+name+mode-values. Same logical token can show up
+  // multiple times when it's imported from several collections.
+  const seen = new Set<string>();
+  const deduped: typeof resolved = [];
+  for (const variable of resolved) {
+    const sig = `${variable.collection}|${variable.name}|${JSON.stringify(variable.modes)}`;
+    if (seen.has(sig)) {
+      continue;
+    }
+    seen.add(sig);
+    deduped.push(variable);
+  }
+
   const lines: string[] = [];
-
-  function walk(node: UiNodeSpec, depth: number): void {
-    if (lines.length >= maxLines) {
-      return;
-    }
-
-    const indent = '  '.repeat(depth);
-    const size =
-      typeof node.width === 'number' && typeof node.height === 'number'
-        ? ` ${Math.round(node.width)}x${Math.round(node.height)}`
-        : '';
-    const layout = node.layout?.layoutMode ? ` layout=${node.layout.layoutMode}` : '';
-    lines.push(`${indent}- ${node.name} [${node.type}]${size}${layout}`);
-
-    for (const child of node.children) {
-      walk(child, depth + 1);
-      if (lines.length >= maxLines) {
-        return;
-      }
-    }
+  for (const variable of deduped.slice(0, 30)) {
+    const modes = Object.entries(variable.modes)
+      .map(([mode, value]) => `${mode}=${value}`)
+      .join(', ');
+    lines.push(`- ${variable.collection}/${variable.name} (${variable.resolvedType}): ${modes}`);
   }
-
-  walk(root, 0);
-
-  if (lines.length >= maxLines) {
-    lines.push('- ... truncated');
+  if (deduped.length > 30) {
+    lines.push(`- (${deduped.length - 30} more omitted)`);
   }
-
   return lines.join('\n');
 }
 
-function buildTokenHints(uiSpec: UiSpec): string {
-  const nodes = flattenNodes(uiSpec.root);
-  const tokenNodes = nodes.filter(
-    (node) => node.tokenHints.styleRefs + node.tokenHints.variableRefs > 0
+function buildGroundTruthCss(uiSpec: UiSpec): string {
+  const nodes = flattenNodes(uiSpec.root).filter((node) => node.css);
+  if (nodes.length === 0) {
+    return '- No ground-truth CSS captured for this selection.';
+  }
+
+  const lines = ['- Ground-truth CSS from Figma Inspect (computed values):'];
+  for (const node of nodes.slice(0, 12)) {
+    const css = node.css ?? {};
+    const cssLines = Object.entries(css)
+      .map(([key, value]) => `      ${key}: ${value};`)
+      .join('\n');
+    lines.push(`  - ${node.name} (${node.id}) [${node.type}]:`);
+    lines.push(cssLines);
+  }
+  if (nodes.length > 12) {
+    lines.push(`  - ...${nodes.length - 12} more nodes with CSS omitted (favour MCP for the rest)`);
+  }
+  return lines.join('\n');
+}
+
+function buildDesignerIntent(uiSpec: UiSpec): string {
+  const nodes = flattenNodes(uiSpec.root).filter(
+    (node) => node.annotations && node.annotations.length > 0
   );
-  const rawNodes = nodes.filter((node) => node.tokenHints.rawValueHints > 0);
-
-  const lines = [
-    `- Token coverage estimate: ${Math.round(uiSpec.tokenization.coverage * 100)}% (styles=${uiSpec.tokenization.styleRefs}, vars=${uiSpec.tokenization.variableRefs}, rawCandidates=${uiSpec.tokenization.rawValueCandidates})`
-  ];
-
-  if (tokenNodes.length > 0) {
-    lines.push('- Token/style-backed nodes:');
-    for (const node of tokenNodes.slice(0, 10)) {
-      lines.push(
-        `  - ${node.name} (${node.id}) styleRefs=${node.tokenHints.styleRefs}, variableRefs=${node.tokenHints.variableRefs}`
-      );
-    }
+  if (nodes.length === 0) {
+    return '- No designer annotations on this selection.';
   }
 
-  if (rawNodes.length > 0) {
-    lines.push('- Raw fallback candidates (only if MCP has no token binding):');
-    for (const node of rawNodes.slice(0, 10)) {
-      lines.push(`  - ${node.name} (${node.id}) rawHints=${node.tokenHints.rawValueHints}`);
+  const lines = ['- Designer intent from Figma annotations:'];
+  for (const node of nodes.slice(0, 20)) {
+    for (const annotation of node.annotations ?? []) {
+      const category = annotation.category ? `[${annotation.category}] ` : '';
+      lines.push(`  - ${node.name} (${node.id}): ${category}${annotation.label}`);
     }
   }
-
   return lines.join('\n');
 }
 
-function buildInstanceHints(uiSpec: UiSpec): string {
-  const instances = flattenNodes(uiSpec.root).filter((node) => node.type === 'INSTANCE');
+function buildVisualReference(assets: ExportedAsset[] | undefined): string {
+  if (!assets || assets.length === 0) {
+    return '- No visual reference attached.';
+  }
+  const lines: string[] = ['- An image of the selection is attached to this conversation:'];
+  for (const asset of assets) {
+    const sizeKb = Math.round(asset.byteLength / 102.4) / 10;
+    lines.push(
+      `  - ${asset.format}@${asset.scale}x of ${asset.nodeName} (${asset.nodeId}) — ${sizeKb} KB`
+    );
+  }
+  lines.push(
+    '- Use vision: inspect the image to verify layout, alignment, spacing, and any visual nuance not captured by the CSS above.',
+    '- If no image is attached, ask the user to use the DesignAgent plugin\'s "Save PNG" action and drop the file into the chat.'
+  );
+  return lines.join('\n');
+}
 
+function buildInstanceHints(uiSpec: UiSpec): string | null {
+  const instances = flattenNodes(uiSpec.root).filter((node) => node.type === 'INSTANCE');
   if (instances.length === 0) {
-    return '- No instance nodes extracted in current selection.';
+    return null;
   }
 
-  const lines = ['- Instance hints from extraction:'];
-  for (const node of instances.slice(0, 15)) {
+  // De-dupe repeats of the same component with the same variant props.
+  const grouped = new Map<
+    string,
+    { name: string; componentName: string; props: string; count: number }
+  >();
+  for (const node of instances) {
+    const componentName = node.instance?.mainComponentName ?? '?';
     const props = node.instance?.componentProperties
       ? Object.entries(node.instance.componentProperties)
           .map(([key, value]) => `${key}=${String(value)}`)
+          .sort()
           .join(', ')
-      : 'no variant props';
-
-    lines.push(
-      `  - ${node.name} (${node.id}) -> ${node.instance?.mainComponentName ?? 'unknown component'} | ${props}`
-    );
+      : '';
+    const key = `${componentName}|${props}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      grouped.set(key, { name: node.name, componentName, props, count: 1 });
+    }
   }
 
+  const entries = Array.from(grouped.values()).sort((a, b) => b.count - a.count);
+  const lines: string[] = [];
+  for (const entry of entries.slice(0, 15)) {
+    const countSuffix = entry.count > 1 ? ` ×${entry.count}` : '';
+    // Skip the "<instanceName> → <componentName>" arrow when they're the
+    // same word (common when an instance is named after its component set).
+    const headline =
+      entry.name === entry.componentName
+        ? entry.componentName
+        : `${entry.name} → ${entry.componentName}`;
+    const propsTail = entry.props ? ` — ${entry.props}` : '';
+    lines.push(`- ${headline}${countSuffix}${propsTail}`);
+  }
+  if (entries.length > 15) {
+    lines.push(`- (${entries.length - 15} more component groups omitted)`);
+  }
   return lines.join('\n');
 }
 
@@ -201,38 +253,86 @@ function toIntentScope(intent: Intent): string {
   return 'section (reusable module)';
 }
 
-function toModeLabel(mode: Mode): string {
-  return mode === 'fidelity-first' ? 'Fidelity-first' : 'System-first';
+function buildCompositionSummary(uiSpec: UiSpec): string {
+  const { stats } = uiSpec;
+  const parts: string[] = [`${stats.totalNodes} nodes`];
+  if (stats.frames > 0) parts.push(`${stats.frames} frames`);
+  if (stats.instances > 0) parts.push(`${stats.instances} instances`);
+  if (stats.textNodes > 0) parts.push(`${stats.textNodes} text`);
+  if (stats.autoLayoutFrames > 0) parts.push(`${stats.autoLayoutFrames} auto-layout`);
+  if (stats.absoluteNodes > 0) parts.push(`${stats.absoluteNodes} absolute-positioned`);
+  return parts.join(', ');
 }
 
-function buildSelectionContext(input: PromptInput): string {
+function appendSection(lines: string[], title: string, body: string | null): void {
+  if (!body) {
+    return;
+  }
+  lines.push('', `### ${title}`, body);
+}
+
+function buildDesignContext(input: PromptInput): string {
   const size =
     typeof input.selectedNode.width === 'number' && typeof input.selectedNode.height === 'number'
-      ? `${Math.round(input.selectedNode.width)} x ${Math.round(input.selectedNode.height)}`
+      ? `${Math.round(input.selectedNode.width)}×${Math.round(input.selectedNode.height)}`
       : 'unknown';
 
-  const warnings =
-    input.coverageWarnings.length > 0
-      ? input.coverageWarnings.map((warning) => `- ${warning}`).join('\n')
-      : '- none';
+  const link = input.selectedNode.link;
+  const resolvedVariables = input.uiSpec.tokenization.resolvedVariables ?? [];
+  const hasModes = resolvedVariables.some((variable) => Object.keys(variable.modes).length > 1);
+  const hasAnnotations = flattenNodes(input.uiSpec.root).some(
+    (node) => node.annotations && node.annotations.length > 0
+  );
+  const hasVisual = !!input.assets && input.assets.length > 0;
 
-  return [
-    `- Intent scope: ${toIntentScope(input.intent)}`,
-    `- Active mode: ${toModeLabel(input.mode)}`,
-    `- Selected node: ${input.selectedNode.name} (${input.selectedNode.type})`,
-    `- Node ID(s): ${input.selectedNode.id}`,
-    `- Selection link: ${input.selectedNode.link ?? 'Unavailable (paste a link base in plugin Advanced panel if needed)'}`,
-    `- Size: ${size}`,
-    `- AI-ready score baseline: ${input.score.total}/100`,
-    '- Coverage warnings:',
-    warnings,
-    '- Extracted hierarchy snapshot:',
-    buildTreeSummary(input.uiSpec.root),
-    '- Token/style extraction hints:',
-    buildTokenHints(input.uiSpec),
-    '- Component/instance extraction hints:',
-    buildInstanceHints(input.uiSpec)
-  ].join('\n');
+  const lines: string[] = [
+    '## Design context (authoritative — use values verbatim)',
+    `- Selection: ${input.selectedNode.name} [${input.selectedNode.type}] ${size}, id=${input.selectedNode.id}`,
+    `- Composition: ${buildCompositionSummary(input.uiSpec)}`,
+    link
+      ? `- Figma link (use this for any MCP queries): ${link}`
+      : '- Figma link: unavailable (no fileKey)'
+  ];
+
+  if (input.coverageWarnings.length > 0) {
+    lines.push('- Coverage warnings:');
+    for (const warning of input.coverageWarnings) {
+      lines.push(`  - ${warning}`);
+    }
+  }
+
+  appendSection(lines, 'Resolved design variables', buildResolvedTokensSection(input.uiSpec));
+  if (hasModes) {
+    lines.push(
+      '',
+      '> Variables have 2+ modes. Emit mode-aware code (Tailwind `dark:` variants, SwiftUI dynamic colors, Compose color schemes).'
+    );
+  }
+
+  appendSection(lines, 'Ground-truth CSS (Figma Inspect, computed)', buildGroundTruthCss(input.uiSpec));
+  appendSection(lines, 'Component / instance hints', buildInstanceHints(input.uiSpec));
+
+  if (hasAnnotations) {
+    appendSection(
+      lines,
+      'Designer intent (Figma annotations — priority requirements)',
+      buildDesignerIntent(input.uiSpec)
+    );
+    lines.push(
+      '',
+      '> Annotations are explicit designer requirements. They override generic conventions.'
+    );
+  }
+
+  appendSection(lines, 'Visual reference', buildVisualReference(input.assets));
+  if (hasVisual) {
+    lines.push(
+      '',
+      '> Inspect the attached image. If CSS conflicts with what you see, trust the image and emit a TODO.'
+    );
+  }
+
+  return lines.join('\n');
 }
 
 function buildTemplatePrompt(input: PromptInput): string {
@@ -245,163 +345,80 @@ function buildTemplatePrompt(input: PromptInput): string {
     : input.intent === 'component'
     ? 'component'
     : 'section';
-  const selectionLink = input.selectedNode.link ?? '[REQUIRED] paste "Copy link to selection" URL';
-  const flowOutputHeader = input.flowCapable
+
+  const outputSections: string[] = [];
+  let n = 1;
+  if (input.flowCapable) {
+    outputSections.push(
+      `(${n}) Flow Spec — screen order, transitions (from→to + trigger), routes/params or NO_NAV`
+    );
+    n += 1;
+  }
+  outputSections.push(`(${n}) File Tree — paths only`);
+  n += 1;
+  outputSections.push(`(${n}) Code — one fenced block per file, label each with its filepath`);
+  n += 1;
+  outputSections.push(`(${n}) Open TODOs — only if any; each with node id + exact missing detail`);
+
+  const flowBuildLine = input.flowCapable
     ? [
-        '### (1) Flow Spec',
-        '- Screen order',
-        '- Transitions (From → To + trigger)',
-        '- Routes/params (or NO_NAV)',
-        ''
+        '- Flow: produce screen order + transitions internally before coding. Implement shared components only when a structure repeats 2+ times in the hierarchy.'
       ]
     : [];
-  const flowBuildSection = selectionType === 'screen'
-    ? []
-    : [
-        '### 5.1 Selection type = flow (multi-screen)',
-        '1) Produce a Flow Spec (internally) before coding:',
-        '   - Screen order (explicit list; if ORDER_UNKNOWN, derive from prototype links)',
-        '   - Transitions: From → To + trigger',
-        '   - Routes/params (or NO_NAV if navigation not required)',
-        '   - Shared components to extract (only if repeated 2+ times)',
-        '2) Implement shared layer first:',
-        '   - token bridge (only if needed)',
-        '   - repeated components (only if repetition is proven by MCP)',
-        '3) Implement screens in Flow Spec order:',
-        '   - one file per screen',
-        '   - wire navigation minimally and consistently (only if required)',
-        '4) Interaction logic:',
-        '   - implement only evidenced interactions (prototype links, interactive instances, component variants)',
-        '   - no invented states beyond default + pressed/disabled if evidenced',
-        ''
-      ];
 
   return [
-    'You are an implementation agent.',
+    `# Build ${input.selectedNode.name} (${selectionType}) — ${stack.platformName}`,
     '',
-    `Implement this ${input.selectedNode.name} (${selectionType}) as production-quality code.`,
+    `Stack: ${stack.stackName}. Styling: ${stack.stylingSystem}. Navigation: ${stack.navConvention}.`,
     '',
-    `Link: ${selectionLink}`,
+    '## Source of truth (in order)',
+    '1. **Embedded Design context below — authoritative.** Use values verbatim. Do not re-fetch CSS, variables, annotations, or the visual.',
+    '2. **Figma MCP (optional).** If anything is unclear, query MCP using the Figma link in the Design context — it points directly at this node. Use MCP for: Code Connect mappings, prototype interactions, additional raster/icon assets inside the frame, or subtree details deeper than what is extracted.',
+    '3. **Unresolved → TODO** with node id + exact missing detail. Do not guess.',
     '',
-    'Use the **Figma MCP** server as the ONLY ground-truth for design + interactions.',
+    '## Rules',
+    '- Use resolved variables, not raw values. If a variable has 2+ modes, emit mode-aware code (light/dark, density, locale).',
+    '- Treat designer annotations as priority requirements — they override generic conventions.',
+    '- The Visual reference is a real image; use it to verify alignment, spacing intent, and visual nuance the CSS cannot capture.',
+    '- Use design-system components when Code Connect or instance hints map them; otherwise primitives.',
+    '- New shared components only if the same structure repeats 2+ times in the hierarchy.',
+    '- Determinism: no alternates, no speculative states/screens/flows. Implement only what is evidenced.',
+    '- Accessibility: semantic roles + labels; minimum touch target ~44×44.',
     '',
-    '## 1) Hard constraints (must follow)',
-    '- Use **Figma MCP** tools only for design truth. Do NOT use any other MCP/server/tool for design extraction.',
-    '- Do NOT guess values that can be retrieved from **Figma MCP** (layout, spacing, typography, colors, tokens, component bindings, interactions).',
-    '- If missing/ambiguous, query **Figma MCP**. If still unresolved, add a TODO with exact missing detail + node id.',
-    '- Prefer design-system components and tokens over primitives. Use primitives only when DS mapping is not supported by MCP evidence.',
-    '- If Code Connect mapping exists for a node, you MUST use that mapped component/snippet.',
-    '- You MAY NOT introduce new reusable components unless the same structure appears 2+ times in the MCP hierarchy.',
-    '- Keep output deterministic: no alternate designs, no extra features, no speculative flows.',
+    '## Assets',
+    '- For raster/icon assets inside the frame: save under `/assets/images/` (raster) or `/assets/icons/` (vector) and reference local paths.',
+    '- If the environment cannot save files, emit `ASSET_TODO: nodeId="..." type=png|svg filename="..." path="..." source="<url|inline>"`.',
     '',
-    '## 2) Target stack',
-    `- Platform: ${stack.platformName}`,
-    `- Stack: ${stack.stackName}`,
-    `- Styling: ${stack.stylingSystem}`,
-    '- Navigation:',
-    '  - Only if selection type = flow OR prototype links require it.',
-    `  - ${stack.navConvention}`,
+    '## Output (return ONLY these sections)',
+    ...outputSections,
     '',
-    '## 3) Figma MCP usage plan (token-efficient; execute in order)',
-    'IMPORTANT: Use the actual Figma MCP tool names available. If names differ, use the closest equivalents.',
+    '## Self-check (silent, do not print)',
+    '- No raw values when a resolved variable covers it',
+    '- Layout matches the Auto Layout semantics in the CSS',
+    '- Mode-aware code wherever variables have 2+ modes',
+    '- Every designer annotation is satisfied',
+    '- Code matches the Visual reference',
+    '- No invented states or screens',
+    ...flowBuildLine,
     '',
-    'A) SHALLOW DESIGN CONTEXT FIRST',
-    '- Fetch design context for the selection scope with shallow depth:',
-    '  - root node + immediate children + key layout properties (auto-layout, padding/gap, constraints), text styles, fills/strokes/effects, radii.',
-    '- Only descend into child nodes when needed to resolve:',
-    '  - interactive elements, component instances, or ambiguous layout.',
+    buildDesignContext(input),
     '',
-    'B) TOKENS / VARIABLES / STYLES (USED ONLY)',
-    '- Fetch variables/styles that are actually USED by the selection(s).',
-    '- Record variable/style ids + names. Prefer referencing token identities over dumping raw values.',
-    '',
-    'C) CODE CONNECT',
-    '- Fetch Code Connect mappings for the selection(s).',
-    '- If mapping exists, treat it as authoritative imports/components/props guidance.',
-    '',
-    'D) INTERACTIONS / PROTOTYPE',
-    '- Fetch prototype interactions/reactions for the relevant nodes/screens.',
-    '- Derive a deterministic interaction contract: event → state change → navigation transition.',
-    '',
-    'E) SCREENSHOT (LAST RESORT ONLY)',
-    '- Fetch screenshot only if a critical visual ambiguity cannot be resolved via structured MCP properties.',
-    '',
-    'Stop and re-query MCP for deeper descendants ONLY when strictly required.',
-    '',
-    '## 4) Assets (IMPORTANT: manual/local saving)',
-    'Figma MCP may return image URLs. You MUST ensure assets are referenced locally in the codebase:',
-    '- The best way to ensure images are always available is to download them to the codebase and reference local files instead.',
-    '- You can do this by visiting each URL and saving the files manually, OR (depending on the client) ask the AI agent to save them to the folder of your choice.',
-    'Implementation rules:',
-    '- If the design contains raster images (PNG/JPG/WebP), plan to save them under: /assets/images/',
-    '- If the design contains icons/illustrations intended as vectors, save as: /assets/icons/ (prefer SVG where applicable)',
-    '- In code, reference the local asset paths (do not reference remote URLs in production code).',
-    '- If you cannot download/save files in this environment, output ASSET_TODO items listing:',
-    '  - node id',
-    '  - asset type (png/svg/etc.)',
-    '  - suggested filename',
-    '  - target folder path',
-    '  - the source URL returned by MCP (if provided)',
-    '',
-    '## 5) Build procedure (deterministic)',
-    '',
-    ...flowBuildSection,
-    `### 5.2 Selection type = ${input.intent === 'screen' ? 'screen' : input.intent === 'component' ? 'component' : 'section'}`,
-    input.intent === 'screen'
-      ? '- Implement one screen file.'
-      : input.intent === 'component'
-      ? '- Implement component with props/variants based on MCP + Code Connect (if present).'
-      : '- Implement this section as a reusable module and show how it mounts into a screen.',
-    'Interaction logic:',
-    '- implement only evidenced interactions (pressed/disabled if evidenced; prototype actions if present).',
-    '',
-    'Accessibility:',
-    '- Add accessibilityLabel/accessibilityRole and hitSlop for small controls.',
-    '- Ensure minimum touch target ~44x44.',
-    '',
-    '## 6) Interaction contract (derive from MCP; implement only what is evidenced)',
-    'For each interactive element (buttons, chips, tabs, inputs, list items) that MCP indicates:',
-    '- Node id + label/name',
-    '- Event (tap/press/select/submit/change/back/close/swipe) only if evidenced',
-    '- State changes (selected/expanded/input value/loading/error) only if evidenced',
-    '- Navigation (route + params) only if in Flow Spec',
-    'If uncertain, query MCP interactions; otherwise mark TODO.',
-    '',
-    '## 7) Output format (token-efficient; must follow)',
-    'Return ONLY:',
-    '',
-    ...flowOutputHeader,
-    '### (2) File Tree',
-    '- List file paths created/modified (paths only)',
-    '',
-    '### (3) Code',
-    '- Provide complete code for each file in separate fenced blocks labeled with filepath',
-    '',
-    '### (4) Open TODOs (ONLY if any)',
-    '- Bullet list of unresolved items with exact missing MCP detail + node id',
-    '',
-    '## 8) Self-check (do silently; do not print)',
-    '- No raw values when MCP vars/tokens exist',
-    '- Layout matches MCP auto-layout semantics (direction, padding/gap, alignment)',
-    '- No invented screens/features/flows',
-    '- Interactions match MCP/prototype evidence',
-    '- Any uncertainty becomes TODO with node id + missing MCP detail',
-    '',
-    'Execute now.'
+    'Execute.'
   ].join('\n');
 }
 
 function buildShortPrompt(input: PromptInput): string {
   const definition = PRESET_DEFINITIONS[input.preset];
   const stack = getStackFields(definition.target);
+  const selectionType = input.flowCapable ? 'flow' : toIntentScope(input.intent);
 
   return [
-    'You are an implementation agent using only Figma MCP for design truth.',
-    `Implement ${input.selectedNode.name} (${input.flowCapable ? 'flow' : toIntentScope(input.intent)}).`,
-    `Link: ${input.selectedNode.link ?? '[REQUIRED] paste selection link'}`,
-    `Platform: ${stack.platformName} | Stack: ${stack.stackName}`,
-    'Use MCP in order: shallow context -> used tokens/styles -> code connect -> interactions (if needed) -> screenshot (last resort).',
-    'Output only: flow spec (if flow), file tree, code, open TODOs.'
+    `Build ${input.selectedNode.name} (${selectionType}) — ${stack.platformName} (${stack.stackName}).`,
+    'Source of truth: Embedded Design context (authoritative) > Figma MCP (only for Code Connect, prototype interactions, extra assets) > TODO with node id.',
+    'Use resolved variables (mode-aware if 2+ modes). Annotations = priority. Visual reference = base64 image; inspect it. Determinism only.',
+    'Output: file tree, code (fenced per file), open TODOs. Flow Spec first if selection type = flow.',
+    '',
+    buildDesignContext(input)
   ].join('\n');
 }
 
@@ -409,10 +426,10 @@ function buildStrictPrompt(input: PromptInput): string {
   return [
     buildTemplatePrompt(input),
     '',
-    'Strict addendum',
-    '- If any required value is unresolved after MCP queries, do not guess. Emit TODO with the exact missing MCP datum.',
-    '- Do not output alternatives or multiple implementations.',
-    '- Keep file structure minimal and production-ready for the selected platform.'
+    '## Strict addendum',
+    '- Unresolved → TODO. Never guess.',
+    '- No alternatives, no multiple implementations.',
+    '- Minimal file structure; production-ready for the selected platform.'
   ].join('\n');
 }
 

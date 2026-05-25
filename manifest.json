@@ -8,11 +8,5 @@
   "networkAccess": {
     "allowedDomains": ["none"]
   },
-  "documentAccess": "dynamic-page",
-  "menu": [
-    {
-      "name": "Refresh prompt",
-      "command": "REFRESH_REQUEST"
-    }
-  ]
+  "documentAccess": "dynamic-page"
 }

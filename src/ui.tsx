@@ -3,12 +3,20 @@ import { createRoot } from 'react-dom/client';
 import {
   type AnalysisResult,
   type ChecklistItem,
+  type ExportedAsset,
   type Preset,
   type ScoreCategory,
   type ScoreResult
 } from './core/types';
 import type { ToUIMessage } from './shared/messages';
-import { AdvancedPanel, EmptyState, Footer, HeaderPanel, PromptPanel } from './ui_components';
+import {
+  AdvancedPanel,
+  EmptyState,
+  Footer,
+  HeaderPanel,
+  LoadingPanel,
+  PromptPanel
+} from './ui_components';
 import { UI_STYLES } from './ui_theme';
 
 const INITIAL_ANALYSIS: AnalysisResult = {
@@ -118,6 +126,100 @@ async function copyText(value: string): Promise<boolean> {
   return copied;
 }
 
+function pickPngAsset(assets: ExportedAsset[] | undefined): ExportedAsset | undefined {
+  if (!assets || assets.length === 0) {
+    return undefined;
+  }
+  return assets.find((asset) => asset.format === 'PNG') ?? assets[0];
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function dataUrlToBlobSync(dataUrl: string, fallbackMime = 'image/png'): Blob {
+  const match = /^data:([^;]+);base64,([\s\S]+)$/.exec(dataUrl);
+  if (!match) {
+    throw new Error('Unrecognized data URL format');
+  }
+  const mime = match[1] || fallbackMime;
+  const bytes = base64ToBytes(match[2] ?? '');
+  return new Blob([bytes.buffer as ArrayBuffer], { type: mime });
+}
+
+const SUPPORTS_IMAGE_CLIPBOARD: boolean =
+  typeof ClipboardItem !== 'undefined' &&
+  typeof navigator !== 'undefined' &&
+  !!navigator.clipboard &&
+  typeof navigator.clipboard.write === 'function';
+
+function sanitizeFilename(name: string): string {
+  const trimmed = name.trim().replace(/[\s/\\]+/g, '-').replace(/[^\w.-]/g, '');
+  return trimmed.length > 0 ? trimmed : 'designagent';
+}
+
+async function copyImageAsset(asset: ExportedAsset): Promise<{ ok: boolean; reason?: string }> {
+  if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+    return { ok: false, reason: 'Clipboard image write is unsupported here' };
+  }
+  try {
+    const blob = dataUrlToBlobSync(asset.dataUrl);
+    const item = new ClipboardItem({ [blob.type]: blob });
+    await navigator.clipboard.write([item]);
+    return { ok: true };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { ok: false, reason };
+  }
+}
+
+async function copyPromptAndImage(
+  prompt: string,
+  asset: ExportedAsset
+): Promise<{ status: 'both' | 'text-only' | 'failed'; reason?: string }> {
+  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+    try {
+      const imageBlob = dataUrlToBlobSync(asset.dataUrl);
+      const textBlob = new Blob([prompt], { type: 'text/plain' });
+      const item = new ClipboardItem({
+        'text/plain': textBlob,
+        [imageBlob.type]: imageBlob
+      });
+      await navigator.clipboard.write([item]);
+      return { status: 'both' };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const ok = await copyText(prompt);
+      return { status: ok ? 'text-only' : 'failed', reason };
+    }
+  }
+  const ok = await copyText(prompt);
+  return { status: ok ? 'text-only' : 'failed', reason: 'ClipboardItem unsupported' };
+}
+
+function downloadAsset(asset: ExportedAsset): boolean {
+  try {
+    const extension = asset.format === 'SVG' ? 'svg' : 'png';
+    const filename = `${sanitizeFilename(asset.nodeName)}@${asset.scale}x.${extension}`;
+    const anchor = document.createElement('a');
+    anchor.href = asset.dataUrl;
+    anchor.download = filename;
+    anchor.rel = 'noopener';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function toIntentLabel(intent: 'screen' | 'component' | 'section'): string {
   if (intent === 'screen') {
     return 'Screen';
@@ -178,6 +280,9 @@ function App(): JSX.Element {
   const [issueFixState, setIssueFixState] = useState<
     Record<string, { status: 'fixed' | 'skipped'; detail: string }>
   >({});
+  const [analyzing, setAnalyzing] = useState<
+    { nodeId: string; nodeName: string; nodeType: string } | null
+  >(null);
 
   useEffect(() => {
     const listener = (event: MessageEvent<{ pluginMessage?: ToUIMessage }>) => {
@@ -186,8 +291,19 @@ function App(): JSX.Element {
         return;
       }
 
+      if (message.type === 'ANALYSIS_STARTED') {
+        setError('');
+        setAnalyzing({
+          nodeId: message.nodeId,
+          nodeName: message.nodeName,
+          nodeType: message.nodeType
+        });
+        return;
+      }
+
       if (message.type === 'ANALYSIS_RESULT') {
         setError('');
+        setAnalyzing(null);
         setAnalysis(message.payload);
         setPreset(message.payload.preset);
         setActiveTab('prompt');
@@ -222,6 +338,7 @@ function App(): JSX.Element {
 
       if (message.type === 'ERROR') {
         setError(message.message);
+        setAnalyzing(null);
       }
     };
 
@@ -304,6 +421,57 @@ function App(): JSX.Element {
     setTimeout(() => setCopyStatus(''), 1400);
   };
 
+  const pngAsset =
+    analysis.hasSelection ? pickPngAsset(analysis.assets) : undefined;
+  const imageSizeKb = pngAsset
+    ? Math.round(pngAsset.byteLength / 102.4) / 10
+    : undefined;
+
+  const onCopyImage = async () => {
+    if (!pngAsset) {
+      return;
+    }
+    const result = await copyImageAsset(pngAsset);
+    if (result.ok) {
+      setCopyStatus('Image copied');
+    } else {
+      setCopyStatus(`Copy image failed: ${result.reason ?? 'unknown'} — use Save PNG`);
+    }
+    setTimeout(() => setCopyStatus(''), 3000);
+  };
+
+  const onSavePng = () => {
+    if (!pngAsset) {
+      return;
+    }
+    const ok = downloadAsset(pngAsset);
+    setCopyStatus(ok ? 'PNG saved' : 'Save failed');
+    setTimeout(() => setCopyStatus(''), 1600);
+  };
+
+  const onCopyPromptAndImage = async () => {
+    if (!analysis.hasSelection) {
+      return;
+    }
+    if (!pngAsset) {
+      const copied = await copyText(analysis.prompt);
+      setCopyStatus(copied ? 'Copied (no image yet)' : 'Copy failed');
+      setTimeout(() => setCopyStatus(''), 1600);
+      return;
+    }
+    const result = await copyPromptAndImage(analysis.prompt, pngAsset);
+    if (result.status === 'both') {
+      setCopyStatus('Prompt + image copied');
+    } else if (result.status === 'text-only') {
+      setCopyStatus(
+        `Prompt copied — image blocked${result.reason ? ` (${result.reason})` : ''} — use Save PNG`
+      );
+    } else {
+      setCopyStatus(`Copy failed: ${result.reason ?? 'unknown'}`);
+    }
+    setTimeout(() => setCopyStatus(''), 3000);
+  };
+
   const onApplySelectionLink = () => {
     postPluginMessage({
       type: 'SET_FIGMA_LINK_BASE',
@@ -365,7 +533,12 @@ function App(): JSX.Element {
           </div>
         ) : null}
 
-        {analysis.hasSelection ? (
+        {analyzing ? (
+          <LoadingPanel
+            nodeName={analyzing.nodeName}
+            nodeType={analyzing.nodeType}
+          />
+        ) : analysis.hasSelection ? (
           hasAppliedLink ? (
             <>
               <div className="tab-nav" role="tablist" aria-label="Prompt and score tabs">
@@ -412,6 +585,12 @@ function App(): JSX.Element {
                   copyStatus={copyStatus}
                   platformWarnings={analysis.platformWarnings}
                   coverageWarnings={analysis.coverageWarnings}
+                  hasImageAsset={Boolean(pngAsset)}
+                  imageSizeKb={imageSizeKb}
+                  canCopyImageToClipboard={SUPPORTS_IMAGE_CLIPBOARD}
+                  onCopyImage={onCopyImage}
+                  onSavePng={onSavePng}
+                  onCopyPromptAndImage={onCopyPromptAndImage}
                 />
               </div>
 
@@ -452,6 +631,12 @@ function App(): JSX.Element {
               copyStatus={copyStatus}
               platformWarnings={analysis.platformWarnings}
               coverageWarnings={analysis.coverageWarnings}
+              hasImageAsset={Boolean(pngAsset)}
+              imageSizeKb={imageSizeKb}
+              canCopyImageToClipboard={SUPPORTS_IMAGE_CLIPBOARD}
+              onCopyImage={onCopyImage}
+              onSavePng={onSavePng}
+              onCopyPromptAndImage={onCopyPromptAndImage}
             />
           )
         ) : (

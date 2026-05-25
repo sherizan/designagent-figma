@@ -56,15 +56,13 @@ interface HeaderPanelProps {
 
 export function HeaderPanel({ preset, onSelectPreset }: HeaderPanelProps): JSX.Element {
   return (
-    <div className="panel hero-panel">
-      <div className="hero-bg-shape hero-bg-shape-a" />
-      <div className="hero-bg-shape hero-bg-shape-b" />
+    <div className="panel header-panel">
       <div className="header-row">
-        <div className="hero-copy">
+        <div className="header-copy">
           <h1 className="title">DesignAgent</h1>
-          <p className="sub">Build prompts from Figma. Instantly.</p>
+          <p className="sub">Build what you design. No drift.</p>
         </div>
-        <div className="hero-version">v1.1</div>
+        <div className="version-tag">v1.2</div>
       </div>
 
       <div className="preset-grid">
@@ -81,12 +79,40 @@ export function HeaderPanel({ preset, onSelectPreset }: HeaderPanelProps): JSX.E
               aria-pressed={active}
             >
               <div className="preset-icon">
-                <PresetIconComponent size={16} strokeWidth={1.9} />
+                <PresetIconComponent size={16} strokeWidth={1.75} />
               </div>
               <div className="preset-label">{definition.label}</div>
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+interface LoadingPanelProps {
+  nodeName: string;
+  nodeType: string;
+}
+
+export function LoadingPanel({ nodeName, nodeType }: LoadingPanelProps): JSX.Element {
+  return (
+    <div className="panel loading-panel" aria-busy="true" aria-live="polite">
+      <div className="loading-header">
+        <span className="loading-spinner" aria-hidden="true" />
+        <div className="loading-text">
+          <div className="loading-title">Analyzing {nodeName}</div>
+          <div className="loading-sub">
+            {nodeType.toLowerCase()} — extracting CSS, variables, annotations…
+          </div>
+        </div>
+      </div>
+      <div className="skeleton-stack" aria-hidden="true">
+        <div className="skeleton-row sk-1" />
+        <div className="skeleton-row sk-2" />
+        <div className="skeleton-row sk-3" />
+        <div className="skeleton-row sk-4" />
+        <div className="skeleton-row sk-5" />
       </div>
     </div>
   );
@@ -105,6 +131,12 @@ interface PromptPanelProps {
   copyStatus: string;
   platformWarnings: string[];
   coverageWarnings: string[];
+  hasImageAsset: boolean;
+  imageSizeKb?: number;
+  canCopyImageToClipboard: boolean;
+  onCopyImage: () => void;
+  onSavePng: () => void;
+  onCopyPromptAndImage: () => void;
 }
 
 export function PromptPanel(props: PromptPanelProps): JSX.Element {
@@ -120,7 +152,13 @@ export function PromptPanel(props: PromptPanelProps): JSX.Element {
     onCopyPrompt,
     copyStatus,
     platformWarnings,
-    coverageWarnings
+    coverageWarnings,
+    hasImageAsset,
+    imageSizeKb,
+    canCopyImageToClipboard,
+    onCopyImage,
+    onSavePng,
+    onCopyPromptAndImage
   } = props;
 
   return (
@@ -130,14 +168,6 @@ export function PromptPanel(props: PromptPanelProps): JSX.Element {
           <span className="badge">{intentLabel}</span>
           <div className="selection-name-inline">{selectedNodeName}</div>
         </div>
-        <a
-          className="mcp-link"
-          href="https://www.figma.com/mcp-catalog/"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Figma MCP must be enabled
-        </a>
       </div>
 
       {platformWarnings.length > 0 ? (
@@ -185,10 +215,68 @@ export function PromptPanel(props: PromptPanelProps): JSX.Element {
           <textarea readOnly value={prompt} />
           <div className="prompt-actions">
             {copyStatus ? <span className="status-pill">{copyStatus}</span> : null}
-            <button type="button" className="btn-primary" onClick={onCopyPrompt}>
-              Copy Prompt
-            </button>
+            {hasImageAsset ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={onSavePng}
+                title={
+                  imageSizeKb
+                    ? `Save exported PNG (${imageSizeKb} KB) to disk`
+                    : 'Save exported PNG to disk'
+                }
+              >
+                Save PNG
+              </button>
+            ) : null}
+            {hasImageAsset && canCopyImageToClipboard ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={onCopyImage}
+                title={
+                  imageSizeKb
+                    ? `Copy exported PNG (${imageSizeKb} KB) to clipboard`
+                    : 'Copy exported PNG to clipboard'
+                }
+              >
+                Copy image
+              </button>
+            ) : null}
+            {hasImageAsset && canCopyImageToClipboard ? (
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={onCopyPromptAndImage}
+                title={
+                  imageSizeKb
+                    ? `Copy prompt and ${imageSizeKb} KB image to clipboard`
+                    : 'Copy prompt and image to clipboard'
+                }
+              >
+                Copy Prompt + Image
+              </button>
+            ) : (
+              <button type="button" className="btn-primary" onClick={onCopyPrompt}>
+                Copy Prompt
+              </button>
+            )}
           </div>
+          {hasImageAsset ? (
+            <p className="prompt-hint">
+              {canCopyImageToClipboard ? (
+                <>
+                  Tip: paste once into Claude (multimodal). If the image doesn't attach, use
+                  <strong> Save PNG</strong> and drag the file in.
+                </>
+              ) : (
+                <>
+                  This host can't write images to the clipboard. Use
+                  <strong> Save PNG</strong> and drop the file into Claude.
+                </>
+              )}
+            </p>
+          ) : null}
         </>
       )}
     </div>
