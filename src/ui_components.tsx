@@ -62,7 +62,7 @@ export function HeaderPanel({ preset, onSelectPreset }: HeaderPanelProps): JSX.E
           <h1 className="title">DesignAgent</h1>
           <p className="sub">Build what you design. No drift.</p>
         </div>
-        <div className="version-tag">v1.2</div>
+        <div className="version-tag">v1.2.1</div>
       </div>
 
       <div className="preset-grid">
