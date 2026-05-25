@@ -5,6 +5,7 @@ import type {
   UiNodeSpec,
   UiSpec
 } from './types';
+import { SCORE_WEIGHTS } from './types';
 
 interface FlatNode {
   node: UiNodeSpec;
@@ -57,6 +58,29 @@ function isSkippableByType(node: UiNodeSpec): boolean {
   return node.type === 'COMPONENT' || node.type === 'COMPONENT_SET';
 }
 
+function nodeHasAnnotation(node: UiNodeSpec): boolean {
+  return Array.isArray(node.annotations) && node.annotations.length > 0;
+}
+
+function hasWaiveredAncestor(
+  nodeId: string,
+  nodeById: Map<string, UiNodeSpec>,
+  parentById: Map<string, string | null>
+): boolean {
+  let cursor = parentById.get(nodeId) ?? null;
+  while (cursor) {
+    const parent = nodeById.get(cursor);
+    if (!parent) {
+      return false;
+    }
+    if (nodeHasAnnotation(parent)) {
+      return true;
+    }
+    cursor = parentById.get(cursor) ?? null;
+  }
+  return false;
+}
+
 function isScorableNode(
   node: UiNodeSpec,
   nodeById: Map<string, UiNodeSpec>,
@@ -79,6 +103,16 @@ function isScorableNode(
   }
   // Skip nodes inside component set definitions (variant authoring context).
   if (hasAncestorType(node.id, 'COMPONENT_SET', nodeById, parentById)) {
+    return false;
+  }
+  // Designer-annotated nodes (and their subtree) act as waivers — the
+  // designer has explicitly accepted whatever pattern is in there, so we
+  // don't audit them. They count neither as numerator nor denominator
+  // for any category.
+  if (nodeHasAnnotation(node)) {
+    return false;
+  }
+  if (hasWaiveredAncestor(node.id, nodeById, parentById)) {
     return false;
   }
   return true;
@@ -198,11 +232,13 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
     isMappedComponentCandidate(node, nodeById, parentById)
   );
 
-  const componentCoverageRatio =
-    interactiveCandidates.length > 0
-      ? mappedInteractiveCandidates.length / interactiveCandidates.length
-      : 1;
-  const componentCoverage = Math.round(componentCoverageRatio * 30);
+  const componentCoverageApplicable = interactiveCandidates.length > 0;
+  const componentCoverageRatio = componentCoverageApplicable
+    ? mappedInteractiveCandidates.length / interactiveCandidates.length
+    : 0;
+  const componentCoverage = componentCoverageApplicable
+    ? Math.round(componentCoverageRatio * SCORE_WEIGHTS.componentCoverage)
+    : 0;
 
   for (const candidate of interactiveCandidates) {
     if (!isMappedComponentCandidate(candidate.node, nodeById, parentById)) {
@@ -225,9 +261,13 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
     (sum, { node }) => sum + node.tokenHints.rawValueHints,
     0
   );
-  const tokenizationRatio =
-    tokenRefs + rawTokenCandidates > 0 ? tokenRefs / (tokenRefs + rawTokenCandidates) : 0.5;
-  const tokenizationCoverage = Math.round(tokenizationRatio * 25);
+  const tokenizationApplicable = tokenRefs + rawTokenCandidates > 0;
+  const tokenizationRatio = tokenizationApplicable
+    ? tokenRefs / (tokenRefs + rawTokenCandidates)
+    : 0;
+  const tokenizationCoverage = tokenizationApplicable
+    ? Math.round(tokenizationRatio * SCORE_WEIGHTS.tokenizationCoverage)
+    : 0;
 
   for (const { node } of scorableNodes) {
     const hasRawValues = node.tokenHints.rawValueHints > 0;
@@ -257,17 +297,33 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
   );
   const groupNodes = scorableNodes.filter(({ node }) => node.type === 'GROUP');
 
-  const autoLayoutRatio =
-    frameLikeNodes.length > 0 ? autoLayoutNodes.length / frameLikeNodes.length : 0;
-  const absoluteRatio = scorableNodes.length > 0 ? absoluteNodes.length / scorableNodes.length : 0;
-  const groupRatio = scorableNodes.length > 0 ? groupNodes.length / scorableNodes.length : 0;
+  // Children that *could* be positioned absolute are only those inside an
+  // auto-layout container — use them as the absoluteRatio denominator so
+  // the metric reflects density, not tree size.
+  const autoLayoutChildCount = scorableNodes.filter(({ node, parentId }) => {
+    if (!parentId) {
+      return false;
+    }
+    const parent = nodeById.get(parentId);
+    return Boolean(parent?.layout?.layoutMode && parent.layout.layoutMode !== 'NONE');
+  }).length;
+
+  const layoutApplicable = frameLikeNodes.length > 0;
+  const autoLayoutRatio = layoutApplicable
+    ? autoLayoutNodes.length / frameLikeNodes.length
+    : 0;
+  const absoluteRatio = autoLayoutChildCount > 0
+    ? absoluteNodes.length / autoLayoutChildCount
+    : 0;
+  // Groups penalize relative to all container-like nodes (frames + groups).
+  const groupContainerTotal = groupNodes.length + frameLikeNodes.length;
+  const groupRatio = groupContainerTotal > 0 ? groupNodes.length / groupContainerTotal : 0;
 
   const layoutComposite = clamp(
     autoLayoutRatio * 0.7 + (1 - absoluteRatio) * 0.2 + (1 - groupRatio) * 0.1,
     0,
     1
   );
-  const layoutChecklistStartIndex = checklist.length;
 
   for (const { node } of absoluteNodes) {
     checklist.push(
@@ -292,13 +348,18 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
       );
     }
   }
-  const layoutIssueCount = checklist.length - layoutChecklistStartIndex;
-  const layoutSemantics = layoutIssueCount === 0 ? 20 : Math.round(layoutComposite * 20);
+  const layoutSemantics = layoutApplicable
+    ? Math.round(layoutComposite * SCORE_WEIGHTS.layoutSemantics)
+    : 0;
 
   const genericNames = scorableNodes.filter(({ node }) => GENERIC_NAME_PATTERN.test(node.name));
-  const semanticNameRatio =
-    scorableNodes.length > 0 ? 1 - genericNames.length / scorableNodes.length : 1;
-  const namingSemantics = Math.round(clamp(semanticNameRatio, 0, 1) * 15);
+  const namingApplicable = scorableNodes.length > 0;
+  const semanticNameRatio = namingApplicable
+    ? 1 - genericNames.length / scorableNodes.length
+    : 0;
+  const namingSemantics = namingApplicable
+    ? Math.round(clamp(semanticNameRatio, 0, 1) * SCORE_WEIGHTS.namingSemantics)
+    : 0;
 
   for (const { node } of genericNames) {
     checklist.push(
@@ -313,8 +374,13 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
 
   const instances = scorableNodes.filter(({ node }) => node.type === 'INSTANCE');
   const completeVariants = instances.filter(({ node }) => hasVariantProps(node));
-  const variantRatio = instances.length > 0 ? completeVariants.length / instances.length : 1;
-  const variantCompleteness = Math.round(variantRatio * 10);
+  const variantApplicable = instances.length > 0;
+  const variantRatio = variantApplicable
+    ? completeVariants.length / instances.length
+    : 0;
+  const variantCompleteness = variantApplicable
+    ? Math.round(variantRatio * SCORE_WEIGHTS.variantCompleteness)
+    : 0;
 
   for (const { node } of instances) {
     if (!hasVariantProps(node)) {
@@ -336,10 +402,30 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
     namingSemantics +
     variantCompleteness;
 
+  const applicable: Record<ScoreCategory, boolean> = {
+    'Component Coverage': componentCoverageApplicable,
+    'Tokenization Coverage': tokenizationApplicable,
+    'Layout Semantics': layoutApplicable,
+    'Naming + Semantics': namingApplicable,
+    'Variant Completeness': variantApplicable
+  };
+
+  const applicableMax =
+    (componentCoverageApplicable ? SCORE_WEIGHTS.componentCoverage : 0) +
+    (tokenizationApplicable ? SCORE_WEIGHTS.tokenizationCoverage : 0) +
+    (layoutApplicable ? SCORE_WEIGHTS.layoutSemantics : 0) +
+    (namingApplicable ? SCORE_WEIGHTS.namingSemantics : 0) +
+    (variantApplicable ? SCORE_WEIGHTS.variantCompleteness : 0);
+
+  // Coverage warnings only fire for categories that actually apply, so an
+  // empty selection or a section without instances doesn't spam the panel.
   const noComponentMatchTrigger =
-    interactiveCandidates.length > 0 && componentCoverageRatio < 0.5;
-  const tokenCoverageLowTrigger = tokenizationCoverage < 13;
-  const layoutAmbiguousTrigger = absoluteRatio > 0.35 || layoutSemantics < 10;
+    componentCoverageApplicable && componentCoverageRatio < 0.5;
+  const tokenCoverageLowTrigger =
+    tokenizationApplicable &&
+    tokenizationCoverage < Math.round(SCORE_WEIGHTS.tokenizationCoverage * 0.5);
+  const layoutAmbiguousTrigger =
+    layoutApplicable && (absoluteRatio > 0.35 || layoutSemantics < Math.round(SCORE_WEIGHTS.layoutSemantics * 0.5));
 
   const coverageWarnings: string[] = [];
   if (noComponentMatchTrigger) {
@@ -360,6 +446,8 @@ export function scoreUiSpec(uiSpec: UiSpec): ScoreComputationResult {
 
   const score: ScoreResult = {
     total,
+    applicableMax,
+    applicable,
     breakdown: {
       componentCoverage,
       tokenizationCoverage,

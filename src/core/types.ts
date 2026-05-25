@@ -226,6 +226,8 @@ export interface ScoreDetails {
 
 export interface ScoreResult {
   total: number;
+  applicableMax: number;
+  applicable: Record<ScoreCategory, boolean>;
   breakdown: ScoreBreakdown;
   details: ScoreDetails;
 }

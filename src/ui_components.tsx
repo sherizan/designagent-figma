@@ -284,10 +284,11 @@ export function PromptPanel(props: PromptPanelProps): JSX.Element {
 }
 
 interface AdvancedPanelProps {
-  adjustedScoreTotal: number;
+  scoreTotal: number;
+  scoreMax: number;
   scorePercent: number;
+  dismissedCount: number;
   score: ScoreResult;
-  adjustedScoreBreakdown: Record<ScoreCategory, number> | null;
   plainCategoryLabel: (category: ScoreCategory) => string;
   getCategoryScore: (score: ScoreResult, category: ScoreCategory) => number;
   checklistByCategory: Record<ScoreCategory, ChecklistItem[]>;
@@ -301,10 +302,11 @@ interface AdvancedPanelProps {
 
 export function AdvancedPanel(props: AdvancedPanelProps): JSX.Element {
   const {
-    adjustedScoreTotal,
+    scoreTotal,
+    scoreMax,
     scorePercent,
+    dismissedCount,
     score,
-    adjustedScoreBreakdown,
     plainCategoryLabel,
     getCategoryScore,
     checklistByCategory,
@@ -319,7 +321,16 @@ export function AdvancedPanel(props: AdvancedPanelProps): JSX.Element {
     <div className="panel">
       <div className="meta-row score-meta-row">
         <div className="section-subtitle">AI-Ready Score</div>
-        <span className="status-pill">{adjustedScoreTotal}/100</span>
+        <div className="score-meta-pills">
+          {dismissedCount > 0 ? (
+            <span className="status-pill" title="Dismissed checklist items don't change the score">
+              {dismissedCount} dismissed
+            </span>
+          ) : null}
+          <span className="status-pill">
+            {scoreTotal}/{scoreMax || 100}
+          </span>
+        </div>
       </div>
 
       <div className="score-track">
@@ -334,15 +345,19 @@ export function AdvancedPanel(props: AdvancedPanelProps): JSX.Element {
           </tr>
         </thead>
         <tbody>
-          {SCORE_CATEGORIES.map((category) => (
-            <tr key={category}>
-              <td>{plainCategoryLabel(category)}</td>
-              <td>
-                {(adjustedScoreBreakdown?.[category] ?? getCategoryScore(score, category))}/
-                {CATEGORY_MAX[category]}
-              </td>
-            </tr>
-          ))}
+          {SCORE_CATEGORIES.map((category) => {
+            const applicable = score.applicable?.[category] ?? true;
+            return (
+              <tr key={category}>
+                <td>{plainCategoryLabel(category)}</td>
+                <td>
+                  {applicable
+                    ? `${getCategoryScore(score, category)}/${CATEGORY_MAX[category]}`
+                    : 'n/a'}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
 
@@ -378,7 +393,7 @@ export function AdvancedPanel(props: AdvancedPanelProps): JSX.Element {
                   <div className="reason">{item.reason}</div>
                   {fixInfo ? (
                     <div className={`issue-badge ${fixInfo.status}`} title={fixInfo.detail}>
-                      {fixInfo.status === 'fixed' ? 'Fixed' : 'Skipped'}
+                      {fixInfo.status === 'fixed' ? 'Fixed' : 'Dismissed'}
                     </div>
                   ) : null}
                   <div>{item.suggestion}</div>
@@ -386,7 +401,7 @@ export function AdvancedPanel(props: AdvancedPanelProps): JSX.Element {
                     <button type="button" onClick={() => onSkipIssue(item)}>
                       <span className="btn-with-icon">
                         <Undo2 size={13} strokeWidth={2} />
-                        <span>Skip issue</span>
+                        <span>Dismiss</span>
                       </span>
                     </button>
                     <button type="button" onClick={() => onFocusItem(item)}>

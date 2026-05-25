@@ -223,6 +223,12 @@ export const UI_STYLES = `
     margin-top: 10px;
   }
 
+  .score-meta-pills {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   .badge {
     border: 1px solid var(--border);
     border-radius: 999px;

@@ -356,55 +356,25 @@ function App(): JSX.Element {
     [issueFixState]
   );
 
-  const adjustedScoreBreakdown = useMemo(() => {
-    if (!analysis.hasSelection) {
-      return null;
-    }
-
-    const next: Record<ScoreCategory, number> = {
-      'Component Coverage': getCategoryScore(analysis.score, 'Component Coverage'),
-      'Tokenization Coverage': getCategoryScore(analysis.score, 'Tokenization Coverage'),
-      'Layout Semantics': getCategoryScore(analysis.score, 'Layout Semantics'),
-      'Naming + Semantics': getCategoryScore(analysis.score, 'Naming + Semantics'),
-      'Variant Completeness': getCategoryScore(analysis.score, 'Variant Completeness')
-    };
-
-    for (const category of SCORE_CATEGORIES) {
-      const originalItems = analysis.checklistByCategory[category] ?? [];
-      if (originalItems.length === 0) {
-        continue;
-      }
-
-      const skippedInCategory = originalItems.filter((item) =>
-        skippedIssueKeys.has(issueKey(item))
-      ).length;
-      if (skippedInCategory === 0) {
-        continue;
-      }
-
-      const categoryMax = CATEGORY_MAX[category];
-      const skippedGain = (categoryMax * skippedInCategory) / originalItems.length;
-      next[category] = Math.min(categoryMax, Math.round(next[category] + skippedGain));
-    }
-
-    return next;
-  }, [analysis, skippedIssueKeys]);
-
-  const adjustedScoreTotal = useMemo(() => {
-    if (!analysis.hasSelection || !adjustedScoreBreakdown) {
-      return 0;
-    }
-
-    return SCORE_CATEGORIES.reduce((sum, category) => sum + adjustedScoreBreakdown[category], 0);
-  }, [analysis, adjustedScoreBreakdown]);
+  const scoreTotal = analysis.hasSelection ? analysis.score.total : 0;
+  const scoreMax = analysis.hasSelection ? analysis.score.applicableMax : 0;
 
   const scorePercent = useMemo(() => {
+    if (!analysis.hasSelection || scoreMax <= 0) {
+      return 0;
+    }
+    return Math.max(0, Math.min(100, Math.round((scoreTotal / scoreMax) * 100)));
+  }, [analysis, scoreTotal, scoreMax]);
+
+  const dismissedCount = useMemo(() => {
     if (!analysis.hasSelection) {
       return 0;
     }
-
-    return Math.max(0, Math.min(100, adjustedScoreTotal));
-  }, [analysis, adjustedScoreTotal]);
+    const activeKeys = new Set(
+      analysis.checklist.map((item) => issueKey(item))
+    );
+    return Array.from(skippedIssueKeys).filter((key) => activeKeys.has(key)).length;
+  }, [analysis, skippedIssueKeys]);
 
   const onSelectPreset = (nextPreset: Preset) => {
     setPreset(nextPreset);
@@ -509,7 +479,7 @@ function App(): JSX.Element {
         detail: 'Skipped by user.'
       }
     }));
-    setCopyStatus('Issue skipped');
+    setCopyStatus('Dismissed');
     setTimeout(() => setCopyStatus(''), 1600);
   };
 
@@ -562,7 +532,7 @@ function App(): JSX.Element {
                   className={`tab-btn ${activeTab === 'score' ? 'active' : ''}`}
                   onClick={() => setActiveTab('score')}
                 >
-                  Score {adjustedScoreTotal}/100
+                  Score {scoreTotal}/{scoreMax || 100}
                 </button>
               </div>
 
@@ -601,10 +571,11 @@ function App(): JSX.Element {
                 hidden={activeTab !== 'score'}
               >
                 <AdvancedPanel
-                  adjustedScoreTotal={adjustedScoreTotal}
+                  scoreTotal={scoreTotal}
+                  scoreMax={scoreMax}
                   scorePercent={scorePercent}
+                  dismissedCount={dismissedCount}
                   score={analysis.score}
-                  adjustedScoreBreakdown={adjustedScoreBreakdown}
                   plainCategoryLabel={plainCategoryLabel}
                   getCategoryScore={getCategoryScore}
                   checklistByCategory={analysis.checklistByCategory}
