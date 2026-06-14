@@ -24973,6 +24973,93 @@ server.registerTool(
   },
   async ({ nodeId, fix }) => run("apply_fix", { nodeId, fix })
 );
+var COLOR = external_exports.string().describe('Hex color, e.g. "#3366ff" (optional 8-digit for alpha).');
+server.registerTool(
+  "create_frame",
+  {
+    description: "Create a frame on the Figma canvas. Optionally give it Auto Layout. Defaults to the current page at (0,0) sized 100\xD7100; pass parentId to nest it inside another frame/section.",
+    inputSchema: {
+      name: external_exports.string().optional(),
+      parentId: external_exports.string().optional().describe("Container node id to nest inside; omit for current page."),
+      x: external_exports.number().optional(),
+      y: external_exports.number().optional(),
+      width: external_exports.number().optional(),
+      height: external_exports.number().optional(),
+      layoutMode: external_exports.enum(["NONE", "HORIZONTAL", "VERTICAL"]).optional(),
+      itemSpacing: external_exports.number().optional().describe("Gap between children when Auto Layout is on."),
+      fill: COLOR.optional()
+    }
+  },
+  async (args) => run("create_frame", args)
+);
+server.registerTool(
+  "create_text",
+  {
+    description: "Create a text node on the Figma canvas (font loading is handled automatically).",
+    inputSchema: {
+      characters: external_exports.string().describe("The text content."),
+      name: external_exports.string().optional(),
+      parentId: external_exports.string().optional(),
+      x: external_exports.number().optional(),
+      y: external_exports.number().optional(),
+      fontSize: external_exports.number().optional(),
+      color: COLOR.optional()
+    }
+  },
+  async (args) => run("create_text", args)
+);
+server.registerTool(
+  "create_rectangle",
+  {
+    description: "Create a rectangle shape on the Figma canvas.",
+    inputSchema: {
+      name: external_exports.string().optional(),
+      parentId: external_exports.string().optional(),
+      x: external_exports.number().optional(),
+      y: external_exports.number().optional(),
+      width: external_exports.number().optional(),
+      height: external_exports.number().optional(),
+      fill: COLOR.optional(),
+      cornerRadius: external_exports.number().optional()
+    }
+  },
+  async (args) => run("create_rectangle", args)
+);
+server.registerTool(
+  "create_ellipse",
+  {
+    description: "Create an ellipse shape on the Figma canvas.",
+    inputSchema: {
+      name: external_exports.string().optional(),
+      parentId: external_exports.string().optional(),
+      x: external_exports.number().optional(),
+      y: external_exports.number().optional(),
+      width: external_exports.number().optional(),
+      height: external_exports.number().optional(),
+      fill: COLOR.optional()
+    }
+  },
+  async (args) => run("create_ellipse", args)
+);
+server.registerTool(
+  "set_text",
+  {
+    description: "Replace the text content of an existing text node.",
+    inputSchema: {
+      nodeId: external_exports.string().describe("The text node id."),
+      characters: external_exports.string().describe("The new text content.")
+    }
+  },
+  async ({ nodeId, characters }) => run("set_text", { nodeId, characters })
+);
+server.registerTool(
+  "set_fill",
+  {
+    description: "Set a solid fill color on an existing node.",
+    inputSchema: { nodeId: external_exports.string(), color: COLOR }
+  },
+  async ({ nodeId, color }) => run("set_fill", { nodeId, color })
+);
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);

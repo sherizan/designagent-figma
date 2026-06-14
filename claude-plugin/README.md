@@ -10,10 +10,14 @@ to build production UI from it the design-system-faithful way.
   tokens and components onto your project, builds mode-aware and accessible code,
   reuses components, and implements only what the design evidences. Auto-wires
   `@DESIGN.md` into your `CLAUDE.md` so the spec stays loaded each session.
-- **`designagent` MCP server** — a live two-way bridge so Claude Code can read and
-  act on the open Figma file: `status`, `get_design_md`, `get_spec`, `get_score`,
-  `list_issues`, `focus`, `select`, `annotate`, `apply_fix`. Tools appear as
-  `mcp__plugin_designagent_designagent__<tool>`.
+- **`designagent` MCP server** — a live two-way bridge so Claude Code can read,
+  fix, and create on the open Figma file:
+  - read: `status`, `get_design_md`, `get_spec`, `get_score`, `list_issues`
+  - act: `focus`, `select`, `annotate`, `apply_fix`
+  - create: `create_frame`, `create_text`, `create_rectangle`, `create_ellipse`,
+    `set_text`, `set_fill`
+
+  Tools appear as `mcp__plugin_designagent_designagent__<tool>`.
 
 ## Install
 

@@ -677,6 +677,84 @@ async function analyzePrimaryForBridge(): Promise<AnalysisCore> {
   return analyzeNodeCoreAsync(primary, { linkBase: fallbackLinkBase, includeAssets: false });
 }
 
+function toNumber(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function parseHexColor(input: unknown): { color: RGB; opacity: number } {
+  const raw = String(input ?? '').trim().replace(/^#/, '');
+  const hex = /^[0-9a-fA-F]{3}$/.test(raw)
+    ? raw.split('').map((c) => c + c).join('')
+    : raw;
+  if (!/^[0-9a-fA-F]{6}$/.test(hex) && !/^[0-9a-fA-F]{8}$/.test(hex)) {
+    throw new Error(`Invalid color "${String(input)}". Use a hex value like #3366ff.`);
+  }
+  return {
+    color: {
+      r: parseInt(hex.slice(0, 2), 16) / 255,
+      g: parseInt(hex.slice(2, 4), 16) / 255,
+      b: parseInt(hex.slice(4, 6), 16) / 255
+    },
+    opacity: hex.length === 8 ? parseInt(hex.slice(6, 8), 16) / 255 : 1
+  };
+}
+
+function solidPaint(input: unknown): SolidPaint {
+  const { color, opacity } = parseHexColor(input);
+  return { type: 'SOLID', color, opacity };
+}
+
+async function resolveParentContainer(parentId: unknown): Promise<BaseNode & ChildrenMixin> {
+  if (parentId) {
+    const parent = await figma.getNodeByIdAsync(String(parentId));
+    if (parent && 'appendChild' in parent) {
+      return parent as BaseNode & ChildrenMixin;
+    }
+    throw new Error(`Parent node ${String(parentId)} not found or cannot contain children.`);
+  }
+  return figma.currentPage;
+}
+
+async function loadFontForNewText(node: TextNode): Promise<void> {
+  const fontName = node.fontName;
+  if (fontName !== figma.mixed) {
+    try {
+      await figma.loadFontAsync(fontName);
+      return;
+    } catch {
+      // fall through to a fallback font below
+    }
+  }
+  const fonts = await figma.listAvailableFontsAsync();
+  const fallback = fonts[0]?.fontName ?? { family: 'Inter', style: 'Regular' };
+  await figma.loadFontAsync(fallback);
+  node.fontName = fallback;
+}
+
+async function loadFontForExistingText(node: TextNode): Promise<void> {
+  const current =
+    node.fontName === figma.mixed && node.characters.length > 0
+      ? node.getRangeFontName(0, 1)
+      : node.fontName;
+  const fontName = current === figma.mixed ? { family: 'Inter', style: 'Regular' } : current;
+  try {
+    await figma.loadFontAsync(fontName);
+    node.fontName = fontName;
+  } catch {
+    const fonts = await figma.listAvailableFontsAsync();
+    const fallback = fonts[0]?.fontName ?? { family: 'Inter', style: 'Regular' };
+    await figma.loadFontAsync(fallback);
+    node.fontName = fallback;
+  }
+}
+
+function selectAndReturn(node: SceneNode): { id: string; name: string; type: string } {
+  figma.currentPage.selection = [node];
+  figma.viewport.scrollAndZoomIntoView([node]);
+  return { id: node.id, name: node.name, type: node.type };
+}
+
 async function runBridgeCommand(
   command: string,
   params: Record<string, unknown>
@@ -787,6 +865,89 @@ async function runBridgeCommand(
         void computeAndPostAnalysis();
       }
       return { ok: result.ok, message: result.message };
+    }
+    case 'create_frame': {
+      const parent = await resolveParentContainer(params.parentId);
+      const frame = figma.createFrame();
+      if (params.name) {
+        frame.name = String(params.name);
+      }
+      frame.resize(toNumber(params.width, 100), toNumber(params.height, 100));
+      const layoutMode = String(params.layoutMode ?? '');
+      if (layoutMode === 'HORIZONTAL' || layoutMode === 'VERTICAL') {
+        frame.layoutMode = layoutMode;
+        if (params.itemSpacing != null) {
+          frame.itemSpacing = toNumber(params.itemSpacing, 0);
+        }
+      }
+      if (params.fill != null) {
+        frame.fills = [solidPaint(params.fill)];
+      }
+      parent.appendChild(frame);
+      if (parent.type === 'PAGE') {
+        frame.x = toNumber(params.x, 0);
+        frame.y = toNumber(params.y, 0);
+      }
+      return selectAndReturn(frame);
+    }
+    case 'create_rectangle':
+    case 'create_ellipse': {
+      const parent = await resolveParentContainer(params.parentId);
+      const node = command === 'create_ellipse' ? figma.createEllipse() : figma.createRectangle();
+      if (params.name) {
+        node.name = String(params.name);
+      }
+      node.resize(toNumber(params.width, 100), toNumber(params.height, 100));
+      if (params.fill != null) {
+        node.fills = [solidPaint(params.fill)];
+      }
+      if (command === 'create_rectangle' && params.cornerRadius != null) {
+        (node as RectangleNode).cornerRadius = toNumber(params.cornerRadius, 0);
+      }
+      parent.appendChild(node);
+      if (parent.type === 'PAGE') {
+        node.x = toNumber(params.x, 0);
+        node.y = toNumber(params.y, 0);
+      }
+      return selectAndReturn(node);
+    }
+    case 'create_text': {
+      const parent = await resolveParentContainer(params.parentId);
+      const text = figma.createText();
+      parent.appendChild(text);
+      await loadFontForNewText(text);
+      text.characters = String(params.characters ?? '');
+      if (params.fontSize != null) {
+        text.fontSize = toNumber(params.fontSize, 16);
+      }
+      if (params.color != null) {
+        text.fills = [solidPaint(params.color)];
+      }
+      if (params.name) {
+        text.name = String(params.name);
+      }
+      if (parent.type === 'PAGE') {
+        text.x = toNumber(params.x, 0);
+        text.y = toNumber(params.y, 0);
+      }
+      return selectAndReturn(text);
+    }
+    case 'set_text': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!node || node.type !== 'TEXT') {
+        throw new Error('set_text requires the id of a text node.');
+      }
+      await loadFontForExistingText(node);
+      node.characters = String(params.characters ?? '');
+      return { id: node.id, name: node.name };
+    }
+    case 'set_fill': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('fills' in node)) {
+        throw new Error('set_fill requires a node that supports fills.');
+      }
+      (node as GeometryMixin).fills = [solidPaint(params.color)];
+      return { id: node.id, name: node.name };
     }
     default:
       throw new Error(`Unknown command: ${command}`);
