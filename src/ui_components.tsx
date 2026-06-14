@@ -49,50 +49,86 @@ const CATEGORY_MAX: Record<ScoreCategory, number> = {
   'Variant Completeness': 10
 };
 
-interface HeaderPanelProps {
+export type MainTab = 'design-to-code' | 'code-to-design';
+
+interface AppHeaderProps {
+  version: string;
+}
+
+export function AppHeader({ version }: AppHeaderProps): JSX.Element {
+  return (
+    <div className="app-header">
+      <div className="header-copy">
+        <h1 className="title">DesignAgent</h1>
+        <p className="sub">Design ↔ code, both directions.</p>
+      </div>
+      <div className="version-tag">{version}</div>
+    </div>
+  );
+}
+
+interface MainTabsProps {
+  active: MainTab;
+  onChange: (tab: MainTab) => void;
+}
+
+export function MainTabs({ active, onChange }: MainTabsProps): JSX.Element {
+  const tabs: Array<{ id: MainTab; label: string }> = [
+    { id: 'design-to-code', label: 'Design → Code' },
+    { id: 'code-to-design', label: 'Code → Design' }
+  ];
+  return (
+    <div className="main-tabs" role="tablist" aria-label="DesignAgent mode">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          role="tab"
+          aria-selected={active === tab.id}
+          className={`main-tab ${active === tab.id ? 'active' : ''}`}
+          onClick={() => onChange(tab.id)}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+interface PresetSelectorProps {
   preset: Preset;
   onSelectPreset: (preset: Preset) => void;
 }
 
-export function HeaderPanel({ preset, onSelectPreset }: HeaderPanelProps): JSX.Element {
+export function PresetSelector({ preset, onSelectPreset }: PresetSelectorProps): JSX.Element {
   return (
-    <div className="panel header-panel">
-      <div className="header-row">
-        <div className="header-copy">
-          <h1 className="title">DesignAgent</h1>
-          <p className="sub">Build what you design. No drift.</p>
-        </div>
-        <div className="version-tag">v1.2.1</div>
-      </div>
-
-      <div className="preset-grid">
-        {PRESET_ORDER.map((presetId) => {
-          const definition = PRESET_DEFINITIONS[presetId];
-          const active = presetId === preset;
-          const PresetIconComponent = PRESET_ICON_COMPONENTS[definition.icon];
-          return (
-            <button
-              key={definition.id}
-              type="button"
-              className={`preset-card ${active ? 'active' : ''}`}
-              onClick={() => onSelectPreset(definition.id)}
-              aria-pressed={active}
-            >
-              <div className="preset-icon">
-                <PresetIconComponent size={16} strokeWidth={1.75} />
-              </div>
-              <div className="preset-label">{definition.label}</div>
-            </button>
-          );
-        })}
-      </div>
+    <div className="preset-grid">
+      {PRESET_ORDER.map((presetId) => {
+        const definition = PRESET_DEFINITIONS[presetId];
+        const active = presetId === preset;
+        const PresetIconComponent = PRESET_ICON_COMPONENTS[definition.icon];
+        return (
+          <button
+            key={definition.id}
+            type="button"
+            className={`preset-card ${active ? 'active' : ''}`}
+            onClick={() => onSelectPreset(definition.id)}
+            aria-pressed={active}
+          >
+            <div className="preset-icon">
+              <PresetIconComponent size={16} strokeWidth={1.75} />
+            </div>
+            <div className="preset-label">{definition.label}</div>
+          </button>
+        );
+      })}
     </div>
   );
 }
 
 export type BridgeStatus = 'off' | 'connecting' | 'connected' | 'error';
 
-interface BridgeBarProps {
+interface BridgePanelProps {
   status: BridgeStatus;
   enabled: boolean;
   onToggle: () => void;
@@ -105,44 +141,62 @@ const BRIDGE_META: Record<BridgeStatus, { color: string; label: string }> = {
   error: { color: '#e0653d', label: 'Claude bridge — retrying…' }
 };
 
-export function BridgeBar({ status, enabled, onToggle }: BridgeBarProps): JSX.Element {
+const BRIDGE_CAPABILITIES: Array<{ label: string; detail: string }> = [
+  { label: 'Read', detail: 'spec · score · DESIGN.md · issues' },
+  { label: 'Build', detail: 'frames · text · shapes · images' },
+  { label: 'Style', detail: 'fills · strokes · radius · shadow · type' },
+  { label: 'Layout', detail: 'move · resize · group · clone · delete' }
+];
+
+export function BridgePanel({ status, enabled, onToggle }: BridgePanelProps): JSX.Element {
   const meta = BRIDGE_META[status];
   return (
-    <div
-      className="bridge-bar"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 8,
-        padding: '8px 12px',
-        borderRadius: 8,
-        background: 'rgba(127, 127, 127, 0.08)',
-        marginTop: 8
-      }}
-    >
-      <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-        <span
-          aria-hidden="true"
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: 999,
-            backgroundColor: meta.color,
-            boxShadow: status === 'connected' ? `0 0 0 3px ${meta.color}33` : 'none',
-            flex: 'none'
-          }}
-        />
-        <span>{meta.label}</span>
-      </span>
-      <button
-        type="button"
-        className="btn"
-        onClick={onToggle}
-        title="Let Claude Code read and act on this Figma file via the DesignAgent MCP bridge"
-      >
-        {enabled ? 'Disable' : 'Enable'}
-      </button>
+    <div className="panel bridge-panel">
+      <div className="bridge-status-row">
+        <span className="bridge-status">
+          <span
+            className="bridge-dot"
+            aria-hidden="true"
+            style={{
+              backgroundColor: meta.color,
+              boxShadow: status === 'connected' ? `0 0 0 3px ${meta.color}33` : 'none'
+            }}
+          />
+          <span>{meta.label}</span>
+        </span>
+        <button type="button" className={enabled ? 'btn' : 'btn-primary'} onClick={onToggle}>
+          {enabled ? 'Disable' : 'Enable'}
+        </button>
+      </div>
+
+      <p className="bridge-explainer">
+        Let Claude Code read and build directly in this Figma file over a local bridge.
+      </p>
+
+      <div className="bridge-caps">
+        {BRIDGE_CAPABILITIES.map((cap) => (
+          <div key={cap.label} className="bridge-cap">
+            <span className="bridge-cap-label">{cap.label}</span>
+            <span className="bridge-cap-detail">{cap.detail}</span>
+          </div>
+        ))}
+      </div>
+
+      <details className="bridge-setup">
+        <summary>Setup</summary>
+        <ol className="bridge-steps">
+          <li>
+            In Claude Code: <code>/plugin marketplace add sherizan/designagent-figma</code>
+          </li>
+          <li>
+            <code>/plugin install designagent@designagent</code>, then restart Claude Code.
+          </li>
+          <li>
+            Click <strong>Enable</strong> above — the dot turns green when connected.
+          </li>
+          <li>Ask Claude, e.g. “score my selection” or “build a card with a Trade button”.</li>
+        </ol>
+      </details>
     </div>
   );
 }
