@@ -3566,7 +3566,7 @@ var require_schemes = __commonJS({
         serialize: wsSerialize
       }
     );
-    var wss2 = (
+    var wss = (
       /** @type {SchemeHandler} */
       {
         scheme: "wss",
@@ -3599,7 +3599,7 @@ var require_schemes = __commonJS({
         http,
         https,
         ws,
-        wss: wss2,
+        wss,
         urn,
         "urn:uuid": urnuuid
       }
@@ -24799,14 +24799,7 @@ function log(...args) {
 }
 var pluginSocket = null;
 var pending = /* @__PURE__ */ new Map();
-var wss = new import_websocket_server.default({ host: "localhost", port: PORT });
-wss.on("listening", () => {
-  log(`WebSocket bridge listening on ws://localhost:${PORT}`);
-});
-wss.on("error", (error2) => {
-  log(`WebSocket server error: ${error2.message}. The bridge will be unavailable.`);
-});
-wss.on("connection", (socket) => {
+function handleConnection(socket) {
   pluginSocket = socket;
   log("DesignAgent plugin connected.");
   socket.on("message", (data) => {
@@ -24842,7 +24835,15 @@ wss.on("connection", (socket) => {
   socket.on("error", (error2) => {
     log(`Plugin socket error: ${error2.message}`);
   });
-});
+}
+var BIND_HOSTS = ["127.0.0.1", "::1"];
+for (const host of BIND_HOSTS) {
+  const display = host.includes(":") ? `[${host}]` : host;
+  const wss = new import_websocket_server.default({ host, port: PORT });
+  wss.on("listening", () => log(`WebSocket bridge listening on ws://${display}:${PORT}`));
+  wss.on("error", (error2) => log(`Bind ${display}:${PORT} failed: ${error2.message}`));
+  wss.on("connection", handleConnection);
+}
 setInterval(() => {
   if (pluginSocket && pluginSocket.readyState === import_websocket.default.OPEN) {
     try {

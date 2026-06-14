@@ -28,20 +28,7 @@ const pending = new Map<
   { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
 >();
 
-// Bind to the loopback name so the host matches what the Figma plugin connects
-// to (ws://localhost) and what the manifest allows (http://localhost) — avoids
-// IPv4/IPv6 (127.0.0.1 vs ::1) mismatches while staying loopback-only.
-const wss = new WebSocketServer({ host: 'localhost', port: PORT });
-
-wss.on('listening', () => {
-  log(`WebSocket bridge listening on ws://localhost:${PORT}`);
-});
-
-wss.on('error', (error: Error) => {
-  log(`WebSocket server error: ${error.message}. The bridge will be unavailable.`);
-});
-
-wss.on('connection', (socket: WebSocket) => {
+function handleConnection(socket: WebSocket): void {
   pluginSocket = socket;
   log('DesignAgent plugin connected.');
 
@@ -81,7 +68,20 @@ wss.on('connection', (socket: WebSocket) => {
   socket.on('error', (error: Error) => {
     log(`Plugin socket error: ${error.message}`);
   });
-});
+}
+
+// Bind both loopback addresses (IPv4 127.0.0.1 + IPv6 ::1) so the plugin reaches
+// us regardless of how "localhost" resolves on this machine — while staying
+// loopback-only (never exposed to the LAN). The manifest allows http://localhost
+// and the plugin connects to ws://localhost; CSP matches on the host name.
+const BIND_HOSTS = ['127.0.0.1', '::1'];
+for (const host of BIND_HOSTS) {
+  const display = host.includes(':') ? `[${host}]` : host;
+  const wss = new WebSocketServer({ host, port: PORT });
+  wss.on('listening', () => log(`WebSocket bridge listening on ws://${display}:${PORT}`));
+  wss.on('error', (error: Error) => log(`Bind ${display}:${PORT} failed: ${error.message}`));
+  wss.on('connection', handleConnection);
+}
 
 // Heartbeat so dead connections are noticed.
 setInterval(() => {
