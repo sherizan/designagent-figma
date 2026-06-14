@@ -1244,6 +1244,125 @@ async function runBridgeCommand(
       node.remove();
       return { deleted: info };
     }
+    case 'clone': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('clone' in node)) {
+        throw new Error('clone is not supported for this node.');
+      }
+      const copy = (node as SceneNode & { clone(): SceneNode }).clone();
+      if (params.parentId != null) {
+        const parent = await resolveParentContainer(params.parentId);
+        parent.appendChild(copy);
+      }
+      if ('x' in copy) {
+        const layout = copy as SceneNode & LayoutMixin;
+        if (params.x != null) layout.x = toNumber(params.x, layout.x);
+        if (params.y != null) layout.y = toNumber(params.y, layout.y);
+      }
+      return selectAndReturn(copy);
+    }
+    case 'group': {
+      const ids = Array.isArray(params.nodeIds) ? params.nodeIds.map(String) : [];
+      const nodes: SceneNode[] = [];
+      for (const id of ids) {
+        const found = await figma.getNodeByIdAsync(id);
+        if (isSceneNode(found)) {
+          nodes.push(found);
+        }
+      }
+      if (nodes.length < 1) {
+        throw new Error('group requires at least one valid node.');
+      }
+      const firstNode = nodes[0];
+      const parent = (firstNode && firstNode.parent) || figma.currentPage;
+      const group = figma.group(nodes, parent as BaseNode & ChildrenMixin);
+      if (params.name) {
+        group.name = String(params.name);
+      }
+      return selectAndReturn(group);
+    }
+    case 'ungroup': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node)) {
+        throw new Error('ungroup requires a valid node.');
+      }
+      if (node.type !== 'GROUP') {
+        throw new Error('ungroup requires a group node.');
+      }
+      const children = figma.ungroup(node);
+      return { ungrouped: children.map((child) => ({ id: child.id, name: child.name })) };
+    }
+    case 'set_opacity': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('opacity' in node)) {
+        throw new Error('set_opacity is not supported for this node.');
+      }
+      (node as SceneNode & MinimalBlendMixin).opacity = Math.max(
+        0,
+        Math.min(1, toNumber(params.opacity, 1))
+      );
+      return { id: node.id, name: node.name };
+    }
+    case 'set_rotation': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('rotation' in node)) {
+        throw new Error('set_rotation is not supported for this node.');
+      }
+      (node as SceneNode & LayoutMixin).rotation = toNumber(params.rotation, 0);
+      return { id: node.id, name: node.name };
+    }
+    case 'instantiate_component': {
+      let component: ComponentNode | null = null;
+      if (params.componentKey) {
+        component = await figma.importComponentByKeyAsync(String(params.componentKey));
+      } else if (params.componentId) {
+        const found = await figma.getNodeByIdAsync(String(params.componentId));
+        if (found && found.type === 'COMPONENT') {
+          component = found;
+        } else if (found && found.type === 'COMPONENT_SET') {
+          component = found.defaultVariant;
+        } else {
+          throw new Error('componentId must reference a COMPONENT or COMPONENT_SET.');
+        }
+      } else {
+        throw new Error('instantiate_component requires componentId or componentKey.');
+      }
+      if (!component) {
+        throw new Error('Component not found.');
+      }
+      const instance = component.createInstance();
+      const parent = await resolveParentContainer(params.parentId);
+      parent.appendChild(instance);
+      if (parent.type === 'PAGE') {
+        if (params.x != null) instance.x = toNumber(params.x, 0);
+        if (params.y != null) instance.y = toNumber(params.y, 0);
+      }
+      return selectAndReturn(instance);
+    }
+    case 'batch': {
+      const ops = Array.isArray(params.operations) ? params.operations : [];
+      const results: Array<{ ok: boolean; command: string; result?: unknown; error?: string }> = [];
+      for (const entry of ops) {
+        const op = (entry ?? {}) as { command?: unknown; params?: unknown };
+        const subCommand = String(op.command ?? '');
+        const subParams =
+          op.params && typeof op.params === 'object' ? (op.params as Record<string, unknown>) : {};
+        if (subCommand === 'batch') {
+          results.push({ ok: false, command: subCommand, error: 'Nested batch is not allowed.' });
+          continue;
+        }
+        try {
+          results.push({ ok: true, command: subCommand, result: await runBridgeCommand(subCommand, subParams) });
+        } catch (error) {
+          results.push({
+            ok: false,
+            command: subCommand,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+      return { count: results.length, results };
+    }
     default:
       throw new Error(`Unknown command: ${command}`);
   }

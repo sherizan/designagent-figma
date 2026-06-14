@@ -23,6 +23,8 @@ to build production UI from it the design-system-faithful way.
     `set_corner_radius`, `set_stroke`, `set_shadow` (create tools also take `fill`,
     `cornerRadius`, `stroke`/`strokeWeight`, `padding`, and — for text — `weight`/`align` inline)
   - layout: `move`, `resize`, `reparent`, `delete`
+  - advanced: `clone`, `group`, `ungroup`, `set_opacity`, `set_rotation`,
+    `instantiate_component`, `batch` (run many ops in one call)
 
   Tools appear as `mcp__plugin_designagent_designagent__<tool>`.
 
