@@ -59,9 +59,9 @@ Notes:
   install step.
 - Port is configurable with `DESIGNAGENT_BRIDGE_PORT` (default `3790`); it must match
   the plugin. The socket closes when the plugin window closes.
-- `networkAccess` lists `http://localhost:3790` — Figma rejects both the `ws://`
-  scheme and raw IPs (`127.0.0.1`) in the manifest; only the `localhost` `http(s)`
-  origin is accepted, and CSP scheme matching still permits the `ws://localhost`
-  connection. (So the server, plugin, and manifest all use `localhost`.)
+- `networkAccess` lists `ws://localhost:3790` — Figma's manifest validator rejects
+  raw IPs (`127.0.0.1` → "must be a valid URL"), and its CSP needs the `ws` scheme
+  listed explicitly (an `http` entry does not authorize the socket). So the server,
+  plugin, and manifest all use the `localhost` host with the `ws` scheme.
 - For the **published** Figma plugin, localhost must move from `devAllowedDomains` to
   `allowedDomains` (with a `reasoning` field) in `manifest.json`.
