@@ -10567,6 +10567,7 @@ var require_websocket_server = __commonJS({
 
 // src/server.ts
 var import_node_crypto = require("node:crypto");
+var import_promises = require("node:fs/promises");
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -24893,6 +24894,36 @@ async function run(command, params = {}) {
     return fail(error2);
   }
 }
+var MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+async function loadImageBase64(args) {
+  let buf;
+  if (args.data) {
+    const m = /^data:[^;]+;base64,(.+)$/.exec(args.data);
+    buf = Buffer.from(m ? m[1] : args.data, "base64");
+  } else if (args.path) {
+    buf = await (0, import_promises.readFile)(args.path);
+  } else if (args.url) {
+    const res = await fetch(args.url);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch image: HTTP ${res.status} ${res.statusText}`);
+    }
+    buf = Buffer.from(await res.arrayBuffer());
+  } else {
+    throw new Error('Provide an image source: one of "url", "path", or "data".');
+  }
+  if (buf.length > MAX_IMAGE_BYTES) {
+    throw new Error(
+      `Image is ${(buf.length / 1024 / 1024).toFixed(1)} MB; max is ${MAX_IMAGE_BYTES / 1024 / 1024} MB. Use a smaller image.`
+    );
+  }
+  return buf.toString("base64");
+}
+var IMAGE_SOURCE_SCHEMA = {
+  url: external_exports.string().optional().describe("Image URL (fetched by the server)."),
+  path: external_exports.string().optional().describe("Absolute local file path to an image."),
+  data: external_exports.string().optional().describe("Base64 image data or a data: URL."),
+  scaleMode: external_exports.enum(["FILL", "FIT", "CROP", "TILE"]).optional().describe("Default FILL.")
+};
 server.registerTool(
   "status",
   {
@@ -25132,6 +25163,53 @@ server.registerTool(
     }
   },
   async (args) => run("set_shadow", args)
+);
+server.registerTool(
+  "set_image",
+  {
+    description: "Fill an existing node with an image from a URL, a local file path, or base64. The server fetches/reads it (the Figma sandbox cannot).",
+    inputSchema: { nodeId: external_exports.string(), ...IMAGE_SOURCE_SCHEMA }
+  },
+  async (args) => {
+    try {
+      const imageBase64 = await loadImageBase64(args);
+      return run("set_image", { nodeId: args.nodeId, imageBase64, scaleMode: args.scaleMode });
+    } catch (error2) {
+      return fail(error2);
+    }
+  }
+);
+server.registerTool(
+  "place_image",
+  {
+    description: "Create a new image node on the canvas from a URL, local path, or base64. Sized to the image unless width/height are given.",
+    inputSchema: {
+      ...IMAGE_SOURCE_SCHEMA,
+      name: external_exports.string().optional(),
+      parentId: external_exports.string().optional(),
+      x: external_exports.number().optional(),
+      y: external_exports.number().optional(),
+      width: external_exports.number().optional(),
+      height: external_exports.number().optional()
+    }
+  },
+  async (args) => {
+    try {
+      const imageBase64 = await loadImageBase64(args);
+      return run("place_image", {
+        imageBase64,
+        scaleMode: args.scaleMode,
+        name: args.name,
+        parentId: args.parentId,
+        x: args.x,
+        y: args.y,
+        width: args.width,
+        height: args.height
+      });
+    } catch (error2) {
+      return fail(error2);
+    }
+  }
 );
 async function main() {
   const transport = new StdioServerTransport();

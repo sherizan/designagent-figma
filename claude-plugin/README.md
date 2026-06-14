@@ -14,7 +14,11 @@ to build production UI from it the design-system-faithful way.
   fix, and create on the open Figma file:
   - read: `status`, `get_design_md`, `get_spec`, `get_score`, `list_issues`
   - act: `focus`, `select`, `annotate`, `apply_fix`
-  - create: `create_frame`, `create_text`, `create_rectangle`, `create_ellipse`
+  - create: `create_frame`, `create_text`, `create_rectangle`, `create_ellipse`,
+    `place_image`
+  - images: `place_image` (new node) / `set_image` (fill an existing node) — from a
+    URL, local path, or base64; the server does the fetch/read, so no plugin network
+    access is needed
   - style: `set_text`, `set_text_style` (size/weight/color/align), `set_fill`,
     `set_corner_radius`, `set_stroke`, `set_shadow` (create tools also take `fill`,
     `cornerRadius`, `stroke`/`strokeWeight`, `padding`, and — for text — `weight`/`align` inline)
