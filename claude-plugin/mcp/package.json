@@ -1,0 +1,23 @@
+{
+  "name": "@designagent/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DesignAgent MCP server — bridges Claude Code to the DesignAgent Figma plugin over a local WebSocket.",
+  "bin": {
+    "designagent-mcp": "./server.js"
+  },
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ws": "^8.21.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.12",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3"
+  }
+}

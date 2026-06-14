@@ -618,53 +618,196 @@ function selectExportableNodes(selection: readonly SceneNode[]): SceneNode[] {
   return primary ? [primary] : [];
 }
 
+async function collectDesignMd(): Promise<{ markdown: string; frameCount: number }> {
+  const selection = figma.currentPage.selection;
+  const nodes = selectExportableNodes(selection);
+  if (nodes.length === 0) {
+    throw new Error('Select at least one frame, section, or component first.');
+  }
+
+  const limited = nodes.slice(0, MAX_DESIGN_MD_FRAMES);
+  const omittedFrameCount = nodes.length - limited.length;
+  const categories = await loadAnnotationCategories();
+
+  const frames: DesignDocFrame[] = [];
+  for (const node of limited) {
+    const reusable =
+      cache && cache.primaryNodeId === node.id && cache.linkBase === fallbackLinkBase
+        ? cache.core
+        : null;
+    const core =
+      reusable ??
+      (await analyzeNodeCoreAsync(node, {
+        linkBase: fallbackLinkBase,
+        includeAssets: false,
+        annotationCategories: categories
+      }));
+    frames.push({ core, preset: activePreset });
+  }
+
+  const markdown = generateDesignDoc(frames, {
+    fileName: figma.root.name || 'Untitled',
+    preset: activePreset,
+    omittedFrameCount
+  });
+
+  return { markdown, frameCount: limited.length };
+}
+
 async function exportDesignMd(): Promise<void> {
   try {
-    const selection = figma.currentPage.selection;
-    const nodes = selectExportableNodes(selection);
-    if (nodes.length === 0) {
-      postToUI({
-        type: 'ERROR',
-        message: 'Select at least one frame, section, or component to export DESIGN.md.'
-      });
-      return;
-    }
-
-    const limited = nodes.slice(0, MAX_DESIGN_MD_FRAMES);
-    const omittedFrameCount = nodes.length - limited.length;
-    const categories = await loadAnnotationCategories();
-
-    const frames: DesignDocFrame[] = [];
-    for (const node of limited) {
-      const reusable =
-        cache && cache.primaryNodeId === node.id && cache.linkBase === fallbackLinkBase
-          ? cache.core
-          : null;
-      const core =
-        reusable ??
-        (await analyzeNodeCoreAsync(node, {
-          linkBase: fallbackLinkBase,
-          includeAssets: false,
-          annotationCategories: categories
-        }));
-      frames.push({ core, preset: activePreset });
-    }
-
-    const markdown = generateDesignDoc(frames, {
-      fileName: figma.root.name || 'Untitled',
-      preset: activePreset,
-      omittedFrameCount
-    });
-
-    postToUI({
-      type: 'DESIGN_MD_RESULT',
-      markdown,
-      filename: 'DESIGN.md',
-      frameCount: limited.length
-    });
+    const { markdown, frameCount } = await collectDesignMd();
+    postToUI({ type: 'DESIGN_MD_RESULT', markdown, filename: 'DESIGN.md', frameCount });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to export DESIGN.md';
     postToUI({ type: 'ERROR', message });
+  }
+}
+
+// ---- Claude Code bridge: execute DesignAgent actions requested over the MCP/WS bridge ----
+
+async function analyzePrimaryForBridge(): Promise<AnalysisCore> {
+  const primary = resolvePrimaryNode(figma.currentPage.selection);
+  if (!primary) {
+    throw new Error('Nothing selected in Figma. Select a frame, component, or section first.');
+  }
+  if (cache && cache.primaryNodeId === primary.id && cache.linkBase === fallbackLinkBase) {
+    return cache.core;
+  }
+  return analyzeNodeCoreAsync(primary, { linkBase: fallbackLinkBase, includeAssets: false });
+}
+
+async function runBridgeCommand(
+  command: string,
+  params: Record<string, unknown>
+): Promise<unknown> {
+  switch (command) {
+    case 'status': {
+      const selection = figma.currentPage.selection;
+      const primary = selection[0];
+      return {
+        connected: true,
+        fileName: figma.root.name || 'Untitled',
+        page: figma.currentPage.name,
+        selectionCount: selection.length,
+        primary: primary ? { id: primary.id, name: primary.name, type: primary.type } : null,
+        preset: activePreset
+      };
+    }
+    case 'get_design_md':
+      return collectDesignMd();
+    case 'get_spec': {
+      const core = await analyzePrimaryForBridge();
+      return { selectedNode: core.selectedNode, intent: core.intent, uiSpec: core.uiSpec };
+    }
+    case 'get_score': {
+      const core = await analyzePrimaryForBridge();
+      const percent =
+        core.score.applicableMax > 0
+          ? Math.round((core.score.total / core.score.applicableMax) * 100)
+          : 0;
+      return {
+        node: core.selectedNode,
+        score: core.score,
+        readiness: { total: core.score.total, max: core.score.applicableMax, percent }
+      };
+    }
+    case 'list_issues': {
+      const core = await analyzePrimaryForBridge();
+      return { node: core.selectedNode, issues: core.checklist };
+    }
+    case 'focus': {
+      const nodeId = String(params.nodeId ?? '');
+      const node = await figma.getNodeByIdAsync(nodeId);
+      if (!isSceneNode(node)) {
+        throw new Error(`Node not found: ${nodeId}`);
+      }
+      figma.currentPage.selection = [node];
+      figma.viewport.scrollAndZoomIntoView([node]);
+      return { focused: { id: node.id, name: node.name } };
+    }
+    case 'select': {
+      const ids = Array.isArray(params.nodeIds)
+        ? params.nodeIds.map(String)
+        : params.nodeId
+        ? [String(params.nodeId)]
+        : [];
+      const nodes: SceneNode[] = [];
+      for (const id of ids) {
+        const node = await figma.getNodeByIdAsync(id);
+        if (isSceneNode(node)) {
+          nodes.push(node);
+        }
+      }
+      if (nodes.length === 0) {
+        throw new Error('No valid nodes to select.');
+      }
+      figma.currentPage.selection = nodes;
+      figma.viewport.scrollAndZoomIntoView(nodes);
+      return { selected: nodes.map((node) => ({ id: node.id, name: node.name })) };
+    }
+    case 'annotate': {
+      const nodeId = String(params.nodeId ?? '');
+      const label = String(params.label ?? params.reason ?? '');
+      if (!nodeId || !label) {
+        throw new Error('annotate requires "nodeId" and "label".');
+      }
+      const node = await figma.getNodeByIdAsync(nodeId);
+      if (!isSceneNode(node)) {
+        throw new Error(`Node not found: ${nodeId}`);
+      }
+      await createAnnotationForNode({
+        nodeId,
+        nodeName: node.name,
+        category: 'DesignAgent',
+        reason: label,
+        suggestion: String(params.suggestion ?? '')
+      });
+      return { annotated: { id: node.id, name: node.name }, label };
+    }
+    case 'apply_fix': {
+      const nodeId = String(params.nodeId ?? '');
+      const fix = String(params.fix ?? '');
+      const node = await figma.getNodeByIdAsync(nodeId);
+      if (!isSceneNode(node)) {
+        throw new Error(`Node not found: ${nodeId}`);
+      }
+      let result: { ok: boolean; message: string };
+      if (fix === 'auto-layout') {
+        result = applyAutoLayoutFix(node);
+      } else if (fix === 'absolute-positioning') {
+        result = applyAbsolutePositioningFix(node);
+      } else {
+        throw new Error(`Unknown fix "${fix}". Use "auto-layout" or "absolute-positioning".`);
+      }
+      if (result.ok) {
+        figma.currentPage.selection = [node];
+        figma.viewport.scrollAndZoomIntoView([node]);
+        invalidateCache();
+        void computeAndPostAnalysis();
+      }
+      return { ok: result.ok, message: result.message };
+    }
+    default:
+      throw new Error(`Unknown command: ${command}`);
+  }
+}
+
+async function handleBridgeCommand(
+  id: string,
+  command: string,
+  params: Record<string, unknown>
+): Promise<void> {
+  try {
+    const result = await runBridgeCommand(command, params);
+    postToUI({ type: 'BRIDGE_RESULT', id, ok: true, result });
+  } catch (error) {
+    postToUI({
+      type: 'BRIDGE_RESULT',
+      id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
 }
 
@@ -765,6 +908,11 @@ figma.ui.onmessage = (message: ToPluginMessage) => {
 
   if (message.type === 'EXPORT_DESIGN_MD') {
     void exportDesignMd();
+    return;
+  }
+
+  if (message.type === 'BRIDGE_COMMAND') {
+    void handleBridgeCommand(message.id, message.command, message.params);
     return;
   }
 

@@ -6,7 +6,8 @@
   "ui": "dist/ui.html",
   "editorType": ["figma"],
   "networkAccess": {
-    "allowedDomains": ["none"]
+    "allowedDomains": ["none"],
+    "devAllowedDomains": ["ws://127.0.0.1:3790", "ws://localhost:3790"]
   },
   "documentAccess": "dynamic-page"
 }

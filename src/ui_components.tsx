@@ -90,6 +90,63 @@ export function HeaderPanel({ preset, onSelectPreset }: HeaderPanelProps): JSX.E
   );
 }
 
+export type BridgeStatus = 'off' | 'connecting' | 'connected' | 'error';
+
+interface BridgeBarProps {
+  status: BridgeStatus;
+  enabled: boolean;
+  onToggle: () => void;
+}
+
+const BRIDGE_META: Record<BridgeStatus, { color: string; label: string }> = {
+  off: { color: '#9f9faa', label: 'Claude bridge off' },
+  connecting: { color: '#e0a83d', label: 'Claude bridge — connecting…' },
+  connected: { color: '#3bba6d', label: 'Claude bridge — connected' },
+  error: { color: '#e0653d', label: 'Claude bridge — retrying…' }
+};
+
+export function BridgeBar({ status, enabled, onToggle }: BridgeBarProps): JSX.Element {
+  const meta = BRIDGE_META[status];
+  return (
+    <div
+      className="bridge-bar"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8,
+        padding: '8px 12px',
+        borderRadius: 8,
+        background: 'rgba(127, 127, 127, 0.08)',
+        marginTop: 8
+      }}
+    >
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+        <span
+          aria-hidden="true"
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: 999,
+            backgroundColor: meta.color,
+            boxShadow: status === 'connected' ? `0 0 0 3px ${meta.color}33` : 'none',
+            flex: 'none'
+          }}
+        />
+        <span>{meta.label}</span>
+      </span>
+      <button
+        type="button"
+        className="btn"
+        onClick={onToggle}
+        title="Let Claude Code read and act on this Figma file via the DesignAgent MCP bridge"
+      >
+        {enabled ? 'Disable' : 'Enable'}
+      </button>
+    </div>
+  );
+}
+
 interface LoadingPanelProps {
   nodeName: string;
   nodeType: string;

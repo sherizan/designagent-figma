@@ -17,6 +17,7 @@ export type ToUIMessage =
       detail: string;
     }
   | { type: 'DESIGN_MD_RESULT'; markdown: string; filename: string; frameCount: number }
+  | { type: 'BRIDGE_RESULT'; id: string; ok: boolean; result?: unknown; error?: string }
   | { type: 'ERROR'; message: string };
 
 export type ToPluginMessage =
@@ -33,4 +34,5 @@ export type ToPluginMessage =
       suggestion: string;
     }
   | { type: 'EXPORT_DESIGN_MD' }
+  | { type: 'BRIDGE_COMMAND'; id: string; command: string; params: Record<string, unknown> }
   | { type: 'REFRESH_REQUEST' };
