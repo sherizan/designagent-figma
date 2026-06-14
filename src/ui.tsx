@@ -11,12 +11,15 @@ import {
 import type { ToUIMessage } from './shared/messages';
 import {
   AdvancedPanel,
-  BridgeBar,
+  AppHeader,
+  BridgePanel,
   type BridgeStatus,
   EmptyState,
   Footer,
-  HeaderPanel,
   LoadingPanel,
+  type MainTab,
+  MainTabs,
+  PresetSelector,
   PromptPanel
 } from './ui_components';
 import { UI_STYLES } from './ui_theme';
@@ -296,6 +299,7 @@ function getErrorHelpLink(error: string): string | undefined {
 
 function App(): JSX.Element {
   const [preset, setPreset] = useState<Preset>('swiftui-ios');
+  const [mainTab, setMainTab] = useState<MainTab>('design-to-code');
   const [activeTab, setActiveTab] = useState<'prompt' | 'score'>('prompt');
   const [analysis, setAnalysis] = useState<AnalysisResult>(INITIAL_ANALYSIS);
   const [selectionLinkInput, setSelectionLinkInput] = useState<string>('');
@@ -682,13 +686,9 @@ function App(): JSX.Element {
     <div className="app-shell">
       <style>{UI_STYLES}</style>
       <div className="app-body">
-        <HeaderPanel preset={preset} onSelectPreset={onSelectPreset} />
+        <AppHeader version="v1.3.0" />
 
-        <BridgeBar
-          status={bridgeStatus}
-          enabled={bridgeEnabled}
-          onToggle={() => setBridgeEnabled((value) => !value)}
-        />
+        <MainTabs active={mainTab} onChange={setMainTab} />
 
         {error ? (
           <div className="error">
@@ -701,7 +701,11 @@ function App(): JSX.Element {
           </div>
         ) : null}
 
-        {analyzing ? (
+        {mainTab === 'design-to-code' ? (
+          <>
+            <PresetSelector preset={preset} onSelectPreset={onSelectPreset} />
+
+            {analyzing ? (
           <LoadingPanel
             nodeName={analyzing.nodeName}
             nodeType={analyzing.nodeType}
@@ -812,6 +816,14 @@ function App(): JSX.Element {
           )
         ) : (
           <EmptyState message={analysis.message} />
+        )}
+          </>
+        ) : (
+          <BridgePanel
+            status={bridgeStatus}
+            enabled={bridgeEnabled}
+            onToggle={() => setBridgeEnabled((value) => !value)}
+          />
         )}
       </div>
 
