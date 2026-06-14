@@ -705,6 +705,38 @@ function solidPaint(input: unknown): SolidPaint {
   return { type: 'SOLID', color, opacity };
 }
 
+function applyStroke(node: SceneNode, params: Record<string, unknown>): void {
+  if (params.stroke == null || !('strokes' in node)) {
+    return;
+  }
+  (node as GeometryMixin).strokes = [solidPaint(params.stroke)];
+  if (params.strokeWeight != null) {
+    (node as MinimalStrokesMixin).strokeWeight = toNumber(params.strokeWeight, 1);
+  }
+  const align = String(params.strokeAlign ?? '');
+  if (align === 'INSIDE' || align === 'OUTSIDE' || align === 'CENTER') {
+    (node as MinimalStrokesMixin).strokeAlign = align;
+  }
+}
+
+function buildDropShadow(params: Record<string, unknown>): DropShadowEffect {
+  const { color, opacity } = parseHexColor(params.color ?? '#00000040');
+  return {
+    type: 'DROP_SHADOW',
+    color: {
+      r: color.r,
+      g: color.g,
+      b: color.b,
+      a: params.opacity != null ? toNumber(params.opacity, opacity) : opacity
+    },
+    offset: { x: toNumber(params.offsetX, 0), y: toNumber(params.offsetY, 4) },
+    radius: toNumber(params.blur, 8),
+    spread: toNumber(params.spread, 0),
+    visible: true,
+    blendMode: 'NORMAL'
+  };
+}
+
 async function resolveParentContainer(parentId: unknown): Promise<BaseNode & ChildrenMixin> {
   if (parentId) {
     const parent = await figma.getNodeByIdAsync(String(parentId));
@@ -879,10 +911,21 @@ async function runBridgeCommand(
         if (params.itemSpacing != null) {
           frame.itemSpacing = toNumber(params.itemSpacing, 0);
         }
+        if (params.padding != null) {
+          const pad = toNumber(params.padding, 0);
+          frame.paddingTop = pad;
+          frame.paddingRight = pad;
+          frame.paddingBottom = pad;
+          frame.paddingLeft = pad;
+        }
       }
       if (params.fill != null) {
         frame.fills = [solidPaint(params.fill)];
       }
+      if (params.cornerRadius != null) {
+        frame.cornerRadius = toNumber(params.cornerRadius, 0);
+      }
+      applyStroke(frame, params);
       parent.appendChild(frame);
       if (parent.type === 'PAGE') {
         frame.x = toNumber(params.x, 0);
@@ -904,6 +947,7 @@ async function runBridgeCommand(
       if (command === 'create_rectangle' && params.cornerRadius != null) {
         (node as RectangleNode).cornerRadius = toNumber(params.cornerRadius, 0);
       }
+      applyStroke(node, params);
       parent.appendChild(node);
       if (parent.type === 'PAGE') {
         node.x = toNumber(params.x, 0);
@@ -947,6 +991,56 @@ async function runBridgeCommand(
         throw new Error('set_fill requires a node that supports fills.');
       }
       (node as GeometryMixin).fills = [solidPaint(params.color)];
+      return { id: node.id, name: node.name };
+    }
+    case 'set_corner_radius': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('cornerRadius' in node)) {
+        throw new Error('set_corner_radius requires a node with corners (frame, rectangle, component).');
+      }
+      const corner = node as SceneNode & {
+        cornerRadius: number | symbol;
+        topLeftRadius?: number;
+        topRightRadius?: number;
+        bottomLeftRadius?: number;
+        bottomRightRadius?: number;
+      };
+      const perCorner =
+        params.topLeft != null ||
+        params.topRight != null ||
+        params.bottomLeft != null ||
+        params.bottomRight != null;
+      if (perCorner) {
+        if (!('topLeftRadius' in corner)) {
+          throw new Error('This node does not support per-corner radius.');
+        }
+        if (params.topLeft != null) corner.topLeftRadius = toNumber(params.topLeft, 0);
+        if (params.topRight != null) corner.topRightRadius = toNumber(params.topRight, 0);
+        if (params.bottomLeft != null) corner.bottomLeftRadius = toNumber(params.bottomLeft, 0);
+        if (params.bottomRight != null) corner.bottomRightRadius = toNumber(params.bottomRight, 0);
+      } else {
+        corner.cornerRadius = toNumber(params.radius, 0);
+      }
+      return { id: node.id, name: node.name };
+    }
+    case 'set_stroke': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('strokes' in node)) {
+        throw new Error('set_stroke requires a node that supports strokes.');
+      }
+      applyStroke(node, {
+        stroke: params.color,
+        strokeWeight: params.weight,
+        strokeAlign: params.align
+      });
+      return { id: node.id, name: node.name };
+    }
+    case 'set_shadow': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('effects' in node)) {
+        throw new Error('set_shadow requires a node that supports effects.');
+      }
+      (node as BlendMixin).effects = [buildDropShadow(params)];
       return { id: node.id, name: node.name };
     }
     default:

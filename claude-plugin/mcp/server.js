@@ -24988,7 +24988,12 @@ server.registerTool(
       height: external_exports.number().optional(),
       layoutMode: external_exports.enum(["NONE", "HORIZONTAL", "VERTICAL"]).optional(),
       itemSpacing: external_exports.number().optional().describe("Gap between children when Auto Layout is on."),
-      fill: COLOR.optional()
+      padding: external_exports.number().optional().describe("Uniform padding (all sides) when Auto Layout is on."),
+      fill: COLOR.optional(),
+      cornerRadius: external_exports.number().optional(),
+      stroke: COLOR.optional().describe("Border color."),
+      strokeWeight: external_exports.number().optional(),
+      strokeAlign: external_exports.enum(["INSIDE", "OUTSIDE", "CENTER"]).optional()
     }
   },
   async (args) => run("create_frame", args)
@@ -25021,7 +25026,10 @@ server.registerTool(
       width: external_exports.number().optional(),
       height: external_exports.number().optional(),
       fill: COLOR.optional(),
-      cornerRadius: external_exports.number().optional()
+      cornerRadius: external_exports.number().optional(),
+      stroke: COLOR.optional().describe("Border color."),
+      strokeWeight: external_exports.number().optional(),
+      strokeAlign: external_exports.enum(["INSIDE", "OUTSIDE", "CENTER"]).optional()
     }
   },
   async (args) => run("create_rectangle", args)
@@ -25037,7 +25045,10 @@ server.registerTool(
       y: external_exports.number().optional(),
       width: external_exports.number().optional(),
       height: external_exports.number().optional(),
-      fill: COLOR.optional()
+      fill: COLOR.optional(),
+      stroke: COLOR.optional().describe("Border color."),
+      strokeWeight: external_exports.number().optional(),
+      strokeAlign: external_exports.enum(["INSIDE", "OUTSIDE", "CENTER"]).optional()
     }
   },
   async (args) => run("create_ellipse", args)
@@ -25060,6 +25071,50 @@ server.registerTool(
     inputSchema: { nodeId: external_exports.string(), color: COLOR }
   },
   async ({ nodeId, color }) => run("set_fill", { nodeId, color })
+);
+server.registerTool(
+  "set_corner_radius",
+  {
+    description: "Round the corners of an existing node (frame, rectangle, component). Pass `radius` for all corners, or individual corners for asymmetric rounding.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      radius: external_exports.number().optional().describe("Uniform corner radius for all four corners."),
+      topLeft: external_exports.number().optional(),
+      topRight: external_exports.number().optional(),
+      bottomLeft: external_exports.number().optional(),
+      bottomRight: external_exports.number().optional()
+    }
+  },
+  async (args) => run("set_corner_radius", args)
+);
+server.registerTool(
+  "set_stroke",
+  {
+    description: "Add or change the border (stroke) of an existing node.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      color: COLOR,
+      weight: external_exports.number().optional().describe("Stroke thickness in px (default 1)."),
+      align: external_exports.enum(["INSIDE", "OUTSIDE", "CENTER"]).optional()
+    }
+  },
+  async ({ nodeId, color, weight, align }) => run("set_stroke", { nodeId, color, weight, align })
+);
+server.registerTool(
+  "set_shadow",
+  {
+    description: "Add a drop shadow to an existing node.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      color: COLOR.optional().describe("Shadow color, supports 8-digit hex alpha (default #00000040)."),
+      offsetX: external_exports.number().optional().describe("Horizontal offset (default 0)."),
+      offsetY: external_exports.number().optional().describe("Vertical offset (default 4)."),
+      blur: external_exports.number().optional().describe("Blur radius (default 8)."),
+      spread: external_exports.number().optional().describe("Spread (default 0)."),
+      opacity: external_exports.number().optional().describe("Override alpha 0\u20131.")
+    }
+  },
+  async (args) => run("set_shadow", args)
 );
 async function main() {
   const transport = new StdioServerTransport();
