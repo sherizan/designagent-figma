@@ -515,6 +515,51 @@ server.registerTool(
   }
 );
 
+// ---- Layout ops ----
+
+server.registerTool(
+  'move',
+  {
+    description: 'Move a node to new x/y coordinates (ignored for nodes inside Auto Layout).',
+    inputSchema: { nodeId: z.string(), x: z.number().optional(), y: z.number().optional() }
+  },
+  async (args) => run('move', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'resize',
+  {
+    description: 'Resize a node. Omitted dimensions keep their current value.',
+    inputSchema: { nodeId: z.string(), width: z.number().optional(), height: z.number().optional() }
+  },
+  async (args) => run('resize', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'reparent',
+  {
+    description:
+      'Move a node into a different parent (frame/section/component, or the page if parentId is omitted). Optional index sets its order among siblings.',
+    inputSchema: {
+      nodeId: z.string(),
+      parentId: z.string().optional().describe('New parent node id; omit to move to the page.'),
+      index: z.number().optional().describe('Insertion index among the parent’s children.'),
+      x: z.number().optional(),
+      y: z.number().optional()
+    }
+  },
+  async (args) => run('reparent', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'delete',
+  {
+    description: 'Delete a node from the Figma document.',
+    inputSchema: { nodeId: z.string() }
+  },
+  async ({ nodeId }) => run('delete', { nodeId })
+);
+
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);

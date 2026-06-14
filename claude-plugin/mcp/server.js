@@ -25211,6 +25211,44 @@ server.registerTool(
     }
   }
 );
+server.registerTool(
+  "move",
+  {
+    description: "Move a node to new x/y coordinates (ignored for nodes inside Auto Layout).",
+    inputSchema: { nodeId: external_exports.string(), x: external_exports.number().optional(), y: external_exports.number().optional() }
+  },
+  async (args) => run("move", args)
+);
+server.registerTool(
+  "resize",
+  {
+    description: "Resize a node. Omitted dimensions keep their current value.",
+    inputSchema: { nodeId: external_exports.string(), width: external_exports.number().optional(), height: external_exports.number().optional() }
+  },
+  async (args) => run("resize", args)
+);
+server.registerTool(
+  "reparent",
+  {
+    description: "Move a node into a different parent (frame/section/component, or the page if parentId is omitted). Optional index sets its order among siblings.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      parentId: external_exports.string().optional().describe("New parent node id; omit to move to the page."),
+      index: external_exports.number().optional().describe("Insertion index among the parent\u2019s children."),
+      x: external_exports.number().optional(),
+      y: external_exports.number().optional()
+    }
+  },
+  async (args) => run("reparent", args)
+);
+server.registerTool(
+  "delete",
+  {
+    description: "Delete a node from the Figma document.",
+    inputSchema: { nodeId: external_exports.string() }
+  },
+  async ({ nodeId }) => run("delete", { nodeId })
+);
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
