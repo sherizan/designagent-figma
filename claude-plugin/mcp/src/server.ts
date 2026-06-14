@@ -261,7 +261,12 @@ server.registerTool(
       height: z.number().optional(),
       layoutMode: z.enum(['NONE', 'HORIZONTAL', 'VERTICAL']).optional(),
       itemSpacing: z.number().optional().describe('Gap between children when Auto Layout is on.'),
-      fill: COLOR.optional()
+      padding: z.number().optional().describe('Uniform padding (all sides) when Auto Layout is on.'),
+      fill: COLOR.optional(),
+      cornerRadius: z.number().optional(),
+      stroke: COLOR.optional().describe('Border color.'),
+      strokeWeight: z.number().optional(),
+      strokeAlign: z.enum(['INSIDE', 'OUTSIDE', 'CENTER']).optional()
     }
   },
   async (args) => run('create_frame', args as Record<string, unknown>)
@@ -296,7 +301,10 @@ server.registerTool(
       width: z.number().optional(),
       height: z.number().optional(),
       fill: COLOR.optional(),
-      cornerRadius: z.number().optional()
+      cornerRadius: z.number().optional(),
+      stroke: COLOR.optional().describe('Border color.'),
+      strokeWeight: z.number().optional(),
+      strokeAlign: z.enum(['INSIDE', 'OUTSIDE', 'CENTER']).optional()
     }
   },
   async (args) => run('create_rectangle', args as Record<string, unknown>)
@@ -313,7 +321,10 @@ server.registerTool(
       y: z.number().optional(),
       width: z.number().optional(),
       height: z.number().optional(),
-      fill: COLOR.optional()
+      fill: COLOR.optional(),
+      stroke: COLOR.optional().describe('Border color.'),
+      strokeWeight: z.number().optional(),
+      strokeAlign: z.enum(['INSIDE', 'OUTSIDE', 'CENTER']).optional()
     }
   },
   async (args) => run('create_ellipse', args as Record<string, unknown>)
@@ -338,6 +349,54 @@ server.registerTool(
     inputSchema: { nodeId: z.string(), color: COLOR }
   },
   async ({ nodeId, color }) => run('set_fill', { nodeId, color })
+);
+
+server.registerTool(
+  'set_corner_radius',
+  {
+    description:
+      'Round the corners of an existing node (frame, rectangle, component). Pass `radius` for all corners, or individual corners for asymmetric rounding.',
+    inputSchema: {
+      nodeId: z.string(),
+      radius: z.number().optional().describe('Uniform corner radius for all four corners.'),
+      topLeft: z.number().optional(),
+      topRight: z.number().optional(),
+      bottomLeft: z.number().optional(),
+      bottomRight: z.number().optional()
+    }
+  },
+  async (args) => run('set_corner_radius', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'set_stroke',
+  {
+    description: 'Add or change the border (stroke) of an existing node.',
+    inputSchema: {
+      nodeId: z.string(),
+      color: COLOR,
+      weight: z.number().optional().describe('Stroke thickness in px (default 1).'),
+      align: z.enum(['INSIDE', 'OUTSIDE', 'CENTER']).optional()
+    }
+  },
+  async ({ nodeId, color, weight, align }) => run('set_stroke', { nodeId, color, weight, align })
+);
+
+server.registerTool(
+  'set_shadow',
+  {
+    description: 'Add a drop shadow to an existing node.',
+    inputSchema: {
+      nodeId: z.string(),
+      color: COLOR.optional().describe('Shadow color, supports 8-digit hex alpha (default #00000040).'),
+      offsetX: z.number().optional().describe('Horizontal offset (default 0).'),
+      offsetY: z.number().optional().describe('Vertical offset (default 4).'),
+      blur: z.number().optional().describe('Blur radius (default 8).'),
+      spread: z.number().optional().describe('Spread (default 0).'),
+      opacity: z.number().optional().describe('Override alpha 0–1.')
+    }
+  },
+  async (args) => run('set_shadow', args as Record<string, unknown>)
 );
 
 async function main(): Promise<void> {
