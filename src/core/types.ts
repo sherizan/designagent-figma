@@ -257,15 +257,9 @@ export interface AnalysisPayload {
   intent: Intent;
   flowCapable: boolean;
   uiSpec: UiSpec;
-  score: ScoreResult;
-  checklist: ChecklistItem[];
-  checklistByCategory: Record<ScoreCategory, ChecklistItem[]>;
   coverageWarnings: string[];
   platformWarnings: string[];
   assets?: ExportedAsset[];
-  prompt: string;
-  promptShort: string;
-  promptStrict: string;
 }
 
 export interface EmptyAnalysis {

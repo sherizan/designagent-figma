@@ -818,6 +818,81 @@ export const UI_STYLES = `
     color: var(--text);
   }
 
+  .bridge-bar {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 10px;
+    padding: 10px 12px;
+    box-shadow: var(--shadow);
+  }
+
+  .bridge-bar-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .bridge-bar .bridge-setup {
+    margin-top: 10px;
+    border: none;
+    background: transparent;
+    padding: 0;
+  }
+
+  .export-hint {
+    margin: 0 0 12px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text-muted);
+  }
+
+  .export-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .export-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    text-align: left;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-soft);
+    box-shadow: none;
+  }
+
+  .export-card:hover {
+    border-color: var(--border-strong);
+    background: var(--surface);
+  }
+
+  .export-card-title {
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--text);
+  }
+
+  .export-card-sub {
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: var(--text-dim);
+    font-weight: 400;
+  }
+
+  .export-card code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 4px;
+  }
+
   .panel-footer {
     margin-top: auto;
     text-align: center;
