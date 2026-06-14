@@ -137,6 +137,7 @@ interface PromptPanelProps {
   onCopyImage: () => void;
   onSavePng: () => void;
   onCopyPromptAndImage: () => void;
+  onExportDesignMd: () => void;
 }
 
 export function PromptPanel(props: PromptPanelProps): JSX.Element {
@@ -158,7 +159,8 @@ export function PromptPanel(props: PromptPanelProps): JSX.Element {
     canCopyImageToClipboard,
     onCopyImage,
     onSavePng,
-    onCopyPromptAndImage
+    onCopyPromptAndImage,
+    onExportDesignMd
   } = props;
 
   return (
@@ -215,6 +217,14 @@ export function PromptPanel(props: PromptPanelProps): JSX.Element {
           <textarea readOnly value={prompt} />
           <div className="prompt-actions">
             {copyStatus ? <span className="status-pill">{copyStatus}</span> : null}
+            <button
+              type="button"
+              className="btn"
+              onClick={onExportDesignMd}
+              title="Export the selected frames as a combined DESIGN.md spec for Claude Code"
+            >
+              Export DESIGN.md
+            </button>
             {hasImageAsset ? (
               <button
                 type="button"

@@ -3,6 +3,8 @@ import {
   composeAnalysisPayload,
   type AnalysisCore
 } from './core/analyze';
+import { generateDesignDoc, type DesignDocFrame } from './core/designdoc';
+import { loadAnnotationCategories } from './core/extract';
 import { isScreenLikeNode } from './core/intent';
 import type { EmptyAnalysis, Mode, Preset } from './core/types';
 import { PRESET_DEFINITIONS } from './core/types';
@@ -596,6 +598,76 @@ async function computeAndPostAnalysis(): Promise<void> {
   }
 }
 
+const MAX_DESIGN_MD_FRAMES = 12;
+
+const DESIGN_MD_EXPORTABLE_TYPES = new Set([
+  'FRAME',
+  'SECTION',
+  'COMPONENT',
+  'COMPONENT_SET',
+  'INSTANCE',
+  'GROUP'
+]);
+
+function selectExportableNodes(selection: readonly SceneNode[]): SceneNode[] {
+  const matching = selection.filter((node) => DESIGN_MD_EXPORTABLE_TYPES.has(node.type));
+  if (matching.length > 0) {
+    return matching;
+  }
+  const primary = resolvePrimaryNode(selection);
+  return primary ? [primary] : [];
+}
+
+async function exportDesignMd(): Promise<void> {
+  try {
+    const selection = figma.currentPage.selection;
+    const nodes = selectExportableNodes(selection);
+    if (nodes.length === 0) {
+      postToUI({
+        type: 'ERROR',
+        message: 'Select at least one frame, section, or component to export DESIGN.md.'
+      });
+      return;
+    }
+
+    const limited = nodes.slice(0, MAX_DESIGN_MD_FRAMES);
+    const omittedFrameCount = nodes.length - limited.length;
+    const categories = await loadAnnotationCategories();
+
+    const frames: DesignDocFrame[] = [];
+    for (const node of limited) {
+      const reusable =
+        cache && cache.primaryNodeId === node.id && cache.linkBase === fallbackLinkBase
+          ? cache.core
+          : null;
+      const core =
+        reusable ??
+        (await analyzeNodeCoreAsync(node, {
+          linkBase: fallbackLinkBase,
+          includeAssets: false,
+          annotationCategories: categories
+        }));
+      frames.push({ core, preset: activePreset });
+    }
+
+    const markdown = generateDesignDoc(frames, {
+      fileName: figma.root.name || 'Untitled',
+      preset: activePreset,
+      omittedFrameCount
+    });
+
+    postToUI({
+      type: 'DESIGN_MD_RESULT',
+      markdown,
+      filename: 'DESIGN.md',
+      frameCount: limited.length
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to export DESIGN.md';
+    postToUI({ type: 'ERROR', message });
+  }
+}
+
 figma.showUI(__html__, {
   width: PANEL_SIZE.width,
   height: PANEL_SIZE.height,
@@ -688,6 +760,11 @@ figma.ui.onmessage = (message: ToPluginMessage) => {
 
   if (message.type === 'ADD_ANNOTATION') {
     void createAnnotationForNode(message);
+    return;
+  }
+
+  if (message.type === 'EXPORT_DESIGN_MD') {
+    void exportDesignMd();
     return;
   }
 
