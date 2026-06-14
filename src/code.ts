@@ -1192,6 +1192,58 @@ async function runBridgeCommand(
       }
       return { ...selectAndReturn(rect), width, height };
     }
+    case 'move': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('x' in node)) {
+        throw new Error('move requires a node with a position.');
+      }
+      const layout = node as SceneNode & LayoutMixin;
+      if (params.x != null) {
+        layout.x = toNumber(params.x, layout.x);
+      }
+      if (params.y != null) {
+        layout.y = toNumber(params.y, layout.y);
+      }
+      return { ...selectAndReturn(node), x: layout.x, y: layout.y };
+    }
+    case 'resize': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('resize' in node)) {
+        throw new Error('resize is not supported for this node.');
+      }
+      const layout = node as SceneNode & LayoutMixin;
+      const width = toNumber(params.width, layout.width);
+      const height = toNumber(params.height, layout.height);
+      layout.resize(Math.max(1, width), Math.max(1, height));
+      return { ...selectAndReturn(node), width: layout.width, height: layout.height };
+    }
+    case 'reparent': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node)) {
+        throw new Error('reparent requires a valid node.');
+      }
+      const parent = await resolveParentContainer(params.parentId);
+      if (params.index != null) {
+        parent.insertChild(toNumber(params.index, 0), node);
+      } else {
+        parent.appendChild(node);
+      }
+      if (parent.type === 'PAGE' && 'x' in node) {
+        const layout = node as SceneNode & LayoutMixin;
+        if (params.x != null) layout.x = toNumber(params.x, layout.x);
+        if (params.y != null) layout.y = toNumber(params.y, layout.y);
+      }
+      return { ...selectAndReturn(node), parent: parent.id };
+    }
+    case 'delete': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node)) {
+        throw new Error('delete requires a valid node.');
+      }
+      const info = { id: node.id, name: node.name };
+      node.remove();
+      return { deleted: info };
+    }
     default:
       throw new Error(`Unknown command: ${command}`);
   }

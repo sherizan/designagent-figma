@@ -22,6 +22,7 @@ to build production UI from it the design-system-faithful way.
   - style: `set_text`, `set_text_style` (size/weight/color/align), `set_fill`,
     `set_corner_radius`, `set_stroke`, `set_shadow` (create tools also take `fill`,
     `cornerRadius`, `stroke`/`strokeWeight`, `padding`, and — for text — `weight`/`align` inline)
+  - layout: `move`, `resize`, `reparent`, `delete`
 
   Tools appear as `mcp__plugin_designagent_designagent__<tool>`.
 
