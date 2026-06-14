@@ -7,11 +7,9 @@ import { generateDesignDoc, type DesignDocFrame } from './core/designdoc';
 import { generateHtml, type HtmlNode } from './core/htmldoc';
 import { loadAnnotationCategories } from './core/extract';
 import { isScreenLikeNode } from './core/intent';
-import type { EmptyAnalysis, Mode, Preset } from './core/types';
-import { PRESET_DEFINITIONS } from './core/types';
+import type { EmptyAnalysis, Mode } from './core/types';
 import type { ToPluginMessage, ToUIMessage } from './shared/messages';
 
-const DEFAULT_PRESET: Preset = 'swiftui-ios';
 const DEFAULT_MODE: Mode = 'system-first';
 const PANEL_SIZE = {
   width: 560,
@@ -25,7 +23,6 @@ interface AnalysisCache {
   core: AnalysisCore;
 }
 
-let activePreset: Preset = DEFAULT_PRESET;
 let activeMode: Mode = DEFAULT_MODE;
 let fallbackLinkBase: string | undefined;
 let cache: AnalysisCache | null = null;
@@ -51,10 +48,9 @@ function parseFigmaLinkBase(input: string): string | undefined {
   return base;
 }
 
-function toEmptyAnalysis(preset: Preset, mode: Mode, message?: string): EmptyAnalysis {
+function toEmptyAnalysis(mode: Mode, message?: string): EmptyAnalysis {
   return {
     hasSelection: false,
-    preset,
     mode,
     flowCapable: false,
     message: message ?? 'Select a frame, instance or section.'
@@ -531,7 +527,7 @@ async function computeAndPostAnalysis(): Promise<void> {
     const primaryNode = resolvePrimaryNode(selection);
 
     if (!primaryNode) {
-      postToUI({ type: 'ANALYSIS_RESULT', payload: toEmptyAnalysis(activePreset, activeMode) });
+      postToUI({ type: 'ANALYSIS_RESULT', payload: toEmptyAnalysis(activeMode) });
       return;
     }
 
@@ -539,7 +535,6 @@ async function computeAndPostAnalysis(): Promise<void> {
       postToUI({
         type: 'ANALYSIS_RESULT',
         payload: toEmptyAnalysis(
-          activePreset,
           activeMode,
           `\"${primaryNode.name}\" is an empty frame. There is nothing to build yet.`
         )
@@ -588,7 +583,7 @@ async function computeAndPostAnalysis(): Promise<void> {
       };
     }
 
-    const analysis = composeAnalysisPayload(core, activePreset, activeMode, flowCapable);
+    const analysis = composeAnalysisPayload(core, activeMode, flowCapable);
     postToUI({ type: 'ANALYSIS_RESULT', payload: analysis });
   } catch (error) {
     if (token !== activeAnalysisToken) {
@@ -643,12 +638,11 @@ async function collectDesignMd(): Promise<{ markdown: string; frameCount: number
         includeAssets: false,
         annotationCategories: categories
       }));
-    frames.push({ core, preset: activePreset });
+    frames.push({ core });
   }
 
   const markdown = generateDesignDoc(frames, {
     fileName: figma.root.name || 'Untitled',
-    preset: activePreset,
     omittedFrameCount
   });
 
@@ -980,8 +974,7 @@ async function runBridgeCommand(
         fileName: figma.root.name || 'Untitled',
         page: figma.currentPage.name,
         selectionCount: selection.length,
-        primary: primary ? { id: primary.id, name: primary.name, type: primary.type } : null,
-        preset: activePreset
+        primary: primary ? { id: primary.id, name: primary.name, type: primary.type } : null
       };
     }
     case 'get_design_md':
@@ -1524,14 +1517,6 @@ function tickFocusedNode(): void {
 setInterval(tickFocusedNode, FOCUSED_POLL_MS);
 
 figma.ui.onmessage = (message: ToPluginMessage) => {
-  if (message.type === 'SET_PRESET') {
-    if (message.preset in PRESET_DEFINITIONS) {
-      activePreset = message.preset;
-      void computeAndPostAnalysis();
-    }
-    return;
-  }
-
   if (message.type === 'SET_MODE') {
     activeMode = message.mode;
     void computeAndPostAnalysis();

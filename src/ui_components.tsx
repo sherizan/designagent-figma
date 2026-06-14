@@ -1,34 +1,5 @@
 import React from 'react';
-import {
-  Apple,
-  Bot,
-  FileCode,
-  Frame,
-  Globe,
-  Smartphone,
-  type LucideIcon
-} from 'lucide-react';
-import {
-  PRESET_DEFINITIONS,
-  type Preset,
-  type PresetIcon
-} from './core/types';
-
-const PRESET_ORDER: Preset[] = [
-  'swiftui-ios',
-  'jetpack-compose-android',
-  'react-native-expo-nativewind',
-  'nextjs-tailwind-shadcn',
-  'web-html-css'
-];
-
-const PRESET_ICON_COMPONENTS: Record<PresetIcon, LucideIcon> = {
-  globe: Globe,
-  smartphone: Smartphone,
-  'file-code': FileCode,
-  apple: Apple,
-  bot: Bot
-};
+import { Frame } from 'lucide-react';
 
 export type MainTab = 'design-to-code' | 'code-to-design';
 
@@ -128,37 +99,6 @@ export function MainTabs({ active, onChange }: MainTabsProps): JSX.Element {
           {tab.label}
         </button>
       ))}
-    </div>
-  );
-}
-
-interface PresetSelectorProps {
-  preset: Preset;
-  onSelectPreset: (preset: Preset) => void;
-}
-
-export function PresetSelector({ preset, onSelectPreset }: PresetSelectorProps): JSX.Element {
-  return (
-    <div className="preset-grid">
-      {PRESET_ORDER.map((presetId) => {
-        const definition = PRESET_DEFINITIONS[presetId];
-        const active = presetId === preset;
-        const PresetIconComponent = PRESET_ICON_COMPONENTS[definition.icon];
-        return (
-          <button
-            key={definition.id}
-            type="button"
-            className={`preset-card ${active ? 'active' : ''}`}
-            onClick={() => onSelectPreset(definition.id)}
-            aria-pressed={active}
-          >
-            <div className="preset-icon">
-              <PresetIconComponent size={16} strokeWidth={1.75} />
-            </div>
-            <div className="preset-label">{definition.label}</div>
-          </button>
-        );
-      })}
     </div>
   );
 }
