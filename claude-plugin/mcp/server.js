@@ -25249,6 +25249,94 @@ server.registerTool(
   },
   async ({ nodeId }) => run("delete", { nodeId })
 );
+server.registerTool(
+  "clone",
+  {
+    description: "Duplicate a node. The copy lands in the same parent unless parentId is given; pass x/y to position it.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      parentId: external_exports.string().optional(),
+      x: external_exports.number().optional(),
+      y: external_exports.number().optional()
+    }
+  },
+  async (args) => run("clone", args)
+);
+server.registerTool(
+  "group",
+  {
+    description: "Group two or more nodes into a single group.",
+    inputSchema: { nodeIds: external_exports.array(external_exports.string()).describe("Node ids to group."), name: external_exports.string().optional() }
+  },
+  async (args) => run("group", args)
+);
+server.registerTool(
+  "ungroup",
+  {
+    description: "Ungroup a group node, returning its children to the parent.",
+    inputSchema: { nodeId: external_exports.string() }
+  },
+  async ({ nodeId }) => run("ungroup", { nodeId })
+);
+server.registerTool(
+  "set_opacity",
+  {
+    description: "Set a node\u2019s opacity (0\u20131).",
+    inputSchema: { nodeId: external_exports.string(), opacity: external_exports.number().describe("0 (transparent) to 1 (opaque).") }
+  },
+  async ({ nodeId, opacity }) => run("set_opacity", { nodeId, opacity })
+);
+server.registerTool(
+  "set_rotation",
+  {
+    description: "Rotate a node by an angle in degrees.",
+    inputSchema: { nodeId: external_exports.string(), rotation: external_exports.number().describe("Rotation in degrees.") }
+  },
+  async ({ nodeId, rotation }) => run("set_rotation", { nodeId, rotation })
+);
+server.registerTool(
+  "instantiate_component",
+  {
+    description: "Create an instance of a component. Use componentId for a component in this file, or componentKey for a published library component.",
+    inputSchema: {
+      componentId: external_exports.string().optional().describe("A COMPONENT or COMPONENT_SET node id in this file."),
+      componentKey: external_exports.string().optional().describe("A published library component key."),
+      parentId: external_exports.string().optional(),
+      x: external_exports.number().optional(),
+      y: external_exports.number().optional()
+    }
+  },
+  async (args) => run("instantiate_component", args)
+);
+server.registerTool(
+  "batch",
+  {
+    description: "Run multiple bridge operations in one call (e.g. delete or restyle many nodes). Each item is { command, params } using any other tool name. Returns per-op results; one failure does not stop the rest.",
+    inputSchema: {
+      operations: external_exports.array(
+        external_exports.object({
+          command: external_exports.string().describe('A bridge command name, e.g. "set_fill", "delete", "move".'),
+          params: external_exports.record(external_exports.any()).optional()
+        })
+      ).describe("Operations to run in order.")
+    }
+  },
+  async (args) => {
+    try {
+      const operations = [];
+      for (const op of args.operations) {
+        const params = op.params ? { ...op.params } : {};
+        if ((op.command === "place_image" || op.command === "set_image") && params.imageBase64 == null) {
+          params.imageBase64 = await loadImageBase64(params);
+        }
+        operations.push({ command: op.command, params });
+      }
+      return run("batch", { operations });
+    } catch (error2) {
+      return fail(error2);
+    }
+  }
+);
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);

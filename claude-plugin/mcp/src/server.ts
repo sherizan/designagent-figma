@@ -560,6 +560,112 @@ server.registerTool(
   async ({ nodeId }) => run('delete', { nodeId })
 );
 
+// ---- Advanced ops ----
+
+server.registerTool(
+  'clone',
+  {
+    description:
+      'Duplicate a node. The copy lands in the same parent unless parentId is given; pass x/y to position it.',
+    inputSchema: {
+      nodeId: z.string(),
+      parentId: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional()
+    }
+  },
+  async (args) => run('clone', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'group',
+  {
+    description: 'Group two or more nodes into a single group.',
+    inputSchema: { nodeIds: z.array(z.string()).describe('Node ids to group.'), name: z.string().optional() }
+  },
+  async (args) => run('group', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'ungroup',
+  {
+    description: 'Ungroup a group node, returning its children to the parent.',
+    inputSchema: { nodeId: z.string() }
+  },
+  async ({ nodeId }) => run('ungroup', { nodeId })
+);
+
+server.registerTool(
+  'set_opacity',
+  {
+    description: 'Set a node’s opacity (0–1).',
+    inputSchema: { nodeId: z.string(), opacity: z.number().describe('0 (transparent) to 1 (opaque).') }
+  },
+  async ({ nodeId, opacity }) => run('set_opacity', { nodeId, opacity })
+);
+
+server.registerTool(
+  'set_rotation',
+  {
+    description: 'Rotate a node by an angle in degrees.',
+    inputSchema: { nodeId: z.string(), rotation: z.number().describe('Rotation in degrees.') }
+  },
+  async ({ nodeId, rotation }) => run('set_rotation', { nodeId, rotation })
+);
+
+server.registerTool(
+  'instantiate_component',
+  {
+    description:
+      'Create an instance of a component. Use componentId for a component in this file, or componentKey for a published library component.',
+    inputSchema: {
+      componentId: z.string().optional().describe('A COMPONENT or COMPONENT_SET node id in this file.'),
+      componentKey: z.string().optional().describe('A published library component key.'),
+      parentId: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional()
+    }
+  },
+  async (args) => run('instantiate_component', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'batch',
+  {
+    description:
+      'Run multiple bridge operations in one call (e.g. delete or restyle many nodes). Each item is { command, params } using any other tool name. Returns per-op results; one failure does not stop the rest.',
+    inputSchema: {
+      operations: z
+        .array(
+          z.object({
+            command: z.string().describe('A bridge command name, e.g. "set_fill", "delete", "move".'),
+            params: z.record(z.any()).optional()
+          })
+        )
+        .describe('Operations to run in order.')
+    }
+  },
+  async (args) => {
+    try {
+      const operations = [];
+      for (const op of args.operations) {
+        const params: Record<string, unknown> = op.params ? { ...op.params } : {};
+        // Resolve image sources server-side for image ops inside the batch.
+        if (
+          (op.command === 'place_image' || op.command === 'set_image') &&
+          params.imageBase64 == null
+        ) {
+          params.imageBase64 = await loadImageBase64(params);
+        }
+        operations.push({ command: op.command, params });
+      }
+      return run('batch', { operations });
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
