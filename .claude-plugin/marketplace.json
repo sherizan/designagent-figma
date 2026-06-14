@@ -1,0 +1,20 @@
+{
+  "name": "designagent",
+  "owner": {
+    "name": "Sherizan",
+    "url": "https://github.com/sherizan"
+  },
+  "metadata": {
+    "description": "DesignAgent — build production UI from Figma DESIGN.md specs with Claude Code.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "designagent",
+      "source": "./claude-plugin",
+      "description": "Build production UI from a DesignAgent DESIGN.md spec the design-system-faithful way (token-first, mode-aware, component reuse, determinism, accessibility). Includes the design-to-code skill.",
+      "version": "0.1.0",
+      "keywords": ["figma", "design-to-code", "design-system", "ui", "codegen"]
+    }
+  ]
+}
