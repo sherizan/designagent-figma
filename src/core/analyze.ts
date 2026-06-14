@@ -1,6 +1,5 @@
 import { enrichUiSpec, exportAssetsForNode, extractUiSpec, loadAnnotationCategories } from './extract';
 import { classifyIntent } from './intent';
-import { generatePromptBundle } from './prompt';
 import { scoreUiSpec } from './score';
 import type {
   AnalysisPayload,
@@ -205,17 +204,6 @@ export function composeAnalysisPayload(
   flowCapable: boolean
 ): AnalysisPayload {
   const platformWarnings = getPlatformWarnings(preset, core.selectedNode);
-  const prompts = generatePromptBundle({
-    preset,
-    mode,
-    intent: core.intent,
-    flowCapable,
-    selectedNode: core.selectedNode,
-    uiSpec: core.uiSpec,
-    score: core.score,
-    coverageWarnings: core.coverageWarnings,
-    assets: core.assets
-  });
 
   return {
     hasSelection: true,
@@ -225,15 +213,9 @@ export function composeAnalysisPayload(
     intent: core.intent,
     flowCapable,
     uiSpec: core.uiSpec,
-    score: core.score,
-    checklist: core.checklist,
-    checklistByCategory: core.checklistByCategory,
     coverageWarnings: core.coverageWarnings,
     platformWarnings,
-    assets: core.assets,
-    prompt: prompts.full,
-    promptShort: prompts.short,
-    promptStrict: prompts.strict
+    assets: core.assets
   };
 }
 

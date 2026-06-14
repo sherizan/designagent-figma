@@ -4,6 +4,7 @@ import {
   type AnalysisCore
 } from './core/analyze';
 import { generateDesignDoc, type DesignDocFrame } from './core/designdoc';
+import { generateHtml, type HtmlNode } from './core/htmldoc';
 import { loadAnnotationCategories } from './core/extract';
 import { isScreenLikeNode } from './core/intent';
 import type { EmptyAnalysis, Mode, Preset } from './core/types';
@@ -660,6 +661,101 @@ async function exportDesignMd(): Promise<void> {
     postToUI({ type: 'DESIGN_MD_RESULT', markdown, filename: 'DESIGN.md', frameCount });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to export DESIGN.md';
+    postToUI({ type: 'ERROR', message });
+  }
+}
+
+// ---- Design → HTML export ----
+
+const HTML_VECTOR_TYPES = new Set([
+  'VECTOR',
+  'BOOLEAN_OPERATION',
+  'STAR',
+  'POLYGON',
+  'LINE'
+]);
+
+async function fullNodeCss(node: SceneNode): Promise<Record<string, string>> {
+  if (!('getCSSAsync' in node)) {
+    return {};
+  }
+  try {
+    const css = await node.getCSSAsync();
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(css)) {
+      if (value) {
+        out[key] = value;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+async function exportNodeAsset(
+  node: SceneNode,
+  format: 'SVG' | 'PNG'
+): Promise<{ mime: string; dataUrl: string } | null> {
+  try {
+    const bytes =
+      format === 'SVG'
+        ? await node.exportAsync({ format: 'SVG' })
+        : await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } });
+    const mime = format === 'SVG' ? 'image/svg+xml' : 'image/png';
+    return { mime, dataUrl: `data:${mime};base64,${figma.base64Encode(bytes)}` };
+  } catch {
+    return null;
+  }
+}
+
+function nodeHasImageFill(node: SceneNode): boolean {
+  if (!('fills' in node)) {
+    return false;
+  }
+  const fills = (node as GeometryMixin).fills;
+  return Array.isArray(fills) && fills.some((paint: Paint) => paint.type === 'IMAGE');
+}
+
+async function buildHtmlTree(node: SceneNode, budget: { assets: number }): Promise<HtmlNode> {
+  const css = await fullNodeCss(node);
+
+  if (node.type === 'TEXT') {
+    return { tag: 'span', css, text: node.characters, children: [] };
+  }
+
+  const isVector = HTML_VECTOR_TYPES.has(node.type);
+  const isImage = nodeHasImageFill(node);
+  if ((isVector || isImage) && budget.assets > 0) {
+    budget.assets -= 1;
+    const asset = await exportNodeAsset(node, isVector ? 'SVG' : 'PNG');
+    if (asset) {
+      return { tag: 'img', css, asset, children: [] };
+    }
+  }
+
+  const children: HtmlNode[] = [];
+  if ('children' in node) {
+    for (const child of node.children) {
+      if (child.visible !== false) {
+        children.push(await buildHtmlTree(child, budget));
+      }
+    }
+  }
+  return { tag: 'div', css, children };
+}
+
+async function exportHtml(): Promise<void> {
+  try {
+    const node = resolvePrimaryNode(figma.currentPage.selection);
+    if (!node) {
+      throw new Error('Select a frame, component, or section to export HTML.');
+    }
+    const tree = await buildHtmlTree(node, { assets: 24 });
+    const html = generateHtml(tree, { title: node.name || 'Design' });
+    postToUI({ type: 'HTML_RESULT', html, filename: `${node.name || 'design'}.html` });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to export HTML';
     postToUI({ type: 'ERROR', message });
   }
 }
@@ -1483,6 +1579,11 @@ figma.ui.onmessage = (message: ToPluginMessage) => {
 
   if (message.type === 'EXPORT_DESIGN_MD') {
     void exportDesignMd();
+    return;
+  }
+
+  if (message.type === 'EXPORT_HTML') {
+    void exportHtml();
     return;
   }
 

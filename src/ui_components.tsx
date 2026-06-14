@@ -2,27 +2,16 @@ import React from 'react';
 import {
   Apple,
   Bot,
-  CheckCircle2,
-  Command,
-  Eye,
   FileCode,
   Frame,
   Globe,
   Smartphone,
-  StickyNote,
-  Undo2,
   type LucideIcon
 } from 'lucide-react';
 import {
   PRESET_DEFINITIONS,
-  SCORE_CATEGORIES,
-  type ChecklistItem,
-  type Mode,
   type Preset,
-  type PresetIcon,
-  type ScoreCategory,
-  type ScoreResult,
-  type UiSpec
+  type PresetIcon
 } from './core/types';
 
 const PRESET_ORDER: Preset[] = [
@@ -41,14 +30,6 @@ const PRESET_ICON_COMPONENTS: Record<PresetIcon, LucideIcon> = {
   bot: Bot
 };
 
-const CATEGORY_MAX: Record<ScoreCategory, number> = {
-  'Component Coverage': 30,
-  'Tokenization Coverage': 25,
-  'Layout Semantics': 20,
-  'Naming + Semantics': 15,
-  'Variant Completeness': 10
-};
-
 export type MainTab = 'design-to-code' | 'code-to-design';
 
 interface AppHeaderProps {
@@ -63,6 +44,62 @@ export function AppHeader({ version }: AppHeaderProps): JSX.Element {
         <p className="sub">Design ↔ code, both directions.</p>
       </div>
       <div className="version-tag">{version}</div>
+    </div>
+  );
+}
+
+export type BridgeStatus = 'off' | 'connecting' | 'connected' | 'error';
+
+interface BridgeBarProps {
+  status: BridgeStatus;
+  enabled: boolean;
+  onToggle: () => void;
+}
+
+const BRIDGE_META: Record<BridgeStatus, { color: string; label: string }> = {
+  off: { color: '#9f9faa', label: 'Claude bridge off' },
+  connecting: { color: '#e0a83d', label: 'Claude bridge — connecting…' },
+  connected: { color: '#3bba6d', label: 'Claude bridge — connected' },
+  error: { color: '#e0653d', label: 'Claude bridge — retrying…' }
+};
+
+// Global, always-visible connection bar — the bridge powers both directions, so it
+// lives at the app level rather than inside a tab.
+export function BridgeBar({ status, enabled, onToggle }: BridgeBarProps): JSX.Element {
+  const meta = BRIDGE_META[status];
+  return (
+    <div className="bridge-bar">
+      <div className="bridge-bar-row">
+        <span className="bridge-status">
+          <span
+            className="bridge-dot"
+            aria-hidden="true"
+            style={{
+              backgroundColor: meta.color,
+              boxShadow: status === 'connected' ? `0 0 0 3px ${meta.color}33` : 'none'
+            }}
+          />
+          <span>{meta.label}</span>
+        </span>
+        <button type="button" className={enabled ? 'btn' : 'btn-primary'} onClick={onToggle}>
+          {enabled ? 'Disable' : 'Enable'}
+        </button>
+      </div>
+
+      <details className="bridge-setup">
+        <summary>Setup</summary>
+        <ol className="bridge-steps">
+          <li>
+            In Claude Code: <code>/plugin marketplace add sherizan/designagent-figma</code>
+          </li>
+          <li>
+            <code>/plugin install designagent@designagent</code>, then restart Claude Code.
+          </li>
+          <li>
+            Click <strong>Enable</strong> above — the dot turns green when connected.
+          </li>
+        </ol>
+      </details>
     </div>
   );
 }
@@ -126,20 +163,72 @@ export function PresetSelector({ preset, onSelectPreset }: PresetSelectorProps):
   );
 }
 
-export type BridgeStatus = 'off' | 'connecting' | 'connected' | 'error';
-
-interface BridgePanelProps {
-  status: BridgeStatus;
-  enabled: boolean;
-  onToggle: () => void;
+interface ExportPanelProps {
+  intentLabel: string;
+  selectedNodeName: string;
+  status: string;
+  hasImageAsset: boolean;
+  imageSizeKb?: number;
+  onExportDesignMd: () => void;
+  onExportHtml: () => void;
+  onSavePng: () => void;
 }
 
-const BRIDGE_META: Record<BridgeStatus, { color: string; label: string }> = {
-  off: { color: '#9f9faa', label: 'Claude bridge off' },
-  connecting: { color: '#e0a83d', label: 'Claude bridge — connecting…' },
-  connected: { color: '#3bba6d', label: 'Claude bridge — connected' },
-  error: { color: '#e0653d', label: 'Claude bridge — retrying…' }
-};
+export function ExportPanel(props: ExportPanelProps): JSX.Element {
+  const {
+    intentLabel,
+    selectedNodeName,
+    status,
+    hasImageAsset,
+    imageSizeKb,
+    onExportDesignMd,
+    onExportHtml,
+    onSavePng
+  } = props;
+
+  return (
+    <div className="panel">
+      <div className="meta-row">
+        <div className="selection-group">
+          <span className="badge">{intentLabel}</span>
+          <div className="selection-name-inline">{selectedNodeName}</div>
+        </div>
+      </div>
+
+      <p className="export-hint">Turn this selection into something you can build from.</p>
+
+      <div className="export-actions">
+        <button type="button" className="export-card" onClick={onExportDesignMd}>
+          <span className="export-card-title">Export DESIGN.md</span>
+          <span className="export-card-sub">
+            Structured Markdown spec — tokens, components, layout, text. Drop it in your repo and
+            add <code>@DESIGN.md</code> to CLAUDE.md.
+          </span>
+        </button>
+        <button type="button" className="export-card" onClick={onExportHtml}>
+          <span className="export-card-title">Export HTML</span>
+          <span className="export-card-sub">
+            Self-contained HTML + CSS starter built from the design’s computed styles.
+          </span>
+        </button>
+      </div>
+
+      <div className="prompt-actions">
+        {status ? <span className="status-pill">{status}</span> : null}
+        {hasImageAsset ? (
+          <button
+            type="button"
+            className="btn"
+            onClick={onSavePng}
+            title={imageSizeKb ? `Save exported PNG (${imageSizeKb} KB)` : 'Save exported PNG'}
+          >
+            Save PNG
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 const BRIDGE_CAPABILITIES: Array<{ label: string; detail: string }> = [
   { label: 'Read', detail: 'spec · score · DESIGN.md · issues' },
@@ -148,31 +237,13 @@ const BRIDGE_CAPABILITIES: Array<{ label: string; detail: string }> = [
   { label: 'Layout', detail: 'move · resize · group · clone · delete' }
 ];
 
-export function BridgePanel({ status, enabled, onToggle }: BridgePanelProps): JSX.Element {
-  const meta = BRIDGE_META[status];
+// Code → Design tab content. The HTML → Design paste box is added here in Part B.
+export function CapabilityView(): JSX.Element {
   return (
-    <div className="panel bridge-panel">
-      <div className="bridge-status-row">
-        <span className="bridge-status">
-          <span
-            className="bridge-dot"
-            aria-hidden="true"
-            style={{
-              backgroundColor: meta.color,
-              boxShadow: status === 'connected' ? `0 0 0 3px ${meta.color}33` : 'none'
-            }}
-          />
-          <span>{meta.label}</span>
-        </span>
-        <button type="button" className={enabled ? 'btn' : 'btn-primary'} onClick={onToggle}>
-          {enabled ? 'Disable' : 'Enable'}
-        </button>
-      </div>
-
+    <div className="panel">
       <p className="bridge-explainer">
-        Let Claude Code read and build directly in this Figma file over a local bridge.
+        With the bridge connected, Claude Code can act on this Figma file directly:
       </p>
-
       <div className="bridge-caps">
         {BRIDGE_CAPABILITIES.map((cap) => (
           <div key={cap.label} className="bridge-cap">
@@ -181,22 +252,9 @@ export function BridgePanel({ status, enabled, onToggle }: BridgePanelProps): JS
           </div>
         ))}
       </div>
-
-      <details className="bridge-setup">
-        <summary>Setup</summary>
-        <ol className="bridge-steps">
-          <li>
-            In Claude Code: <code>/plugin marketplace add sherizan/designagent-figma</code>
-          </li>
-          <li>
-            <code>/plugin install designagent@designagent</code>, then restart Claude Code.
-          </li>
-          <li>
-            Click <strong>Enable</strong> above — the dot turns green when connected.
-          </li>
-          <li>Ask Claude, e.g. “score my selection” or “build a card with a Trade button”.</li>
-        </ol>
-      </details>
+      <p className="prompt-hint">
+        Coming soon: paste HTML here to render it as Figma layers.
+      </p>
     </div>
   );
 }
@@ -225,325 +283,6 @@ export function LoadingPanel({ nodeName, nodeType }: LoadingPanelProps): JSX.Ele
         <div className="skeleton-row sk-4" />
         <div className="skeleton-row sk-5" />
       </div>
-    </div>
-  );
-}
-
-interface PromptPanelProps {
-  mode: Mode;
-  intentLabel: string;
-  selectedNodeName: string;
-  selectionLink?: string;
-  selectionLinkInput: string;
-  onSelectionLinkInputChange: (value: string) => void;
-  onApplySelectionLink: () => void;
-  prompt: string;
-  onCopyPrompt: () => void;
-  copyStatus: string;
-  platformWarnings: string[];
-  coverageWarnings: string[];
-  hasImageAsset: boolean;
-  imageSizeKb?: number;
-  canCopyImageToClipboard: boolean;
-  onCopyImage: () => void;
-  onSavePng: () => void;
-  onCopyPromptAndImage: () => void;
-  onExportDesignMd: () => void;
-}
-
-export function PromptPanel(props: PromptPanelProps): JSX.Element {
-  const {
-    mode,
-    intentLabel,
-    selectedNodeName,
-    selectionLink,
-    selectionLinkInput,
-    onSelectionLinkInputChange,
-    onApplySelectionLink,
-    prompt,
-    onCopyPrompt,
-    copyStatus,
-    platformWarnings,
-    coverageWarnings,
-    hasImageAsset,
-    imageSizeKb,
-    canCopyImageToClipboard,
-    onCopyImage,
-    onSavePng,
-    onCopyPromptAndImage,
-    onExportDesignMd
-  } = props;
-
-  return (
-    <div className="panel">
-      <div className="meta-row">
-        <div className="selection-group">
-          <span className="badge">{intentLabel}</span>
-          <div className="selection-name-inline">{selectedNodeName}</div>
-        </div>
-      </div>
-
-      {platformWarnings.length > 0 ? (
-        <div className="warn-box">
-          <strong>Platform warning</strong>
-          {platformWarnings.map((warning) => (
-            <div key={warning}>- {warning}</div>
-          ))}
-        </div>
-      ) : null}
-
-      {mode === 'system-first' && coverageWarnings.length > 0 ? (
-        <div className="warn-box">
-          <strong>System-first warning</strong>
-          {coverageWarnings.map((warning) => (
-            <div key={warning}>- {warning}</div>
-          ))}
-        </div>
-      ) : null}
-
-      {!selectionLink ? (
-        <div className="link-required">
-          <p className="link-required-hint">
-            Paste your Figma link.
-            <span className="shortcut-inline">
-              <Command size={12} strokeWidth={2} />
-              <span>L to copy</span>
-            </span>
-          </p>
-          <div className="link-required-row">
-            <input
-              type="text"
-              value={selectionLinkInput}
-              onChange={(event) => onSelectionLinkInputChange(event.target.value)}
-              placeholder="https://www.figma.com/design/AbCdEf123456/App?node-id=17073-40576&t=abc123-1"
-              aria-label="Figma selection link"
-            />
-            <button type="button" className="btn-primary" onClick={onApplySelectionLink}>
-              Use link
-            </button>
-          </div>
-        </div>
-      ) : (
-        <>
-          <textarea readOnly value={prompt} />
-          <div className="prompt-actions">
-            {copyStatus ? <span className="status-pill">{copyStatus}</span> : null}
-            <button
-              type="button"
-              className="btn"
-              onClick={onExportDesignMd}
-              title="Export the selected frames as a combined DESIGN.md spec for Claude Code"
-            >
-              Export DESIGN.md
-            </button>
-            {hasImageAsset ? (
-              <button
-                type="button"
-                className="btn"
-                onClick={onSavePng}
-                title={
-                  imageSizeKb
-                    ? `Save exported PNG (${imageSizeKb} KB) to disk`
-                    : 'Save exported PNG to disk'
-                }
-              >
-                Save PNG
-              </button>
-            ) : null}
-            {hasImageAsset && canCopyImageToClipboard ? (
-              <button
-                type="button"
-                className="btn"
-                onClick={onCopyImage}
-                title={
-                  imageSizeKb
-                    ? `Copy exported PNG (${imageSizeKb} KB) to clipboard`
-                    : 'Copy exported PNG to clipboard'
-                }
-              >
-                Copy image
-              </button>
-            ) : null}
-            {hasImageAsset && canCopyImageToClipboard ? (
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={onCopyPromptAndImage}
-                title={
-                  imageSizeKb
-                    ? `Copy prompt and ${imageSizeKb} KB image to clipboard`
-                    : 'Copy prompt and image to clipboard'
-                }
-              >
-                Copy Prompt + Image
-              </button>
-            ) : (
-              <button type="button" className="btn-primary" onClick={onCopyPrompt}>
-                Copy Prompt
-              </button>
-            )}
-          </div>
-          {hasImageAsset ? (
-            <p className="prompt-hint">
-              {canCopyImageToClipboard ? (
-                <>
-                  Tip: paste once into Claude (multimodal). If the image doesn't attach, use
-                  <strong> Save PNG</strong> and drag the file in.
-                </>
-              ) : (
-                <>
-                  This host can't write images to the clipboard. Use
-                  <strong> Save PNG</strong> and drop the file into Claude.
-                </>
-              )}
-            </p>
-          ) : null}
-        </>
-      )}
-    </div>
-  );
-}
-
-interface AdvancedPanelProps {
-  scoreTotal: number;
-  scoreMax: number;
-  scorePercent: number;
-  dismissedCount: number;
-  score: ScoreResult;
-  plainCategoryLabel: (category: ScoreCategory) => string;
-  getCategoryScore: (score: ScoreResult, category: ScoreCategory) => number;
-  checklistByCategory: Record<ScoreCategory, ChecklistItem[]>;
-  issueFixState: Record<string, { status: 'fixed' | 'skipped'; detail: string }>;
-  issueKey: (item: { category: string; nodeId: string; reason: string }) => string;
-  onSkipIssue: (item: ChecklistItem) => void;
-  onFocusItem: (item: ChecklistItem) => void;
-  onAddAnnotation: (item: ChecklistItem) => void;
-  uiSpec: UiSpec;
-}
-
-export function AdvancedPanel(props: AdvancedPanelProps): JSX.Element {
-  const {
-    scoreTotal,
-    scoreMax,
-    scorePercent,
-    dismissedCount,
-    score,
-    plainCategoryLabel,
-    getCategoryScore,
-    checklistByCategory,
-    issueFixState,
-    issueKey,
-    onSkipIssue,
-    onFocusItem,
-    onAddAnnotation
-  } = props;
-
-  return (
-    <div className="panel">
-      <div className="meta-row score-meta-row">
-        <div className="section-subtitle">AI-Ready Score</div>
-        <div className="score-meta-pills">
-          {dismissedCount > 0 ? (
-            <span className="status-pill" title="Dismissed checklist items don't change the score">
-              {dismissedCount} dismissed
-            </span>
-          ) : null}
-          <span className="status-pill">
-            {scoreTotal}/{scoreMax || 100}
-          </span>
-        </div>
-      </div>
-
-      <div className="score-track">
-        <div className="score-fill" style={{ width: `${scorePercent}%` }} />
-      </div>
-
-      <table>
-        <thead>
-          <tr>
-            <th>Signal</th>
-            <th>Score</th>
-          </tr>
-        </thead>
-        <tbody>
-          {SCORE_CATEGORIES.map((category) => {
-            const applicable = score.applicable?.[category] ?? true;
-            return (
-              <tr key={category}>
-                <td>{plainCategoryLabel(category)}</td>
-                <td>
-                  {applicable
-                    ? `${getCategoryScore(score, category)}/${CATEGORY_MAX[category]}`
-                    : 'n/a'}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-
-      <div className="section-title">Checklist</div>
-      {SCORE_CATEGORIES.map((category) => {
-        const items = checklistByCategory[category] ?? [];
-        if (items.length === 0) {
-          return (
-            <div key={category} className="check-item">
-              <div>
-                <strong>{plainCategoryLabel(category)}</strong> (0)
-              </div>
-              <div className="ok-msg">
-                <CheckCircle2 size={14} strokeWidth={2} />
-                <span>Looks good. No action needed.</span>
-              </div>
-            </div>
-          );
-        }
-
-        return (
-          <div key={category}>
-            <div className="section-subtitle">
-              {plainCategoryLabel(category)} ({items.length})
-            </div>
-            {items.map((item) => {
-              const fixInfo = issueFixState[issueKey(item)];
-              return (
-                <div key={`${item.nodeId}-${item.reason}`} className="check-item">
-                  <div>
-                    <strong>{item.nodeName}</strong> ({item.nodeId})
-                  </div>
-                  <div className="reason">{item.reason}</div>
-                  {fixInfo ? (
-                    <div className={`issue-badge ${fixInfo.status}`} title={fixInfo.detail}>
-                      {fixInfo.status === 'fixed' ? 'Fixed' : 'Dismissed'}
-                    </div>
-                  ) : null}
-                  <div>{item.suggestion}</div>
-                  <div className="check-actions">
-                    <button type="button" onClick={() => onSkipIssue(item)}>
-                      <span className="btn-with-icon">
-                        <Undo2 size={13} strokeWidth={2} />
-                        <span>Dismiss</span>
-                      </span>
-                    </button>
-                    <button type="button" onClick={() => onFocusItem(item)}>
-                      <span className="btn-with-icon">
-                        <Eye size={13} strokeWidth={2} />
-                        <span>Focus</span>
-                      </span>
-                    </button>
-                    <button type="button" onClick={() => onAddAnnotation(item)}>
-                      <span className="btn-with-icon">
-                        <StickyNote size={13} strokeWidth={2} />
-                        <span>Add annotation</span>
-                      </span>
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        );
-      })}
     </div>
   );
 }

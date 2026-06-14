@@ -1,31 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import {
-  type AnalysisResult,
-  type ChecklistItem,
-  type ExportedAsset,
-  type Preset,
-  type ScoreCategory,
-  type ScoreResult
-} from './core/types';
+import { type AnalysisResult, type ExportedAsset, type Preset } from './core/types';
 import type { ToUIMessage } from './shared/messages';
 import {
-  AdvancedPanel,
   AppHeader,
-  BridgePanel,
+  BridgeBar,
   type BridgeStatus,
+  CapabilityView,
   EmptyState,
+  ExportPanel,
   Footer,
   LoadingPanel,
   type MainTab,
   MainTabs,
-  PresetSelector,
-  PromptPanel
+  PresetSelector
 } from './ui_components';
 import { UI_STYLES } from './ui_theme';
 
-// Figma's manifest only allows a localhost origin (not a raw IP), and CSP
-// requires the connection host to match — so connect via localhost too.
 const BRIDGE_URL = 'ws://localhost:3790';
 
 const INITIAL_ANALYSIS: AnalysisResult = {
@@ -35,30 +26,6 @@ const INITIAL_ANALYSIS: AnalysisResult = {
   flowCapable: false,
   message: 'Select a frame, instance or section.'
 };
-
-const CATEGORY_MAX: Record<ScoreCategory, number> = {
-  'Component Coverage': 30,
-  'Tokenization Coverage': 25,
-  'Layout Semantics': 20,
-  'Naming + Semantics': 15,
-  'Variant Completeness': 10
-};
-
-const CATEGORY_PLAIN_LABELS: Record<ScoreCategory, string> = {
-  'Component Coverage': 'Uses components',
-  'Tokenization Coverage': 'Uses tokens/styles',
-  'Layout Semantics': 'Layout clarity',
-  'Naming + Semantics': 'Layer naming clarity',
-  'Variant Completeness': 'Variant setup'
-};
-
-const SCORE_CATEGORIES: ScoreCategory[] = [
-  'Component Coverage',
-  'Tokenization Coverage',
-  'Layout Semantics',
-  'Naming + Semantics',
-  'Variant Completeness'
-];
 
 const FIGMA_DOCS = {
   instanceNode: 'https://www.figma.com/plugin-docs/api/InstanceNode/',
@@ -78,61 +45,17 @@ const ERROR_HELP_RULES: ErrorHelpRule[] = [
     url: FIGMA_DOCS.instanceNode,
     patterns: [/get_componentproperties/i, /componentproperties/i, /maincomponent/i]
   },
-  {
-    url: FIGMA_DOCS.mixed,
-    patterns: [/figma\.mixed/i, /\bmixed\b/i]
-  },
-  {
-    url: FIGMA_DOCS.textNode,
-    patterns: [/loadfontasync/i, /font/i, /\btext\b/i, /characters/i]
-  },
-  {
-    url: FIGMA_DOCS.sceneNode,
-    patterns: [/getnodebyidasync/i, /node not found/i, /invalid node/i]
-  },
+  { url: FIGMA_DOCS.mixed, patterns: [/figma\.mixed/i, /\bmixed\b/i] },
+  { url: FIGMA_DOCS.textNode, patterns: [/loadfontasync/i, /font/i, /\btext\b/i, /characters/i] },
+  { url: FIGMA_DOCS.sceneNode, patterns: [/getnodebyidasync/i, /node not found/i, /invalid node/i] },
   {
     url: FIGMA_DOCS.pluginApi,
-    patterns: [
-      /annotation/i,
-      /plugindata/i,
-      /relaunchdata/i,
-      /layoutmode/i,
-      /constraints/i,
-      /readonly/i,
-      /permission/i
-    ]
+    patterns: [/annotation/i, /plugindata/i, /relaunchdata/i, /layoutmode/i, /constraints/i, /readonly/i, /permission/i]
   }
 ];
 
 function postPluginMessage(message: unknown): void {
   parent.postMessage({ pluginMessage: message }, '*');
-}
-
-async function copyText(value: string): Promise<boolean> {
-  if (!value) {
-    return false;
-  }
-
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
-      return true;
-    }
-  } catch {
-    // fallback below
-  }
-
-  const textArea = document.createElement('textarea');
-  textArea.value = value;
-  textArea.style.position = 'fixed';
-  textArea.style.opacity = '0';
-  document.body.appendChild(textArea);
-  textArea.focus();
-  textArea.select();
-
-  const copied = document.execCommand('copy');
-  document.body.removeChild(textArea);
-  return copied;
 }
 
 function pickPngAsset(assets: ExportedAsset[] | undefined): ExportedAsset | undefined {
@@ -142,74 +65,9 @@ function pickPngAsset(assets: ExportedAsset[] | undefined): ExportedAsset | unde
   return assets.find((asset) => asset.format === 'PNG') ?? assets[0];
 }
 
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const len = binary.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-function dataUrlToBlobSync(dataUrl: string, fallbackMime = 'image/png'): Blob {
-  const match = /^data:([^;]+);base64,([\s\S]+)$/.exec(dataUrl);
-  if (!match) {
-    throw new Error('Unrecognized data URL format');
-  }
-  const mime = match[1] || fallbackMime;
-  const bytes = base64ToBytes(match[2] ?? '');
-  return new Blob([bytes.buffer as ArrayBuffer], { type: mime });
-}
-
-const SUPPORTS_IMAGE_CLIPBOARD: boolean =
-  typeof ClipboardItem !== 'undefined' &&
-  typeof navigator !== 'undefined' &&
-  !!navigator.clipboard &&
-  typeof navigator.clipboard.write === 'function';
-
 function sanitizeFilename(name: string): string {
   const trimmed = name.trim().replace(/[\s/\\]+/g, '-').replace(/[^\w.-]/g, '');
   return trimmed.length > 0 ? trimmed : 'designagent';
-}
-
-async function copyImageAsset(asset: ExportedAsset): Promise<{ ok: boolean; reason?: string }> {
-  if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
-    return { ok: false, reason: 'Clipboard image write is unsupported here' };
-  }
-  try {
-    const blob = dataUrlToBlobSync(asset.dataUrl);
-    const item = new ClipboardItem({ [blob.type]: blob });
-    await navigator.clipboard.write([item]);
-    return { ok: true };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return { ok: false, reason };
-  }
-}
-
-async function copyPromptAndImage(
-  prompt: string,
-  asset: ExportedAsset
-): Promise<{ status: 'both' | 'text-only' | 'failed'; reason?: string }> {
-  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
-    try {
-      const imageBlob = dataUrlToBlobSync(asset.dataUrl);
-      const textBlob = new Blob([prompt], { type: 'text/plain' });
-      const item = new ClipboardItem({
-        'text/plain': textBlob,
-        [imageBlob.type]: imageBlob
-      });
-      await navigator.clipboard.write([item]);
-      return { status: 'both' };
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      const ok = await copyText(prompt);
-      return { status: ok ? 'text-only' : 'failed', reason };
-    }
-  }
-  const ok = await copyText(prompt);
-  return { status: ok ? 'text-only' : 'failed', reason: 'ClipboardItem unsupported' };
 }
 
 function downloadAsset(asset: ExportedAsset): boolean {
@@ -235,7 +93,7 @@ function downloadTextFile(filename: string, text: string, mime = 'text/markdown'
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = sanitizeFilename(filename) || 'DESIGN.md';
+    anchor.download = sanitizeFilename(filename) || 'export.txt';
     anchor.rel = 'noopener';
     document.body.appendChild(anchor);
     anchor.click();
@@ -248,44 +106,9 @@ function downloadTextFile(filename: string, text: string, mime = 'text/markdown'
 }
 
 function toIntentLabel(intent: 'screen' | 'component' | 'section'): string {
-  if (intent === 'screen') {
-    return 'Screen';
-  }
-
-  if (intent === 'component') {
-    return 'Component';
-  }
-
+  if (intent === 'screen') return 'Screen';
+  if (intent === 'component') return 'Component';
   return 'Section';
-}
-
-function plainCategoryLabel(category: ScoreCategory): string {
-  return CATEGORY_PLAIN_LABELS[category];
-}
-
-function getCategoryScore(score: ScoreResult, category: ScoreCategory): number {
-  switch (category) {
-    case 'Component Coverage':
-      return score.breakdown.componentCoverage;
-    case 'Tokenization Coverage':
-      return score.breakdown.tokenizationCoverage;
-    case 'Layout Semantics':
-      return score.breakdown.layoutSemantics;
-    case 'Naming + Semantics':
-      return score.breakdown.namingSemantics;
-    case 'Variant Completeness':
-      return score.breakdown.variantCompleteness;
-    default:
-      return 0;
-  }
-}
-
-function issueKey(item: {
-  category: string;
-  nodeId: string;
-  reason: string;
-}): string {
-  return `${item.category}:${item.nodeId}:${item.reason}`;
 }
 
 function getErrorHelpLink(error: string): string | undefined {
@@ -300,14 +123,9 @@ function getErrorHelpLink(error: string): string | undefined {
 function App(): JSX.Element {
   const [preset, setPreset] = useState<Preset>('swiftui-ios');
   const [mainTab, setMainTab] = useState<MainTab>('design-to-code');
-  const [activeTab, setActiveTab] = useState<'prompt' | 'score'>('prompt');
   const [analysis, setAnalysis] = useState<AnalysisResult>(INITIAL_ANALYSIS);
-  const [selectionLinkInput, setSelectionLinkInput] = useState<string>('');
   const [error, setError] = useState<string>('');
-  const [copyStatus, setCopyStatus] = useState<string>('');
-  const [issueFixState, setIssueFixState] = useState<
-    Record<string, { status: 'fixed' | 'skipped'; detail: string }>
-  >({});
+  const [status, setStatus] = useState<string>('');
   const [analyzing, setAnalyzing] = useState<
     { nodeId: string; nodeName: string; nodeType: string } | null
   >(null);
@@ -339,46 +157,23 @@ function App(): JSX.Element {
         setAnalyzing(null);
         setAnalysis(message.payload);
         setPreset(message.payload.preset);
-        setActiveTab('prompt');
-
-        if (message.payload.hasSelection) {
-          const activeKeys = new Set(
-            message.payload.checklist.map((item) => issueKey(item))
-          );
-          setIssueFixState((current) =>
-            Object.fromEntries(
-              Object.entries(current).filter(([key]) => activeKeys.has(key))
-            )
-          );
-        } else {
-          setIssueFixState({});
-        }
-
-        return;
-      }
-
-      if (message.type === 'ISSUE_FIX_RESULT') {
-        const key = issueKey(message);
-        setIssueFixState((current) => ({
-          ...current,
-          [key]: {
-            status: message.status,
-            detail: message.detail
-          }
-        }));
         return;
       }
 
       if (message.type === 'DESIGN_MD_RESULT') {
         setError('');
-        const saved = downloadTextFile(message.filename, message.markdown);
-        const frameLabel = message.frameCount === 1 ? 'frame' : 'frames';
-        setCopyStatus(
-          saved
-            ? `DESIGN.md saved (${message.frameCount} ${frameLabel})`
-            : 'DESIGN.md export failed'
-        );
-        setTimeout(() => setCopyStatus(''), 2600);
+        const saved = downloadTextFile(message.filename, message.markdown, 'text/markdown');
+        const label = message.frameCount === 1 ? 'frame' : 'frames';
+        setStatus(saved ? `DESIGN.md saved (${message.frameCount} ${label})` : 'Export failed');
+        setTimeout(() => setStatus(''), 2600);
+        return;
+      }
+
+      if (message.type === 'HTML_RESULT') {
+        setError('');
+        const saved = downloadTextFile(message.filename, message.html, 'text/html');
+        setStatus(saved ? 'HTML saved' : 'Export failed');
+        setTimeout(() => setStatus(''), 2600);
         return;
       }
 
@@ -408,9 +203,9 @@ function App(): JSX.Element {
     return () => window.removeEventListener('message', listener);
   }, []);
 
-  // Claude Code bridge: the WebSocket lives here in the UI iframe (the plugin
-  // sandbox has no WebSocket). It relays bridge requests to code.ts and sends
-  // results back. Reconnects with backoff while enabled.
+  // Claude Code bridge: the WebSocket lives here in the UI iframe (the sandbox has
+  // none). It relays bridge requests to code.ts and sends results back, reconnecting
+  // with backoff while enabled.
   useEffect(() => {
     if (!bridgeEnabled) {
       setBridgeStatus('off');
@@ -466,13 +261,13 @@ function App(): JSX.Element {
         }
       };
 
-      socket.onmessage = (event: MessageEvent) => {
-        if (typeof event.data !== 'string') {
+      socket.onmessage = (messageEvent: MessageEvent) => {
+        if (typeof messageEvent.data !== 'string') {
           return;
         }
         let msg: { type?: string; id?: string; command?: string; params?: unknown };
         try {
-          msg = JSON.parse(event.data);
+          msg = JSON.parse(messageEvent.data);
         } catch {
           return;
         }
@@ -492,7 +287,8 @@ function App(): JSX.Element {
             type: 'BRIDGE_COMMAND',
             id: msg.id,
             command: msg.command,
-            params: msg.params && typeof msg.params === 'object' ? (msg.params as Record<string, unknown>) : {}
+            params:
+              msg.params && typeof msg.params === 'object' ? (msg.params as Record<string, unknown>) : {}
           });
         }
       };
@@ -534,68 +330,31 @@ function App(): JSX.Element {
     };
   }, [bridgeEnabled]);
 
-  const skippedIssueKeys = useMemo(
-    () =>
-      new Set(
-        Object.entries(issueFixState)
-          .filter(([, value]) => value.status === 'skipped')
-          .map(([key]) => key)
-      ),
-    [issueFixState]
+  const pngAsset = analysis.hasSelection ? pickPngAsset(analysis.assets) : undefined;
+  const imageSizeKb = useMemo(
+    () => (pngAsset ? Math.round(pngAsset.byteLength / 102.4) / 10 : undefined),
+    [pngAsset]
   );
-
-  const scoreTotal = analysis.hasSelection ? analysis.score.total : 0;
-  const scoreMax = analysis.hasSelection ? analysis.score.applicableMax : 0;
-
-  const scorePercent = useMemo(() => {
-    if (!analysis.hasSelection || scoreMax <= 0) {
-      return 0;
-    }
-    return Math.max(0, Math.min(100, Math.round((scoreTotal / scoreMax) * 100)));
-  }, [analysis, scoreTotal, scoreMax]);
-
-  const dismissedCount = useMemo(() => {
-    if (!analysis.hasSelection) {
-      return 0;
-    }
-    const activeKeys = new Set(
-      analysis.checklist.map((item) => issueKey(item))
-    );
-    return Array.from(skippedIssueKeys).filter((key) => activeKeys.has(key)).length;
-  }, [analysis, skippedIssueKeys]);
 
   const onSelectPreset = (nextPreset: Preset) => {
     setPreset(nextPreset);
     postPluginMessage({ type: 'SET_PRESET', preset: nextPreset });
   };
 
-  const onCopyPrompt = async () => {
+  const onExportDesignMd = () => {
     if (!analysis.hasSelection) {
       return;
     }
-
-    const copied = await copyText(analysis.prompt);
-    setCopyStatus(copied ? 'Copied' : 'Copy failed');
-    setTimeout(() => setCopyStatus(''), 1400);
+    setStatus('Generating DESIGN.md…');
+    postPluginMessage({ type: 'EXPORT_DESIGN_MD' });
   };
 
-  const pngAsset =
-    analysis.hasSelection ? pickPngAsset(analysis.assets) : undefined;
-  const imageSizeKb = pngAsset
-    ? Math.round(pngAsset.byteLength / 102.4) / 10
-    : undefined;
-
-  const onCopyImage = async () => {
-    if (!pngAsset) {
+  const onExportHtml = () => {
+    if (!analysis.hasSelection) {
       return;
     }
-    const result = await copyImageAsset(pngAsset);
-    if (result.ok) {
-      setCopyStatus('Image copied');
-    } else {
-      setCopyStatus(`Copy image failed: ${result.reason ?? 'unknown'} — use Save PNG`);
-    }
-    setTimeout(() => setCopyStatus(''), 3000);
+    setStatus('Generating HTML…');
+    postPluginMessage({ type: 'EXPORT_HTML' });
   };
 
   const onSavePng = () => {
@@ -603,90 +362,23 @@ function App(): JSX.Element {
       return;
     }
     const ok = downloadAsset(pngAsset);
-    setCopyStatus(ok ? 'PNG saved' : 'Save failed');
-    setTimeout(() => setCopyStatus(''), 1600);
-  };
-
-  const onCopyPromptAndImage = async () => {
-    if (!analysis.hasSelection) {
-      return;
-    }
-    if (!pngAsset) {
-      const copied = await copyText(analysis.prompt);
-      setCopyStatus(copied ? 'Copied (no image yet)' : 'Copy failed');
-      setTimeout(() => setCopyStatus(''), 1600);
-      return;
-    }
-    const result = await copyPromptAndImage(analysis.prompt, pngAsset);
-    if (result.status === 'both') {
-      setCopyStatus('Prompt + image copied');
-    } else if (result.status === 'text-only') {
-      setCopyStatus(
-        `Prompt copied — image blocked${result.reason ? ` (${result.reason})` : ''} — use Save PNG`
-      );
-    } else {
-      setCopyStatus(`Copy failed: ${result.reason ?? 'unknown'}`);
-    }
-    setTimeout(() => setCopyStatus(''), 3000);
-  };
-
-  const onExportDesignMd = () => {
-    if (!analysis.hasSelection) {
-      return;
-    }
-    setCopyStatus('Generating DESIGN.md…');
-    postPluginMessage({ type: 'EXPORT_DESIGN_MD' });
-  };
-
-  const onApplySelectionLink = () => {
-    postPluginMessage({
-      type: 'SET_FIGMA_LINK_BASE',
-      link: selectionLinkInput
-    });
-    setCopyStatus('Link applied');
-    setTimeout(() => setCopyStatus(''), 1400);
-  };
-
-  const onFocusItem = (item: ChecklistItem) => {
-    postPluginMessage({ type: 'FOCUS_NODE', nodeId: item.nodeId });
-    setCopyStatus('Focused');
-    setTimeout(() => setCopyStatus(''), 1600);
-  };
-
-  const onAddAnnotation = (item: ChecklistItem) => {
-    postPluginMessage({
-      type: 'ADD_ANNOTATION',
-      nodeId: item.nodeId,
-      nodeName: item.nodeName,
-      category: item.category,
-      reason: item.reason,
-      suggestion: item.suggestion
-    });
-    setCopyStatus('Annotation added');
-    setTimeout(() => setCopyStatus(''), 1600);
-  };
-
-  const onSkipIssue = (item: ChecklistItem) => {
-    const key = issueKey(item);
-    setIssueFixState((current) => ({
-      ...current,
-      [key]: {
-        status: 'skipped',
-        detail: 'Skipped by user.'
-      }
-    }));
-    setCopyStatus('Dismissed');
-    setTimeout(() => setCopyStatus(''), 1600);
+    setStatus(ok ? 'PNG saved' : 'Save failed');
+    setTimeout(() => setStatus(''), 1600);
   };
 
   const errorHelpLink = error ? getErrorHelpLink(error) : undefined;
-  const hasAppliedLink = Boolean(analysis.hasSelection && analysis.selectedNode.link);
 
   return (
     <div className="app-shell">
       <style>{UI_STYLES}</style>
       <div className="app-body">
-        <AppHeader version="v1.3.0" />
+        <AppHeader version="v1.4.0" />
+
+        <BridgeBar
+          status={bridgeStatus}
+          enabled={bridgeEnabled}
+          onToggle={() => setBridgeEnabled((value) => !value)}
+        />
 
         <MainTabs active={mainTab} onChange={setMainTab} />
 
@@ -706,124 +398,24 @@ function App(): JSX.Element {
             <PresetSelector preset={preset} onSelectPreset={onSelectPreset} />
 
             {analyzing ? (
-          <LoadingPanel
-            nodeName={analyzing.nodeName}
-            nodeType={analyzing.nodeType}
-          />
-        ) : analysis.hasSelection ? (
-          hasAppliedLink ? (
-            <>
-              <div className="tab-nav" role="tablist" aria-label="Prompt and score tabs">
-                <button
-                  type="button"
-                  role="tab"
-                  id="tab-prompt"
-                  aria-controls="panel-prompt"
-                  aria-selected={activeTab === 'prompt'}
-                  className={`tab-btn ${activeTab === 'prompt' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('prompt')}
-                >
-                  Prompt
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  id="tab-score"
-                  aria-controls="panel-score"
-                  aria-selected={activeTab === 'score'}
-                  className={`tab-btn ${activeTab === 'score' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('score')}
-                >
-                  Score {scoreTotal}/{scoreMax || 100}
-                </button>
-              </div>
-
-              <div
-                role="tabpanel"
-                id="panel-prompt"
-                aria-labelledby="tab-prompt"
-                hidden={activeTab !== 'prompt'}
-              >
-                <PromptPanel
-                  mode={analysis.mode}
-                  intentLabel={toIntentLabel(analysis.intent)}
-                  selectedNodeName={analysis.selectedNode.name}
-                  selectionLink={analysis.selectedNode.link}
-                  selectionLinkInput={selectionLinkInput}
-                  onSelectionLinkInputChange={setSelectionLinkInput}
-                  onApplySelectionLink={onApplySelectionLink}
-                  prompt={analysis.prompt}
-                  onCopyPrompt={onCopyPrompt}
-                  copyStatus={copyStatus}
-                  platformWarnings={analysis.platformWarnings}
-                  coverageWarnings={analysis.coverageWarnings}
-                  hasImageAsset={Boolean(pngAsset)}
-                  imageSizeKb={imageSizeKb}
-                  canCopyImageToClipboard={SUPPORTS_IMAGE_CLIPBOARD}
-                  onCopyImage={onCopyImage}
-                  onSavePng={onSavePng}
-                  onCopyPromptAndImage={onCopyPromptAndImage}
-                  onExportDesignMd={onExportDesignMd}
-                />
-              </div>
-
-              <div
-                role="tabpanel"
-                id="panel-score"
-                aria-labelledby="tab-score"
-                hidden={activeTab !== 'score'}
-              >
-                <AdvancedPanel
-                  scoreTotal={scoreTotal}
-                  scoreMax={scoreMax}
-                  scorePercent={scorePercent}
-                  dismissedCount={dismissedCount}
-                  score={analysis.score}
-                  plainCategoryLabel={plainCategoryLabel}
-                  getCategoryScore={getCategoryScore}
-                  checklistByCategory={analysis.checklistByCategory}
-                  issueFixState={issueFixState}
-                  issueKey={issueKey}
-                  onSkipIssue={onSkipIssue}
-                  onFocusItem={onFocusItem}
-                  onAddAnnotation={onAddAnnotation}
-                  uiSpec={analysis.uiSpec}
-                />
-              </div>
-            </>
-          ) : (
-            <PromptPanel
-              mode={analysis.mode}
-              intentLabel={toIntentLabel(analysis.intent)}
-              selectedNodeName={analysis.selectedNode.name}
-              selectionLink={analysis.selectedNode.link}
-              selectionLinkInput={selectionLinkInput}
-              onSelectionLinkInputChange={setSelectionLinkInput}
-              onApplySelectionLink={onApplySelectionLink}
-              prompt={analysis.prompt}
-              onCopyPrompt={onCopyPrompt}
-              copyStatus={copyStatus}
-              platformWarnings={analysis.platformWarnings}
-              coverageWarnings={analysis.coverageWarnings}
-              hasImageAsset={Boolean(pngAsset)}
-              imageSizeKb={imageSizeKb}
-              canCopyImageToClipboard={SUPPORTS_IMAGE_CLIPBOARD}
-              onCopyImage={onCopyImage}
-              onSavePng={onSavePng}
-              onCopyPromptAndImage={onCopyPromptAndImage}
-              onExportDesignMd={onExportDesignMd}
-            />
-          )
-        ) : (
-          <EmptyState message={analysis.message} />
-        )}
+              <LoadingPanel nodeName={analyzing.nodeName} nodeType={analyzing.nodeType} />
+            ) : analysis.hasSelection ? (
+              <ExportPanel
+                intentLabel={toIntentLabel(analysis.intent)}
+                selectedNodeName={analysis.selectedNode.name}
+                status={status}
+                hasImageAsset={Boolean(pngAsset)}
+                imageSizeKb={imageSizeKb}
+                onExportDesignMd={onExportDesignMd}
+                onExportHtml={onExportHtml}
+                onSavePng={onSavePng}
+              />
+            ) : (
+              <EmptyState message={analysis.message} />
+            )}
           </>
         ) : (
-          <BridgePanel
-            status={bridgeStatus}
-            enabled={bridgeEnabled}
-            onToggle={() => setBridgeEnabled((value) => !value)}
-          />
+          <CapabilityView />
         )}
       </div>
 
