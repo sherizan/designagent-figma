@@ -31,7 +31,10 @@ export function generateHtml(root: HtmlNode, meta: HtmlDocMeta): string {
 
   function render(node: HtmlNode, indent: string): string {
     const cls = `n${counter++}`;
+    // Drop any declaration whose key/value contains `<` or `>` so a hostile value
+    // can't close the <style> element and inject markup into the exported file.
     const cssText = Object.entries(node.css)
+      .filter(([key, value]) => !/[<>]/.test(key) && !/[<>]/.test(value))
       .map(([key, value]) => `${key}: ${value};`)
       .join(' ');
     if (cssText) {
