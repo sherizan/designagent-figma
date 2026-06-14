@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   type AnalysisResult,
@@ -11,6 +11,8 @@ import {
 import type { ToUIMessage } from './shared/messages';
 import {
   AdvancedPanel,
+  BridgeBar,
+  type BridgeStatus,
   EmptyState,
   Footer,
   HeaderPanel,
@@ -18,6 +20,8 @@ import {
   PromptPanel
 } from './ui_components';
 import { UI_STYLES } from './ui_theme';
+
+const BRIDGE_URL = 'ws://127.0.0.1:3790';
 
 const INITIAL_ANALYSIS: AnalysisResult = {
   hasSelection: false,
@@ -301,6 +305,11 @@ function App(): JSX.Element {
   const [analyzing, setAnalyzing] = useState<
     { nodeId: string; nodeName: string; nodeType: string } | null
   >(null);
+  const [bridgeEnabled, setBridgeEnabled] = useState<boolean>(false);
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>('off');
+  const socketRef = useRef<WebSocket | null>(null);
+  const reconnectTimer = useRef<number | null>(null);
+  const reconnectAttempt = useRef<number>(0);
 
   useEffect(() => {
     const listener = (event: MessageEvent<{ pluginMessage?: ToUIMessage }>) => {
@@ -367,6 +376,22 @@ function App(): JSX.Element {
         return;
       }
 
+      if (message.type === 'BRIDGE_RESULT') {
+        const socket = socketRef.current;
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(
+            JSON.stringify({
+              type: 'response',
+              id: message.id,
+              ok: message.ok,
+              result: message.result,
+              error: message.error
+            })
+          );
+        }
+        return;
+      }
+
       if (message.type === 'ERROR') {
         setError(message.message);
         setAnalyzing(null);
@@ -376,6 +401,132 @@ function App(): JSX.Element {
     window.addEventListener('message', listener);
     return () => window.removeEventListener('message', listener);
   }, []);
+
+  // Claude Code bridge: the WebSocket lives here in the UI iframe (the plugin
+  // sandbox has no WebSocket). It relays bridge requests to code.ts and sends
+  // results back. Reconnects with backoff while enabled.
+  useEffect(() => {
+    if (!bridgeEnabled) {
+      setBridgeStatus('off');
+      return;
+    }
+
+    let cancelled = false;
+
+    const clearReconnect = () => {
+      if (reconnectTimer.current !== null) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = null;
+      }
+    };
+
+    const scheduleReconnect = () => {
+      if (cancelled) {
+        return;
+      }
+      setBridgeStatus('connecting');
+      const delay =
+        Math.min(30000, 1000 * 2 ** reconnectAttempt.current) + Math.floor(Math.random() * 500);
+      reconnectAttempt.current += 1;
+      clearReconnect();
+      reconnectTimer.current = window.setTimeout(connect, delay);
+    };
+
+    function connect(): void {
+      if (cancelled) {
+        return;
+      }
+      setBridgeStatus('connecting');
+      let socket: WebSocket;
+      try {
+        socket = new WebSocket(BRIDGE_URL);
+      } catch {
+        scheduleReconnect();
+        return;
+      }
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        if (cancelled) {
+          socket.close();
+          return;
+        }
+        reconnectAttempt.current = 0;
+        setBridgeStatus('connected');
+        try {
+          socket.send(JSON.stringify({ type: 'hello', role: 'figma-plugin' }));
+        } catch {
+          // ignore
+        }
+      };
+
+      socket.onmessage = (event: MessageEvent) => {
+        if (typeof event.data !== 'string') {
+          return;
+        }
+        let msg: { type?: string; id?: string; command?: string; params?: unknown };
+        try {
+          msg = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (!msg || typeof msg !== 'object') {
+          return;
+        }
+        if (msg.type === 'ping') {
+          try {
+            socket.send(JSON.stringify({ type: 'pong' }));
+          } catch {
+            // ignore
+          }
+          return;
+        }
+        if (msg.type === 'request' && typeof msg.id === 'string' && typeof msg.command === 'string') {
+          postPluginMessage({
+            type: 'BRIDGE_COMMAND',
+            id: msg.id,
+            command: msg.command,
+            params: msg.params && typeof msg.params === 'object' ? (msg.params as Record<string, unknown>) : {}
+          });
+        }
+      };
+
+      socket.onerror = () => {
+        setBridgeStatus('error');
+      };
+
+      socket.onclose = () => {
+        if (socketRef.current === socket) {
+          socketRef.current = null;
+        }
+        if (cancelled) {
+          return;
+        }
+        scheduleReconnect();
+      };
+    }
+
+    reconnectAttempt.current = 0;
+    connect();
+
+    return () => {
+      cancelled = true;
+      clearReconnect();
+      const socket = socketRef.current;
+      socketRef.current = null;
+      if (socket) {
+        socket.onopen = null;
+        socket.onmessage = null;
+        socket.onerror = null;
+        socket.onclose = null;
+        try {
+          socket.close();
+        } catch {
+          // ignore
+        }
+      }
+    };
+  }, [bridgeEnabled]);
 
   const skippedIssueKeys = useMemo(
     () =>
@@ -530,6 +681,12 @@ function App(): JSX.Element {
       <style>{UI_STYLES}</style>
       <div className="app-body">
         <HeaderPanel preset={preset} onSelectPreset={onSelectPreset} />
+
+        <BridgeBar
+          status={bridgeStatus}
+          enabled={bridgeEnabled}
+          onToggle={() => setBridgeEnabled((value) => !value)}
+        />
 
         {error ? (
           <div className="error">

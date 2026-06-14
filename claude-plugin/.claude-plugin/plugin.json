@@ -1,7 +1,8 @@
 {
   "name": "designagent",
-  "version": "0.1.0",
-  "description": "DesignAgent's Claude Code companion — build production UI from a DESIGN.md spec exported from Figma, the design-system-faithful way.",
+  "version": "0.2.0",
+  "description": "DesignAgent's Claude Code companion — build production UI from a DESIGN.md spec exported from Figma, plus a live two-way bridge to drive Figma from Claude Code.",
+  "mcpServers": "./.mcp.json",
   "author": {
     "name": "Sherizan",
     "url": "https://github.com/sherizan/designagent-figma"
