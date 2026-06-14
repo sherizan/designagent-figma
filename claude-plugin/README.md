@@ -13,18 +13,19 @@ to build production UI from it the design-system-faithful way.
 
 ## Install
 
-This plugin lives in the `claude-plugin/` directory of the DesignAgent repo. Until
-it's published to a marketplace, install it from a local clone:
+In Claude Code, add the marketplace and install the plugin:
 
 ```bash
-# From a project where you want to use it:
-/plugin marketplace add /path/to/designagent-figma   # if a marketplace.json is added
-# or copy the skill directly into your project:
-cp -r /path/to/designagent-figma/claude-plugin/skills/design-to-code .claude/skills/
+/plugin marketplace add sherizan/designagent-figma
+/plugin install designagent@designagent
 ```
 
-Once installed, the skill triggers automatically when a `DESIGN.md` is present or
-you ask to build UI from a Figma design — or invoke it explicitly with
+(`sherizan/designagent-figma` is the GitHub repo that hosts the marketplace;
+`designagent@designagent` is the plugin `designagent` from the `designagent`
+marketplace.)
+
+Once installed, the `design-to-code` skill triggers when a `DESIGN.md` is present
+or you ask to build UI from a Figma design — or invoke it explicitly with
 `/designagent:design-to-code`.
 
 ## Workflow
