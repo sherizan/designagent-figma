@@ -45,7 +45,7 @@ or you ask to build UI from a Figma design — or invoke it explicitly with
 ## Two-way bridge (live Figma access)
 
 The plugin bundles the `designagent` MCP server (`mcp/server.js`), launched by Claude
-Code over stdio. It opens a local WebSocket server on `ws://127.0.0.1:3790`; the
+Code over stdio. It opens a local WebSocket server on `ws://localhost:3790`; the
 DesignAgent plugin's UI connects to it.
 
 1. Open the **DesignAgent** plugin in Figma and click **Enable** on the "Claude bridge"
@@ -59,8 +59,9 @@ Notes:
   install step.
 - Port is configurable with `DESIGNAGENT_BRIDGE_PORT` (default `3790`); it must match
   the plugin. The socket closes when the plugin window closes.
-- `networkAccess` lists the **`http://`** origin (`http://127.0.0.1:3790`), not `ws://`
-  — Figma rejects the `ws` scheme in the manifest, and an `http` allow-entry still
-  permits the `ws` connection to the same host/port (CSP scheme matching).
+- `networkAccess` lists `http://localhost:3790` — Figma rejects both the `ws://`
+  scheme and raw IPs (`127.0.0.1`) in the manifest; only the `localhost` `http(s)`
+  origin is accepted, and CSP scheme matching still permits the `ws://localhost`
+  connection. (So the server, plugin, and manifest all use `localhost`.)
 - For the **published** Figma plugin, localhost must move from `devAllowedDomains` to
   `allowedDomains` (with a `reasoning` field) in `manifest.json`.

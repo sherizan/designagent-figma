@@ -21,7 +21,9 @@ import {
 } from './ui_components';
 import { UI_STYLES } from './ui_theme';
 
-const BRIDGE_URL = 'ws://127.0.0.1:3790';
+// Figma's manifest only allows a localhost origin (not a raw IP), and CSP
+// requires the connection host to match — so connect via localhost too.
+const BRIDGE_URL = 'ws://localhost:3790';
 
 const INITIAL_ANALYSIS: AnalysisResult = {
   hasSelection: false,

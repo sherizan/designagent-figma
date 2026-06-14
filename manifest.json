@@ -7,7 +7,7 @@
   "editorType": ["figma"],
   "networkAccess": {
     "allowedDomains": ["none"],
-    "devAllowedDomains": ["http://127.0.0.1:3790", "http://localhost:3790"]
+    "devAllowedDomains": ["http://localhost:3790"]
   },
   "documentAccess": "dynamic-page"
 }
