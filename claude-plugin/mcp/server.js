@@ -24799,9 +24799,9 @@ function log(...args) {
 }
 var pluginSocket = null;
 var pending = /* @__PURE__ */ new Map();
-var wss = new import_websocket_server.default({ host: "127.0.0.1", port: PORT });
+var wss = new import_websocket_server.default({ host: "localhost", port: PORT });
 wss.on("listening", () => {
-  log(`WebSocket bridge listening on ws://127.0.0.1:${PORT}`);
+  log(`WebSocket bridge listening on ws://localhost:${PORT}`);
 });
 wss.on("error", (error2) => {
   log(`WebSocket server error: ${error2.message}. The bridge will be unavailable.`);

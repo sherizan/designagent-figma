@@ -28,10 +28,13 @@ const pending = new Map<
   { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
 >();
 
-const wss = new WebSocketServer({ host: '127.0.0.1', port: PORT });
+// Bind to the loopback name so the host matches what the Figma plugin connects
+// to (ws://localhost) and what the manifest allows (http://localhost) — avoids
+// IPv4/IPv6 (127.0.0.1 vs ::1) mismatches while staying loopback-only.
+const wss = new WebSocketServer({ host: 'localhost', port: PORT });
 
 wss.on('listening', () => {
-  log(`WebSocket bridge listening on ws://127.0.0.1:${PORT}`);
+  log(`WebSocket bridge listening on ws://localhost:${PORT}`);
 });
 
 wss.on('error', (error: Error) => {
