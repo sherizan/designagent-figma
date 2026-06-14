@@ -59,5 +59,8 @@ Notes:
   install step.
 - Port is configurable with `DESIGNAGENT_BRIDGE_PORT` (default `3790`); it must match
   the plugin. The socket closes when the plugin window closes.
+- `networkAccess` lists the **`http://`** origin (`http://127.0.0.1:3790`), not `ws://`
+  — Figma rejects the `ws` scheme in the manifest, and an `http` allow-entry still
+  permits the `ws` connection to the same host/port (CSP scheme matching).
 - For the **published** Figma plugin, localhost must move from `devAllowedDomains` to
   `allowedDomains` (with a `reasoning` field) in `manifest.json`.
