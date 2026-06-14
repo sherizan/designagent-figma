@@ -283,7 +283,12 @@ server.registerTool(
       x: z.number().optional(),
       y: z.number().optional(),
       fontSize: z.number().optional(),
-      color: COLOR.optional()
+      weight: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe('Font weight: a number (400, 600, 700) or a style name ("Medium", "Bold").'),
+      color: COLOR.optional(),
+      align: z.enum(['LEFT', 'CENTER', 'RIGHT', 'JUSTIFIED']).optional()
     }
   },
   async (args) => run('create_text', args as Record<string, unknown>)
@@ -340,6 +345,26 @@ server.registerTool(
     }
   },
   async ({ nodeId, characters }) => run('set_text', { nodeId, characters })
+);
+
+server.registerTool(
+  'set_text_style',
+  {
+    description:
+      'Style an existing text node: font size, weight, color, and alignment. Weight resolves against the font family’s available styles.',
+    inputSchema: {
+      nodeId: z.string(),
+      fontSize: z.number().optional(),
+      weight: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe('A number (400, 600, 700) or a style name ("Medium", "Semi Bold", "Bold").'),
+      color: COLOR.optional(),
+      align: z.enum(['LEFT', 'CENTER', 'RIGHT', 'JUSTIFIED']).optional(),
+      valign: z.enum(['TOP', 'CENTER', 'BOTTOM']).optional()
+    }
+  },
+  async (args) => run('set_text_style', args as Record<string, unknown>)
 );
 
 server.registerTool(

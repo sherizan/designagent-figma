@@ -15,9 +15,9 @@ to build production UI from it the design-system-faithful way.
   - read: `status`, `get_design_md`, `get_spec`, `get_score`, `list_issues`
   - act: `focus`, `select`, `annotate`, `apply_fix`
   - create: `create_frame`, `create_text`, `create_rectangle`, `create_ellipse`
-  - style: `set_text`, `set_fill`, `set_corner_radius`, `set_stroke`, `set_shadow`
-    (create tools also take `fill`, `cornerRadius`, `stroke`/`strokeWeight`, and
-    `padding` inline)
+  - style: `set_text`, `set_text_style` (size/weight/color/align), `set_fill`,
+    `set_corner_radius`, `set_stroke`, `set_shadow` (create tools also take `fill`,
+    `cornerRadius`, `stroke`/`strokeWeight`, `padding`, and — for text — `weight`/`align` inline)
 
   Tools appear as `mcp__plugin_designagent_designagent__<tool>`.
 

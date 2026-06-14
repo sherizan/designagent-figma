@@ -781,6 +781,71 @@ async function loadFontForExistingText(node: TextNode): Promise<void> {
   }
 }
 
+const WEIGHT_ALIASES: Record<string, string[]> = {
+  '100': ['Thin', 'Hairline'],
+  '200': ['ExtraLight', 'Extra Light', 'UltraLight'],
+  '300': ['Light'],
+  '400': ['Regular', 'Normal', 'Book'],
+  '500': ['Medium'],
+  '600': ['SemiBold', 'Semi Bold', 'DemiBold', 'Demi Bold'],
+  '700': ['Bold'],
+  '800': ['ExtraBold', 'Extra Bold', 'UltraBold'],
+  '900': ['Black', 'Heavy']
+};
+
+// Apply a font weight to a text node. Weights are family-specific style names in
+// Figma, so resolve the requested weight (a number like 600 or a style name like
+// "Semi Bold") against the styles the node's font family actually ships.
+async function applyTextWeight(node: TextNode, weight: unknown): Promise<void> {
+  const base =
+    node.fontName === figma.mixed
+      ? node.characters.length > 0
+        ? node.getRangeFontName(0, 1)
+        : { family: 'Inter', style: 'Regular' }
+      : node.fontName;
+  const family = base === figma.mixed ? 'Inter' : base.family;
+
+  const raw = String(weight).trim();
+  const candidates = /^\d+$/.test(raw)
+    ? WEIGHT_ALIASES[raw] ?? ['Regular']
+    : [raw, ...(WEIGHT_ALIASES[raw] ?? [])];
+
+  const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, '');
+  const fonts = await figma.listAvailableFontsAsync();
+  const familyStyles = fonts
+    .filter((f) => f.fontName.family === family)
+    .map((f) => f.fontName.style);
+
+  let match: string | undefined;
+  for (const candidate of candidates) {
+    match = familyStyles.find((style) => norm(style) === norm(candidate));
+    if (match) {
+      break;
+    }
+  }
+  if (!match) {
+    throw new Error(
+      `Font "${family}" has no "${raw}" weight. Available: ${familyStyles.join(', ') || 'none'}.`
+    );
+  }
+
+  const fontName = { family, style: match };
+  await figma.loadFontAsync(fontName);
+  node.fontName = fontName;
+}
+
+function normalizeTextAlign(
+  value: unknown
+): 'LEFT' | 'CENTER' | 'RIGHT' | 'JUSTIFIED' | null {
+  const v = String(value ?? '').toUpperCase();
+  return v === 'LEFT' || v === 'CENTER' || v === 'RIGHT' || v === 'JUSTIFIED' ? v : null;
+}
+
+function normalizeTextVAlign(value: unknown): 'TOP' | 'CENTER' | 'BOTTOM' | null {
+  const v = String(value ?? '').toUpperCase();
+  return v === 'TOP' || v === 'CENTER' || v === 'BOTTOM' ? v : null;
+}
+
 function selectAndReturn(node: SceneNode): { id: string; name: string; type: string } {
   figma.currentPage.selection = [node];
   figma.viewport.scrollAndZoomIntoView([node]);
@@ -961,11 +1026,22 @@ async function runBridgeCommand(
       parent.appendChild(text);
       await loadFontForNewText(text);
       text.characters = String(params.characters ?? '');
+      if (params.weight != null) {
+        try {
+          await applyTextWeight(text, params.weight);
+        } catch {
+          // keep the default font if the requested weight isn't available
+        }
+      }
       if (params.fontSize != null) {
         text.fontSize = toNumber(params.fontSize, 16);
       }
       if (params.color != null) {
         text.fills = [solidPaint(params.color)];
+      }
+      const createAlign = normalizeTextAlign(params.align);
+      if (createAlign) {
+        text.textAlignHorizontal = createAlign;
       }
       if (params.name) {
         text.name = String(params.name);
@@ -1041,6 +1117,32 @@ async function runBridgeCommand(
         throw new Error('set_shadow requires a node that supports effects.');
       }
       (node as BlendMixin).effects = [buildDropShadow(params)];
+      return { id: node.id, name: node.name };
+    }
+    case 'set_text_style': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!node || node.type !== 'TEXT') {
+        throw new Error('set_text_style requires the id of a text node.');
+      }
+      if (params.weight != null) {
+        await applyTextWeight(node, params.weight);
+      } else if (params.fontSize != null) {
+        await loadFontForExistingText(node);
+      }
+      if (params.fontSize != null) {
+        node.fontSize = toNumber(params.fontSize, 16);
+      }
+      if (params.color != null) {
+        node.fills = [solidPaint(params.color)];
+      }
+      const alignH = normalizeTextAlign(params.align);
+      if (alignH) {
+        node.textAlignHorizontal = alignH;
+      }
+      const alignV = normalizeTextVAlign(params.valign);
+      if (alignV) {
+        node.textAlignVertical = alignV;
+      }
       return { id: node.id, name: node.name };
     }
     default:
