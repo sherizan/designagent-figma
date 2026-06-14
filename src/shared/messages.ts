@@ -16,6 +16,7 @@ export type ToUIMessage =
       status: 'fixed';
       detail: string;
     }
+  | { type: 'DESIGN_MD_RESULT'; markdown: string; filename: string; frameCount: number }
   | { type: 'ERROR'; message: string };
 
 export type ToPluginMessage =
@@ -31,4 +32,5 @@ export type ToPluginMessage =
       reason: string;
       suggestion: string;
     }
+  | { type: 'EXPORT_DESIGN_MD' }
   | { type: 'REFRESH_REQUEST' };

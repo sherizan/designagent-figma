@@ -6,10 +6,17 @@ import type {
   PresetTarget,
   ScoreResult,
   SelectedNodeInfo,
-  UiNodeSpec,
   UiSpec
 } from './types';
 import { PRESET_DEFINITIONS } from './types';
+import {
+  buildCompositionSummary,
+  buildDesignerIntent,
+  buildGroundTruthCss,
+  buildInstanceHints,
+  buildResolvedTokensSection,
+  flattenNodes
+} from './serialize';
 
 export interface PromptBundle {
   full: string;
@@ -87,95 +94,6 @@ function getStackFields(target: PresetTarget): StackFields {
   }
 }
 
-function flattenNodes(root: UiNodeSpec): UiNodeSpec[] {
-  const queue: UiNodeSpec[] = [root];
-  const result: UiNodeSpec[] = [];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) {
-      continue;
-    }
-    result.push(current);
-    for (const child of current.children) {
-      queue.push(child);
-    }
-  }
-
-  return result;
-}
-
-function buildResolvedTokensSection(uiSpec: UiSpec): string | null {
-  const resolved = uiSpec.tokenization.resolvedVariables;
-  if (!resolved || resolved.length === 0) {
-    return null;
-  }
-
-  // De-dupe by collection+name+mode-values. Same logical token can show up
-  // multiple times when it's imported from several collections.
-  const seen = new Set<string>();
-  const deduped: typeof resolved = [];
-  for (const variable of resolved) {
-    const sig = `${variable.collection}|${variable.name}|${JSON.stringify(variable.modes)}`;
-    if (seen.has(sig)) {
-      continue;
-    }
-    seen.add(sig);
-    deduped.push(variable);
-  }
-
-  const lines: string[] = [];
-  for (const variable of deduped.slice(0, 30)) {
-    const modes = Object.entries(variable.modes)
-      .map(([mode, value]) => `${mode}=${value}`)
-      .join(', ');
-    lines.push(`- ${variable.collection}/${variable.name} (${variable.resolvedType}): ${modes}`);
-  }
-  if (deduped.length > 30) {
-    lines.push(`- (${deduped.length - 30} more omitted)`);
-  }
-  return lines.join('\n');
-}
-
-function buildGroundTruthCss(uiSpec: UiSpec): string {
-  const nodes = flattenNodes(uiSpec.root).filter((node) => node.css);
-  if (nodes.length === 0) {
-    return '- No ground-truth CSS captured for this selection.';
-  }
-
-  const lines = ['- Ground-truth CSS from Figma Inspect (computed values):'];
-  for (const node of nodes.slice(0, 12)) {
-    const css = node.css ?? {};
-    const cssLines = Object.entries(css)
-      .map(([key, value]) => `      ${key}: ${value};`)
-      .join('\n');
-    lines.push(`  - ${node.name} (${node.id}) [${node.type}]:`);
-    lines.push(cssLines);
-  }
-  if (nodes.length > 12) {
-    lines.push(`  - ...${nodes.length - 12} more nodes with CSS omitted (favour MCP for the rest)`);
-  }
-  return lines.join('\n');
-}
-
-function buildDesignerIntent(uiSpec: UiSpec): string {
-  const nodes = flattenNodes(uiSpec.root).filter(
-    (node) => node.annotations && node.annotations.length > 0
-  );
-  if (nodes.length === 0) {
-    return '- No designer annotations on this selection.';
-  }
-
-  const lines = ['- Designer intent from Figma annotations:'];
-  for (const node of nodes.slice(0, 20)) {
-    for (const annotation of node.annotations ?? []) {
-      const category = annotation.category ? `[${annotation.category}] ` : '';
-      lines.push(`  - ${node.name} (${node.id}): ${category}${annotation.label}`);
-    }
-  }
-  return lines.join('\n');
-}
-
 function buildVisualReference(assets: ExportedAsset[] | undefined): string {
   if (!assets || assets.length === 0) {
     return '- No visual reference attached.';
@@ -194,53 +112,6 @@ function buildVisualReference(assets: ExportedAsset[] | undefined): string {
   return lines.join('\n');
 }
 
-function buildInstanceHints(uiSpec: UiSpec): string | null {
-  const instances = flattenNodes(uiSpec.root).filter((node) => node.type === 'INSTANCE');
-  if (instances.length === 0) {
-    return null;
-  }
-
-  // De-dupe repeats of the same component with the same variant props.
-  const grouped = new Map<
-    string,
-    { name: string; componentName: string; props: string; count: number }
-  >();
-  for (const node of instances) {
-    const componentName = node.instance?.mainComponentName ?? '?';
-    const props = node.instance?.componentProperties
-      ? Object.entries(node.instance.componentProperties)
-          .map(([key, value]) => `${key}=${String(value)}`)
-          .sort()
-          .join(', ')
-      : '';
-    const key = `${componentName}|${props}`;
-    const existing = grouped.get(key);
-    if (existing) {
-      existing.count += 1;
-    } else {
-      grouped.set(key, { name: node.name, componentName, props, count: 1 });
-    }
-  }
-
-  const entries = Array.from(grouped.values()).sort((a, b) => b.count - a.count);
-  const lines: string[] = [];
-  for (const entry of entries.slice(0, 15)) {
-    const countSuffix = entry.count > 1 ? ` ×${entry.count}` : '';
-    // Skip the "<instanceName> → <componentName>" arrow when they're the
-    // same word (common when an instance is named after its component set).
-    const headline =
-      entry.name === entry.componentName
-        ? entry.componentName
-        : `${entry.name} → ${entry.componentName}`;
-    const propsTail = entry.props ? ` — ${entry.props}` : '';
-    lines.push(`- ${headline}${countSuffix}${propsTail}`);
-  }
-  if (entries.length > 15) {
-    lines.push(`- (${entries.length - 15} more component groups omitted)`);
-  }
-  return lines.join('\n');
-}
-
 function toIntentScope(intent: Intent): string {
   if (intent === 'screen') {
     return 'screen';
@@ -251,17 +122,6 @@ function toIntentScope(intent: Intent): string {
   }
 
   return 'section (reusable module)';
-}
-
-function buildCompositionSummary(uiSpec: UiSpec): string {
-  const { stats } = uiSpec;
-  const parts: string[] = [`${stats.totalNodes} nodes`];
-  if (stats.frames > 0) parts.push(`${stats.frames} frames`);
-  if (stats.instances > 0) parts.push(`${stats.instances} instances`);
-  if (stats.textNodes > 0) parts.push(`${stats.textNodes} text`);
-  if (stats.autoLayoutFrames > 0) parts.push(`${stats.autoLayoutFrames} auto-layout`);
-  if (stats.absoluteNodes > 0) parts.push(`${stats.absoluteNodes} absolute-positioned`);
-  return parts.join(', ');
 }
 
 function appendSection(lines: string[], title: string, body: string | null): void {

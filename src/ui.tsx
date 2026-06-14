@@ -220,6 +220,24 @@ function downloadAsset(asset: ExportedAsset): boolean {
   }
 }
 
+function downloadTextFile(filename: string, text: string, mime = 'text/markdown'): boolean {
+  try {
+    const blob = new Blob([text], { type: `${mime};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = sanitizeFilename(filename) || 'DESIGN.md';
+    anchor.rel = 'noopener';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function toIntentLabel(intent: 'screen' | 'component' | 'section'): string {
   if (intent === 'screen') {
     return 'Screen';
@@ -336,6 +354,19 @@ function App(): JSX.Element {
         return;
       }
 
+      if (message.type === 'DESIGN_MD_RESULT') {
+        setError('');
+        const saved = downloadTextFile(message.filename, message.markdown);
+        const frameLabel = message.frameCount === 1 ? 'frame' : 'frames';
+        setCopyStatus(
+          saved
+            ? `DESIGN.md saved (${message.frameCount} ${frameLabel})`
+            : 'DESIGN.md export failed'
+        );
+        setTimeout(() => setCopyStatus(''), 2600);
+        return;
+      }
+
       if (message.type === 'ERROR') {
         setError(message.message);
         setAnalyzing(null);
@@ -440,6 +471,14 @@ function App(): JSX.Element {
       setCopyStatus(`Copy failed: ${result.reason ?? 'unknown'}`);
     }
     setTimeout(() => setCopyStatus(''), 3000);
+  };
+
+  const onExportDesignMd = () => {
+    if (!analysis.hasSelection) {
+      return;
+    }
+    setCopyStatus('Generating DESIGN.md…');
+    postPluginMessage({ type: 'EXPORT_DESIGN_MD' });
   };
 
   const onApplySelectionLink = () => {
@@ -561,6 +600,7 @@ function App(): JSX.Element {
                   onCopyImage={onCopyImage}
                   onSavePng={onSavePng}
                   onCopyPromptAndImage={onCopyPromptAndImage}
+                  onExportDesignMd={onExportDesignMd}
                 />
               </div>
 
@@ -608,6 +648,7 @@ function App(): JSX.Element {
               onCopyImage={onCopyImage}
               onSavePng={onSavePng}
               onCopyPromptAndImage={onCopyPromptAndImage}
+              onExportDesignMd={onExportDesignMd}
             />
           )
         ) : (
