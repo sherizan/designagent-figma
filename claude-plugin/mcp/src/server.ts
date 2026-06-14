@@ -240,6 +240,103 @@ server.registerTool(
   async ({ nodeId, fix }) => run('apply_fix', { nodeId, fix })
 );
 
+// ---- Create / edit tools (design from Claude into Figma) ----
+
+const COLOR = z.string().describe('Hex color, e.g. "#3366ff" (optional 8-digit for alpha).');
+
+server.registerTool(
+  'create_frame',
+  {
+    description:
+      'Create a frame on the Figma canvas. Optionally give it Auto Layout. Defaults to the current page at (0,0) sized 100×100; pass parentId to nest it inside another frame/section.',
+    inputSchema: {
+      name: z.string().optional(),
+      parentId: z.string().optional().describe('Container node id to nest inside; omit for current page.'),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      width: z.number().optional(),
+      height: z.number().optional(),
+      layoutMode: z.enum(['NONE', 'HORIZONTAL', 'VERTICAL']).optional(),
+      itemSpacing: z.number().optional().describe('Gap between children when Auto Layout is on.'),
+      fill: COLOR.optional()
+    }
+  },
+  async (args) => run('create_frame', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'create_text',
+  {
+    description: 'Create a text node on the Figma canvas (font loading is handled automatically).',
+    inputSchema: {
+      characters: z.string().describe('The text content.'),
+      name: z.string().optional(),
+      parentId: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      fontSize: z.number().optional(),
+      color: COLOR.optional()
+    }
+  },
+  async (args) => run('create_text', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'create_rectangle',
+  {
+    description: 'Create a rectangle shape on the Figma canvas.',
+    inputSchema: {
+      name: z.string().optional(),
+      parentId: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      width: z.number().optional(),
+      height: z.number().optional(),
+      fill: COLOR.optional(),
+      cornerRadius: z.number().optional()
+    }
+  },
+  async (args) => run('create_rectangle', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'create_ellipse',
+  {
+    description: 'Create an ellipse shape on the Figma canvas.',
+    inputSchema: {
+      name: z.string().optional(),
+      parentId: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      width: z.number().optional(),
+      height: z.number().optional(),
+      fill: COLOR.optional()
+    }
+  },
+  async (args) => run('create_ellipse', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'set_text',
+  {
+    description: 'Replace the text content of an existing text node.',
+    inputSchema: {
+      nodeId: z.string().describe('The text node id.'),
+      characters: z.string().describe('The new text content.')
+    }
+  },
+  async ({ nodeId, characters }) => run('set_text', { nodeId, characters })
+);
+
+server.registerTool(
+  'set_fill',
+  {
+    description: 'Set a solid fill color on an existing node.',
+    inputSchema: { nodeId: z.string(), color: COLOR }
+  },
+  async ({ nodeId, color }) => run('set_fill', { nodeId, color })
+);
+
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
