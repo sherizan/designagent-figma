@@ -1,4 +1,4 @@
-import type { AnalysisResult, Mode, Preset } from '../core/types';
+import type { AnalysisResult, Mode } from '../core/types';
 
 export type ToUIMessage =
   | {
@@ -22,7 +22,6 @@ export type ToUIMessage =
   | { type: 'ERROR'; message: string };
 
 export type ToPluginMessage =
-  | { type: 'SET_PRESET'; preset: Preset }
   | { type: 'SET_MODE'; mode: Mode }
   | { type: 'SET_FIGMA_LINK_BASE'; link: string }
   | { type: 'FOCUS_NODE'; nodeId: string }

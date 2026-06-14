@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { type AnalysisResult, type ExportedAsset, type Preset } from './core/types';
+import { type AnalysisResult, type ExportedAsset } from './core/types';
 import type { ToUIMessage } from './shared/messages';
 import {
   AppHeader,
@@ -12,8 +12,7 @@ import {
   Footer,
   LoadingPanel,
   type MainTab,
-  MainTabs,
-  PresetSelector
+  MainTabs
 } from './ui_components';
 import { UI_STYLES } from './ui_theme';
 
@@ -21,7 +20,6 @@ const BRIDGE_URL = 'ws://localhost:3790';
 
 const INITIAL_ANALYSIS: AnalysisResult = {
   hasSelection: false,
-  preset: 'swiftui-ios',
   mode: 'system-first',
   flowCapable: false,
   message: 'Select a frame, instance or section.'
@@ -121,7 +119,6 @@ function getErrorHelpLink(error: string): string | undefined {
 }
 
 function App(): JSX.Element {
-  const [preset, setPreset] = useState<Preset>('swiftui-ios');
   const [mainTab, setMainTab] = useState<MainTab>('design-to-code');
   const [analysis, setAnalysis] = useState<AnalysisResult>(INITIAL_ANALYSIS);
   const [error, setError] = useState<string>('');
@@ -156,7 +153,6 @@ function App(): JSX.Element {
         setError('');
         setAnalyzing(null);
         setAnalysis(message.payload);
-        setPreset(message.payload.preset);
         return;
       }
 
@@ -336,11 +332,6 @@ function App(): JSX.Element {
     [pngAsset]
   );
 
-  const onSelectPreset = (nextPreset: Preset) => {
-    setPreset(nextPreset);
-    postPluginMessage({ type: 'SET_PRESET', preset: nextPreset });
-  };
-
   const onExportDesignMd = () => {
     if (!analysis.hasSelection) {
       return;
@@ -394,26 +385,22 @@ function App(): JSX.Element {
         ) : null}
 
         {mainTab === 'design-to-code' ? (
-          <>
-            <PresetSelector preset={preset} onSelectPreset={onSelectPreset} />
-
-            {analyzing ? (
-              <LoadingPanel nodeName={analyzing.nodeName} nodeType={analyzing.nodeType} />
-            ) : analysis.hasSelection ? (
-              <ExportPanel
-                intentLabel={toIntentLabel(analysis.intent)}
-                selectedNodeName={analysis.selectedNode.name}
-                status={status}
-                hasImageAsset={Boolean(pngAsset)}
-                imageSizeKb={imageSizeKb}
-                onExportDesignMd={onExportDesignMd}
-                onExportHtml={onExportHtml}
-                onSavePng={onSavePng}
-              />
-            ) : (
-              <EmptyState message={analysis.message} />
-            )}
-          </>
+          analyzing ? (
+            <LoadingPanel nodeName={analyzing.nodeName} nodeType={analyzing.nodeType} />
+          ) : analysis.hasSelection ? (
+            <ExportPanel
+              intentLabel={toIntentLabel(analysis.intent)}
+              selectedNodeName={analysis.selectedNode.name}
+              status={status}
+              hasImageAsset={Boolean(pngAsset)}
+              imageSizeKb={imageSizeKb}
+              onExportDesignMd={onExportDesignMd}
+              onExportHtml={onExportHtml}
+              onSavePng={onSavePng}
+            />
+          ) : (
+            <EmptyState message={analysis.message} />
+          )
         ) : (
           <CapabilityView />
         )}
