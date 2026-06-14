@@ -25009,7 +25009,9 @@ server.registerTool(
       x: external_exports.number().optional(),
       y: external_exports.number().optional(),
       fontSize: external_exports.number().optional(),
-      color: COLOR.optional()
+      weight: external_exports.union([external_exports.string(), external_exports.number()]).optional().describe('Font weight: a number (400, 600, 700) or a style name ("Medium", "Bold").'),
+      color: COLOR.optional(),
+      align: external_exports.enum(["LEFT", "CENTER", "RIGHT", "JUSTIFIED"]).optional()
     }
   },
   async (args) => run("create_text", args)
@@ -25063,6 +25065,21 @@ server.registerTool(
     }
   },
   async ({ nodeId, characters }) => run("set_text", { nodeId, characters })
+);
+server.registerTool(
+  "set_text_style",
+  {
+    description: "Style an existing text node: font size, weight, color, and alignment. Weight resolves against the font family\u2019s available styles.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      fontSize: external_exports.number().optional(),
+      weight: external_exports.union([external_exports.string(), external_exports.number()]).optional().describe('A number (400, 600, 700) or a style name ("Medium", "Semi Bold", "Bold").'),
+      color: COLOR.optional(),
+      align: external_exports.enum(["LEFT", "CENTER", "RIGHT", "JUSTIFIED"]).optional(),
+      valign: external_exports.enum(["TOP", "CENTER", "BOTTOM"]).optional()
+    }
+  },
+  async (args) => run("set_text_style", args)
 );
 server.registerTool(
   "set_fill",
