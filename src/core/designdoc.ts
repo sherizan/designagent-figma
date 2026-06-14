@@ -197,7 +197,10 @@ export function generateDesignDoc(frames: DesignDocFrame[], meta: DesignDocMeta)
       'Save this file as `DESIGN.md` in your project root, then add `@DESIGN.md` to your',
       '`CLAUDE.md` so Claude Code loads it automatically each session. Treat the values above',
       '(tokens, component names, layout, text) as the source of truth — use them verbatim and',
-      'avoid guessing. Where detail is missing, query the Figma MCP using the per-frame links.'
+      'avoid guessing. Where detail is missing, query the Figma MCP using the per-frame links.',
+      '',
+      'To build it: with the DesignAgent Claude Code plugin installed, run',
+      '`/designagent:design-to-code`; otherwise just ask Claude Code to build from `DESIGN.md`.'
     ].join('\n')
   );
 
