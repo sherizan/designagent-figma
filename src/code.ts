@@ -846,6 +846,25 @@ function normalizeTextVAlign(value: unknown): 'TOP' | 'CENTER' | 'BOTTOM' | null
   return v === 'TOP' || v === 'CENTER' || v === 'BOTTOM' ? v : null;
 }
 
+function normalizeScaleMode(value: unknown): 'FILL' | 'FIT' | 'CROP' | 'TILE' {
+  const v = String(value ?? '').toUpperCase();
+  return v === 'FIT' || v === 'CROP' || v === 'TILE' ? v : 'FILL';
+}
+
+// Decode base64 image bytes (sent by the MCP server, which did the network/file
+// IO the plugin sandbox can't) and register them as a Figma image.
+function imagePaintFromBase64(base64: unknown, scaleMode: unknown): { paint: ImagePaint; image: Image } {
+  const data = String(base64 ?? '');
+  if (!data) {
+    throw new Error('No image data received.');
+  }
+  const image = figma.createImage(figma.base64Decode(data));
+  return {
+    image,
+    paint: { type: 'IMAGE', scaleMode: normalizeScaleMode(scaleMode), imageHash: image.hash }
+  };
+}
+
 function selectAndReturn(node: SceneNode): { id: string; name: string; type: string } {
   figma.currentPage.selection = [node];
   figma.viewport.scrollAndZoomIntoView([node]);
@@ -1144,6 +1163,34 @@ async function runBridgeCommand(
         node.textAlignVertical = alignV;
       }
       return { id: node.id, name: node.name };
+    }
+    case 'set_image': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('fills' in node)) {
+        throw new Error('set_image requires a node that supports fills.');
+      }
+      const { paint } = imagePaintFromBase64(params.imageBase64, params.scaleMode);
+      (node as GeometryMixin).fills = [paint];
+      return { id: node.id, name: node.name };
+    }
+    case 'place_image': {
+      const parent = await resolveParentContainer(params.parentId);
+      const { paint, image } = imagePaintFromBase64(params.imageBase64, params.scaleMode);
+      const size = await image.getSizeAsync();
+      const rect = figma.createRectangle();
+      if (params.name) {
+        rect.name = String(params.name);
+      }
+      const width = params.width != null ? toNumber(params.width, size.width) : size.width;
+      const height = params.height != null ? toNumber(params.height, size.height) : size.height;
+      rect.resize(Math.max(1, width), Math.max(1, height));
+      rect.fills = [paint];
+      parent.appendChild(rect);
+      if (parent.type === 'PAGE') {
+        rect.x = toNumber(params.x, 0);
+        rect.y = toNumber(params.y, 0);
+      }
+      return { ...selectAndReturn(rect), width, height };
     }
     default:
       throw new Error(`Unknown command: ${command}`);
