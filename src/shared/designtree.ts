@@ -12,7 +12,7 @@ export interface DesignTreeShadow {
 }
 
 export interface DesignTreeNode {
-  kind: 'frame' | 'text' | 'image';
+  kind: 'frame' | 'text' | 'image' | 'svg';
   x: number;
   y: number;
   width: number;
@@ -29,7 +29,9 @@ export interface DesignTreeNode {
   fontWeight?: number;
   textAlign?: string;
   textColor?: string;
-  // image
+  multiline?: boolean;
+  // image / svg
   dataUrl?: string;
+  svg?: string;
   children: DesignTreeNode[];
 }

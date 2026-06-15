@@ -485,7 +485,7 @@ function App(): JSX.Element {
     <div className="app-shell">
       <style>{UI_STYLES}</style>
       <div className="app-body">
-        <AppHeader version="v1.6.1" />
+        <AppHeader version="v1.6.2" />
 
         <BridgeBar
           status={bridgeStatus}
