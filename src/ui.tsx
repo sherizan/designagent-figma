@@ -140,6 +140,8 @@ function App(): JSX.Element {
   >(null);
   const [bridgeEnabled, setBridgeEnabled] = useState<boolean>(false);
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>('off');
+  const [sessions, setSessions] = useState<Array<{ id: string; label: string; root: string; selected: boolean }>>([]);
+  const [projectConfirmed, setProjectConfirmed] = useState<boolean>(false);
   const [designMd, setDesignMd] = useState<{
     checked: boolean;
     exists: boolean;
@@ -340,6 +342,8 @@ function App(): JSX.Element {
           command?: string;
           params?: unknown;
           serverInstanceId?: string;
+          sessions?: unknown;
+          sessionId?: string;
         };
         try {
           msg = JSON.parse(messageEvent.data);
@@ -366,6 +370,19 @@ function App(): JSX.Element {
           reconnectAttempt.current = 0;
           setBridgeStatus('connected');
           setLastHeartbeatAt(lastServerMessageAt.current);
+          return;
+        }
+        if (msg.type === 'sessions' && Array.isArray(msg.sessions)) {
+          const list = (msg.sessions as unknown[])
+            .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
+            .map((s) => ({
+              id: String(s.id ?? ''),
+              label: String(s.label ?? ''),
+              root: String(s.root ?? ''),
+              selected: Boolean(s.selected)
+            }))
+            .filter((s) => s.id);
+          setSessions(list);
           return;
         }
         if (msg.type === 'ping') {
@@ -536,6 +553,16 @@ function App(): JSX.Element {
     });
   };
 
+  // Pick which connected project the plugin reads/writes; refresh derived views.
+  const selectSession = (sessionId: string) => {
+    const socket = socketRef.current;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'select_session', sessionId }));
+    }
+    setProjectConfirmed(true);
+    void checkDesignMd();
+  };
+
   // Render a tree in the sandbox and await the result (UI-initiated, not a bridge call).
   const renderTreeLocally = (
     tree: DesignTreeNode
@@ -588,6 +615,16 @@ function App(): JSX.Element {
     }
   }
 
+  // Auto-skip the picker gate when there's exactly one project; reset when the
+  // bridge drops or all sessions leave.
+  useEffect(() => {
+    if (bridgeStatus !== 'connected' || sessions.length === 0) {
+      setProjectConfirmed(false);
+    } else if (sessions.length === 1) {
+      setProjectConfirmed(true);
+    }
+  }, [bridgeStatus, sessions.length]);
+
   // Re-check whenever the bridge connects; clear when it drops.
   useEffect(() => {
     if (bridgeStatus === 'connected') {
@@ -596,7 +633,7 @@ function App(): JSX.Element {
       setDesignMd({ checked: false, exists: false, root: '' });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridgeStatus]);
+  }, [bridgeStatus, sessions.find((s) => s.selected)?.id]);
 
   const onExportDesignMd = () => {
     if (!analysis.hasSelection) {
