@@ -8,7 +8,9 @@ export type BridgeStatus = 'off' | 'connecting' | 'connected' | 'error';
 interface BridgeBarProps {
   status: BridgeStatus;
   enabled: boolean;
+  lastHeartbeatAt: number | null;
   onToggle: () => void;
+  onReconnect: () => void;
 }
 
 const BRIDGE_META: Record<BridgeStatus, { color: string; label: string }> = {
@@ -18,9 +20,34 @@ const BRIDGE_META: Record<BridgeStatus, { color: string; label: string }> = {
   error: { color: '#e0653d', label: 'Retrying…' }
 };
 
+function formatAgo(timestamp: number, now: number): string {
+  const seconds = Math.max(0, Math.round((now - timestamp) / 1000));
+  if (seconds < 60) {
+    return `${seconds}s ago`;
+  }
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s ago`;
+}
+
+// Live "Ns ago" readout for the last bridge heartbeat — distinguishes a truly
+// live cross-process bridge from a stale/half-open socket showing green.
+function HeartbeatReadout({ at }: { at: number }): JSX.Element {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <span className="bridge-heartbeat">heartbeat {formatAgo(at, now)}</span>;
+}
+
 // The app's top bar — styled like a header (flat, no card). It's the Claude
 // Bridge title + live status, with Enable/Disable and a Setup disclosure.
-export function BridgeBar({ status, enabled, onToggle }: BridgeBarProps): JSX.Element {
+export function BridgeBar({
+  status,
+  enabled,
+  lastHeartbeatAt,
+  onToggle,
+  onReconnect
+}: BridgeBarProps): JSX.Element {
   const meta = BRIDGE_META[status];
   // Setup starts open and collapses once the bridge is connected; the user can
   // still toggle it manually, and it re-opens if the connection drops.
@@ -47,12 +74,22 @@ export function BridgeBar({ status, enabled, onToggle }: BridgeBarProps): JSX.El
                 }}
               />
               <span>{meta.label}</span>
+              {status === 'connected' && lastHeartbeatAt !== null ? (
+                <HeartbeatReadout at={lastHeartbeatAt} />
+              ) : null}
             </span>
           </div>
         </div>
-        <button type="button" className={enabled ? 'btn' : 'btn-primary'} onClick={onToggle}>
-          {enabled ? 'Disable' : 'Enable'}
-        </button>
+        <div className="bridge-actions">
+          {enabled ? (
+            <button type="button" className="btn" onClick={onReconnect}>
+              Reconnect
+            </button>
+          ) : null}
+          <button type="button" className={enabled ? 'btn' : 'btn-primary'} onClick={onToggle}>
+            {enabled ? 'Disable' : 'Enable'}
+          </button>
+        </div>
       </div>
 
       <details

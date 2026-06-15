@@ -117,6 +117,14 @@ function App(): JSX.Element {
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<number | null>(null);
   const reconnectAttempt = useRef<number>(0);
+  // The MCP server instance we're currently paired with (from hello_ack), and the
+  // last time we heard anything from it (used by the liveness watchdog + UI readout).
+  const serverInstanceId = useRef<string | null>(null);
+  const lastServerMessageAt = useRef<number>(0);
+  const [lastHeartbeatAt, setLastHeartbeatAt] = useState<number | null>(null);
+  // Force a teardown + immediate reconnect; populated by the bridge effect so the
+  // "Reconnect" button can re-handshake without toggling Disable→Enable.
+  const forceReconnect = useRef<(() => void) | null>(null);
   type Resolver = (msg: { ok: boolean; result?: unknown; error?: string }) => void;
   const serverPending = useRef<Map<string, Resolver>>(new Map());
   const localRenders = useRef<Map<string, Resolver>>(new Map());
@@ -235,6 +243,7 @@ function App(): JSX.Element {
   useEffect(() => {
     if (!bridgeEnabled) {
       setBridgeStatus('off');
+      setLastHeartbeatAt(null);
       return;
     }
 
@@ -278,8 +287,9 @@ function App(): JSX.Element {
           socket.close();
           return;
         }
-        reconnectAttempt.current = 0;
-        setBridgeStatus('connected');
+        // A socket being open only means we reached *something* on the port — not
+        // that we're paired with the live MCP server. Stay "connecting" until the
+        // server answers our hello with a hello_ack.
         try {
           socket.send(JSON.stringify({ type: 'hello', role: 'figma-plugin' }));
         } catch {
@@ -291,7 +301,13 @@ function App(): JSX.Element {
         if (typeof messageEvent.data !== 'string') {
           return;
         }
-        let msg: { type?: string; id?: string; command?: string; params?: unknown };
+        let msg: {
+          type?: string;
+          id?: string;
+          command?: string;
+          params?: unknown;
+          serverInstanceId?: string;
+        };
         try {
           msg = JSON.parse(messageEvent.data);
         } catch {
@@ -300,7 +316,27 @@ function App(): JSX.Element {
         if (!msg || typeof msg !== 'object') {
           return;
         }
+        // Any inbound message proves the live server is talking to us.
+        lastServerMessageAt.current = Date.now();
+        if (msg.type === 'hello_ack') {
+          const incoming = typeof msg.serverInstanceId === 'string' ? msg.serverInstanceId : null;
+          const previous = serverInstanceId.current;
+          if (previous && incoming && previous !== incoming) {
+            // We've re-paired with a different server process (e.g. after a Claude
+            // Code restart). Abandon requests bound to the old instance.
+            for (const [id, resolve] of serverPending.current) {
+              resolve({ ok: false, error: 'Bridge re-paired with a new server instance.' });
+              serverPending.current.delete(id);
+            }
+          }
+          serverInstanceId.current = incoming;
+          reconnectAttempt.current = 0;
+          setBridgeStatus('connected');
+          setLastHeartbeatAt(lastServerMessageAt.current);
+          return;
+        }
         if (msg.type === 'ping') {
+          setLastHeartbeatAt(lastServerMessageAt.current);
           try {
             socket.send(JSON.stringify({ type: 'pong' }));
           } catch {
@@ -370,12 +406,54 @@ function App(): JSX.Element {
       };
     }
 
+    // Tear down the current socket (if any) and reconnect immediately. Used by
+    // the watchdog (silent peer) and the "Reconnect" button. Distinct from
+    // Disable→Enable, which unmounts the whole effect.
+    const reconnectNow = () => {
+      if (cancelled) {
+        return;
+      }
+      const socket = socketRef.current;
+      socketRef.current = null;
+      if (socket) {
+        socket.onclose = null; // we drive the reconnect ourselves
+        try {
+          socket.close();
+        } catch {
+          // ignore
+        }
+      }
+      reconnectAttempt.current = 0;
+      clearReconnect();
+      connect();
+    };
+    forceReconnect.current = reconnectNow;
+
+    // Liveness watchdog: the live server pings every ~20s and acks our hello.
+    // If we've heard nothing for a while, the socket is half-open or paired to a
+    // dead instance — force a reconnect so the indicator can't lie.
+    const STALE_AFTER_MS = 45000;
+    const watchdog = window.setInterval(() => {
+      if (cancelled || lastServerMessageAt.current === 0) {
+        return;
+      }
+      if (Date.now() - lastServerMessageAt.current > STALE_AFTER_MS) {
+        setBridgeStatus('error');
+        lastServerMessageAt.current = 0;
+        reconnectNow();
+      }
+    }, 10000);
+
     reconnectAttempt.current = 0;
     connect();
 
     return () => {
       cancelled = true;
       clearReconnect();
+      window.clearInterval(watchdog);
+      forceReconnect.current = null;
+      serverInstanceId.current = null;
+      lastServerMessageAt.current = 0;
       const socket = socketRef.current;
       socketRef.current = null;
       if (socket) {
@@ -541,7 +619,9 @@ function App(): JSX.Element {
         <BridgeBar
           status={bridgeStatus}
           enabled={bridgeEnabled}
+          lastHeartbeatAt={lastHeartbeatAt}
           onToggle={() => setBridgeEnabled((value) => !value)}
+          onReconnect={() => forceReconnect.current?.()}
         />
 
         <MainTabs active={mainTab} onChange={setMainTab} />

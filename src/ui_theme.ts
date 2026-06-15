@@ -495,6 +495,25 @@ export const UI_STYLES = `
     gap: 10px;
   }
 
+  .bridge-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+  }
+
+  .bridge-heartbeat {
+    color: var(--text-muted);
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .bridge-status .bridge-heartbeat::before {
+    content: '·';
+    margin: 0 6px 0 2px;
+  }
+
   .bridge-bar .bridge-setup {
     margin-top: 12px;
     border: 1px solid var(--border);

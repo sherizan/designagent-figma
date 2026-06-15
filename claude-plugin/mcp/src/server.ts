@@ -19,6 +19,12 @@ import { WebSocketServer, WebSocket } from 'ws';
 
 const PORT = Number(process.env.DESIGNAGENT_BRIDGE_PORT ?? 3790);
 const REQUEST_TIMEOUT_MS = 20000;
+const HEARTBEAT_MS = 20000;
+
+// Identifies this specific server process. Sent to the plugin in the handshake
+// ack so the plugin can tell when it has (re)paired with a *different* server
+// instance — e.g. after Claude Code restarts and spawns a fresh MCP server.
+const SERVER_INSTANCE_ID = randomUUID();
 
 function log(...args: unknown[]): void {
   console.error('[designagent-mcp]', ...args);
@@ -26,6 +32,8 @@ function log(...args: unknown[]): void {
 
 // ---- WebSocket bridge to the Figma plugin ----
 
+// The ws library has no typings for our liveness flag; track it on the side.
+const aliveSockets = new WeakSet<WebSocket>();
 let pluginSocket: WebSocket | null = null;
 const pending = new Map<
   string,
@@ -34,7 +42,13 @@ const pending = new Map<
 
 function handleConnection(socket: WebSocket): void {
   pluginSocket = socket;
+  aliveSockets.add(socket);
   log('DesignAgent plugin connected.');
+
+  // ws protocol-level pong (from socket.ping()) — proves the peer is alive.
+  socket.on('pong', () => {
+    aliveSockets.add(socket);
+  });
 
   socket.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
     let msg: {
@@ -85,7 +99,24 @@ function handleConnection(socket: WebSocket): void {
         entry.reject(new Error(msg.error || 'DesignAgent plugin reported an error.'));
       }
     }
-    // 'pong' and 'hello' need no handling beyond keeping the socket alive.
+    // The plugin announces itself with `hello`; acknowledge it so the plugin
+    // only shows "Connected" once it has confirmed a live, end-to-end pairing
+    // with *this* server instance (not merely an open socket to port 3790).
+    if (msg.type === 'hello') {
+      aliveSockets.add(socket);
+      try {
+        socket.send(
+          JSON.stringify({ type: 'hello_ack', serverInstanceId: SERVER_INSTANCE_ID, pid: process.pid })
+        );
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    // App-level 'pong' (reply to our JSON ping) also marks the socket alive.
+    if (msg.type === 'pong') {
+      aliveSockets.add(socket);
+    }
   });
 
   socket.on('close', () => {
@@ -105,24 +136,59 @@ function handleConnection(socket: WebSocket): void {
 // loopback-only (never exposed to the LAN). The manifest allows http://localhost
 // and the plugin connects to ws://localhost; CSP matches on the host name.
 const BIND_HOSTS = ['127.0.0.1', '::1'];
-for (const host of BIND_HOSTS) {
+const BIND_RETRY_MS = 250;
+const BIND_MAX_ATTEMPTS = 40; // ~10s of retries
+
+// A previous server process (e.g. before a Claude Code restart) can still hold
+// the port for a moment. Rather than failing permanently and leaving the bridge
+// dead, retry the bind until the orphan releases it. The old process now exits
+// on stdin close (see main()), so the window is short.
+function bind(host: string, attempt = 1): void {
   const display = host.includes(':') ? `[${host}]` : host;
   const wss = new WebSocketServer({ host, port: PORT });
   wss.on('listening', () => log(`WebSocket bridge listening on ws://${display}:${PORT}`));
-  wss.on('error', (error: Error) => log(`Bind ${display}:${PORT} failed: ${error.message}`));
   wss.on('connection', handleConnection);
+  wss.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EADDRINUSE' && attempt < BIND_MAX_ATTEMPTS) {
+      log(`Bind ${display}:${PORT} in use (attempt ${attempt}), retrying in ${BIND_RETRY_MS}ms…`);
+      setTimeout(() => bind(host, attempt + 1), BIND_RETRY_MS);
+      return;
+    }
+    log(`Bind ${display}:${PORT} failed: ${error.message}`);
+  });
+}
+for (const host of BIND_HOSTS) {
+  bind(host);
 }
 
-// Heartbeat so dead connections are noticed.
+// Heartbeat so dead (including half-open) connections are noticed and cleared.
+// First drop any socket that didn't answer the previous round, then probe again
+// with both a ws-level ping and the app-level JSON ping the plugin UI expects.
 setInterval(() => {
-  if (pluginSocket && pluginSocket.readyState === WebSocket.OPEN) {
+  const socket = pluginSocket;
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  if (!aliveSockets.has(socket)) {
+    log('Plugin socket missed heartbeat; terminating.');
+    if (pluginSocket === socket) {
+      pluginSocket = null;
+    }
     try {
-      pluginSocket.send(JSON.stringify({ type: 'ping' }));
+      socket.terminate();
     } catch {
       // ignore
     }
+    return;
   }
-}, 20000);
+  aliveSockets.delete(socket);
+  try {
+    socket.ping();
+    socket.send(JSON.stringify({ type: 'ping' }));
+  } catch {
+    // ignore
+  }
+}, HEARTBEAT_MS);
 
 function callPlugin(command: string, params: Record<string, unknown> = {}): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -920,7 +986,18 @@ server.registerTool(
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  log('DesignAgent MCP server ready (stdio).');
+  log(`DesignAgent MCP server ready (stdio). instance=${SERVER_INSTANCE_ID} pid=${process.pid}`);
+
+  // When Claude Code replaces or shuts down this server, our stdin closes.
+  // Exit promptly so we release the WebSocket port (3790) instead of orphaning
+  // and squatting it — which would leave the replacement server unable to bind
+  // and the plugin paired to a dead instance.
+  const exit = () => {
+    log('stdin closed; shutting down to release the bridge port.');
+    process.exit(0);
+  };
+  process.stdin.on('close', exit);
+  process.stdin.on('end', exit);
 }
 
 main().catch((error) => {

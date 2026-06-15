@@ -24798,14 +24798,21 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 // src/server.ts
 var PORT = Number(process.env.DESIGNAGENT_BRIDGE_PORT ?? 3790);
 var REQUEST_TIMEOUT_MS = 2e4;
+var HEARTBEAT_MS = 2e4;
+var SERVER_INSTANCE_ID = (0, import_node_crypto.randomUUID)();
 function log(...args) {
   console.error("[designagent-mcp]", ...args);
 }
+var aliveSockets = /* @__PURE__ */ new WeakSet();
 var pluginSocket = null;
 var pending = /* @__PURE__ */ new Map();
 function handleConnection(socket) {
   pluginSocket = socket;
+  aliveSockets.add(socket);
   log("DesignAgent plugin connected.");
+  socket.on("pong", () => {
+    aliveSockets.add(socket);
+  });
   socket.on("message", (data) => {
     let msg;
     try {
@@ -24844,6 +24851,19 @@ function handleConnection(socket) {
         entry.reject(new Error(msg.error || "DesignAgent plugin reported an error."));
       }
     }
+    if (msg.type === "hello") {
+      aliveSockets.add(socket);
+      try {
+        socket.send(
+          JSON.stringify({ type: "hello_ack", serverInstanceId: SERVER_INSTANCE_ID, pid: process.pid })
+        );
+      } catch {
+      }
+      return;
+    }
+    if (msg.type === "pong") {
+      aliveSockets.add(socket);
+    }
   });
   socket.on("close", () => {
     if (pluginSocket === socket) {
@@ -24856,21 +24876,48 @@ function handleConnection(socket) {
   });
 }
 var BIND_HOSTS = ["127.0.0.1", "::1"];
-for (const host of BIND_HOSTS) {
+var BIND_RETRY_MS = 250;
+var BIND_MAX_ATTEMPTS = 40;
+function bind(host, attempt = 1) {
   const display = host.includes(":") ? `[${host}]` : host;
   const wss = new import_websocket_server.default({ host, port: PORT });
   wss.on("listening", () => log(`WebSocket bridge listening on ws://${display}:${PORT}`));
-  wss.on("error", (error2) => log(`Bind ${display}:${PORT} failed: ${error2.message}`));
   wss.on("connection", handleConnection);
+  wss.on("error", (error2) => {
+    if (error2.code === "EADDRINUSE" && attempt < BIND_MAX_ATTEMPTS) {
+      log(`Bind ${display}:${PORT} in use (attempt ${attempt}), retrying in ${BIND_RETRY_MS}ms\u2026`);
+      setTimeout(() => bind(host, attempt + 1), BIND_RETRY_MS);
+      return;
+    }
+    log(`Bind ${display}:${PORT} failed: ${error2.message}`);
+  });
+}
+for (const host of BIND_HOSTS) {
+  bind(host);
 }
 setInterval(() => {
-  if (pluginSocket && pluginSocket.readyState === import_websocket.default.OPEN) {
+  const socket = pluginSocket;
+  if (!socket || socket.readyState !== import_websocket.default.OPEN) {
+    return;
+  }
+  if (!aliveSockets.has(socket)) {
+    log("Plugin socket missed heartbeat; terminating.");
+    if (pluginSocket === socket) {
+      pluginSocket = null;
+    }
     try {
-      pluginSocket.send(JSON.stringify({ type: "ping" }));
+      socket.terminate();
     } catch {
     }
+    return;
   }
-}, 2e4);
+  aliveSockets.delete(socket);
+  try {
+    socket.ping();
+    socket.send(JSON.stringify({ type: "ping" }));
+  } catch {
+  }
+}, HEARTBEAT_MS);
 function callPlugin(command, params = {}) {
   return new Promise((resolve2, reject) => {
     if (!pluginSocket || pluginSocket.readyState !== import_websocket.default.OPEN) {
@@ -25545,7 +25592,13 @@ server.registerTool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  log("DesignAgent MCP server ready (stdio).");
+  log(`DesignAgent MCP server ready (stdio). instance=${SERVER_INSTANCE_ID} pid=${process.pid}`);
+  const exit = () => {
+    log("stdin closed; shutting down to release the bridge port.");
+    process.exit(0);
+  };
+  process.stdin.on("close", exit);
+  process.stdin.on("end", exit);
 }
 main().catch((error2) => {
   log(`Fatal: ${error2 instanceof Error ? error2.message : String(error2)}`);
