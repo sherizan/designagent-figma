@@ -131,8 +131,8 @@ export function ExportPanel(props: ExportPanelProps): JSX.Element {
         <button type="button" className="export-card" onClick={onExportDesignMd}>
           <span className="export-card-title">Export DESIGN.md</span>
           <span className="export-card-sub">
-            Structured Markdown spec — tokens, components, layout, text. Drop it in your repo and
-            add <code>@DESIGN.md</code> to CLAUDE.md.
+            Token frontmatter + guidance, following the <code>design.md</code> spec. Drop it in your
+            repo and add <code>@DESIGN.md</code> to CLAUDE.md.
           </span>
         </button>
         <button type="button" className="export-card" onClick={onExportHtml}>
@@ -327,7 +327,7 @@ export function EmptyState({ message }: EmptyStateProps): JSX.Element {
 export function Footer(): JSX.Element {
   return (
     <div className="panel-footer">
-      <span className="version-tag">v1.9.4</span> · Built by Sherizan ·{' '}
+      <span className="version-tag">v1.10.0</span> · Built by Sherizan ·{' '}
       <a href="https://www.designagent.dev" target="_blank" rel="noreferrer">
         DesignAgent.dev
       </a>
