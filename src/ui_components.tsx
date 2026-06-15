@@ -10,9 +10,14 @@ interface AppHeaderProps {
 export function AppHeader({ version }: AppHeaderProps): JSX.Element {
   return (
     <div className="app-header">
-      <div className="header-copy">
-        <h1 className="title">DesignAgent</h1>
-        <p className="sub">Design ↔ code, both directions.</p>
+      <div className="brand">
+        <span className="brand-mark" aria-hidden="true">
+          ↔
+        </span>
+        <div className="header-copy">
+          <h1 className="title">DesignAgent</h1>
+          <p className="sub">Design ↔ code, both directions.</p>
+        </div>
       </div>
       <div className="version-tag">{version}</div>
     </div>
