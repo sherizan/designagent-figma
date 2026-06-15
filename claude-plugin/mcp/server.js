@@ -24837,7 +24837,6 @@ function runBroker() {
       if (picked) {
         return picked;
       }
-      selectedSessionId = null;
     }
     return activeServer();
   }
@@ -24876,7 +24875,11 @@ function runBroker() {
       return;
     }
     const wasActive = idx === servers.length - 1;
+    const removed = servers[idx];
     servers.splice(idx, 1);
+    if (removed && selectedSessionId === removed.sessionId) {
+      selectedSessionId = null;
+    }
     for (const [id, origin] of requestOrigin) {
       if (origin === socket) {
         requestOrigin.delete(id);
@@ -24929,7 +24932,7 @@ function runBroker() {
         const root = typeof msg.root === "string" ? msg.root : "";
         const label = typeof msg.label === "string" && msg.label ? msg.label : sessionId.slice(0, 8);
         servers.push({ socket, sessionId, root, label });
-        blog(`session ${sessionId} registered (active). ${servers.length} session(s).`);
+        blog(`session ${sessionId} (label: ${label}, root: ${root || "?"}) registered (active). ${servers.length} session(s).`);
         if (idleTimer) {
           clearTimeout(idleTimer);
           idleTimer = null;

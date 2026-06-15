@@ -76,14 +76,13 @@ export function runBroker(): void {
   }
 
   // The session that should receive reverse-channel (filesystem) ops: the one the
-  // plugin selected if it's still connected, else the newest. Clears a stale pick.
+  // plugin selected if it's still connected, else the newest. Pure read — no mutation.
   function routeTarget(): ServerClient | null {
     if (selectedSessionId) {
       const picked = servers.find((s) => s.sessionId === selectedSessionId);
       if (picked) {
         return picked;
       }
-      selectedSessionId = null;
     }
     return activeServer();
   }
@@ -131,7 +130,11 @@ export function runBroker(): void {
       return;
     }
     const wasActive = idx === servers.length - 1;
+    const removed = servers[idx];
     servers.splice(idx, 1);
+    if (removed && selectedSessionId === removed.sessionId) {
+      selectedSessionId = null;
+    }
     // Fail any in-flight tool calls that originated from this server.
     for (const [id, origin] of requestOrigin) {
       if (origin === socket) {
@@ -210,10 +213,10 @@ export function runBroker(): void {
         }
         const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : 'unknown';
         const root = typeof msg.root === 'string' ? msg.root : '';
-        const label = typeof msg.label === 'string' && msg.label ? msg.label : sessionId.slice(0, 8);
+        const label = typeof msg.label === 'string' && msg.label ? msg.label : sessionId.slice(0, 8); // 8-char UUID prefix fallback
         // Newest registration becomes active.
         servers.push({ socket, sessionId, root, label });
-        blog(`session ${sessionId} registered (active). ${servers.length} session(s).`);
+        blog(`session ${sessionId} (label: ${label}, root: ${root || '?'}) registered (active). ${servers.length} session(s).`);
         if (idleTimer) {
           clearTimeout(idleTimer);
           idleTimer = null;
