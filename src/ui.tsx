@@ -14,7 +14,8 @@ import {
   LoadingPanel,
   type MainTab,
   MainTabs,
-  ProjectPicker
+  ProjectPicker,
+  type SessionInfo
 } from './ui_components';
 import type { DesignTreeNode } from './shared/designtree';
 import { UI_STYLES } from './ui_theme';
@@ -141,7 +142,7 @@ function App(): JSX.Element {
   >(null);
   const [bridgeEnabled, setBridgeEnabled] = useState<boolean>(false);
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>('off');
-  const [sessions, setSessions] = useState<Array<{ id: string; label: string; root: string; selected: boolean }>>([]);
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [projectConfirmed, setProjectConfirmed] = useState<boolean>(false);
   const [designMd, setDesignMd] = useState<{
     checked: boolean;
@@ -703,7 +704,7 @@ function App(): JSX.Element {
         ) : (
           <>
             <MainTabs active={mainTab} onChange={setMainTab} />
-            {sessions.length >= 2 ? (
+            {bridgeStatus === 'connected' && sessions.length >= 2 ? (
               <ProjectPicker variant="compact" sessions={sessions} onSelect={selectSession} />
             ) : null}
 

@@ -177,7 +177,7 @@ export function ProjectPicker({ sessions, onSelect, variant }: ProjectPickerProp
     );
   }
   return (
-    <div className="panel project-gate">
+    <div className="panel project-gate" role="region" aria-label="Choose a project">
       <div className="section-subtitle" style={{ marginTop: 0 }}>
         Choose a project
       </div>
