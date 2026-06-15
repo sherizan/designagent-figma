@@ -56,9 +56,16 @@ Shared types live in `src/core/types.ts`. Presets are defined there too (default
 
 ## Versioning
 
-Two version strings, bumped together (see git history, e.g. "Bump to v0.2.1 (UI v1.2.1)"):
-- Plugin version → `package.json` `version`
-- UI version tag → hardcoded in `src/ui_components.tsx` (the `version-tag` div, currently `v1.2.1`)
+Four version strings, **all bumped together** (keep them identical to avoid the Figma plugin
+and the Claude plugin drifting apart):
+- Figma plugin version → `package.json` `version`
+- UI version tag → hardcoded in `src/ui_components.tsx` (the `version-tag` div in the footer)
+- Claude plugin bundle → `claude-plugin/.claude-plugin/plugin.json` `version`
+- Claude marketplace entry → `.claude-plugin/marketplace.json` `plugins[0].version`
+  (the top-level `metadata.version` there is the catalog's own version — leave it)
+
+The UI tag uses a `v1.x.y` form; the three JSON versions use `0.x.y` and should match each
+other. Even when a change only touches one side, bump all four so installed versions stay in sync.
 
 ## Testing in Figma (figma-console MCP)
 
