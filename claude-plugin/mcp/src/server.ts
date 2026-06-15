@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -37,13 +37,39 @@ function handleConnection(socket: WebSocket): void {
   log('DesignAgent plugin connected.');
 
   socket.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
-    let msg: { type?: string; id?: string; ok?: boolean; result?: unknown; error?: string };
+    let msg: {
+      type?: string;
+      id?: string;
+      ok?: boolean;
+      result?: unknown;
+      error?: string;
+      command?: string;
+      params?: unknown;
+    };
     try {
       msg = JSON.parse(data.toString());
     } catch {
       return;
     }
     if (!msg || typeof msg !== 'object') {
+      return;
+    }
+    // Reverse channel: the plugin asks the server (filesystem) for something.
+    if (msg.type === 'server_request' && typeof msg.id === 'string' && typeof msg.command === 'string') {
+      const id = msg.id;
+      const params = msg.params && typeof msg.params === 'object' ? (msg.params as Record<string, unknown>) : {};
+      handleServerRequest(msg.command, params)
+        .then((result) => socket.send(JSON.stringify({ type: 'server_response', id, ok: true, result })))
+        .catch((error: unknown) =>
+          socket.send(
+            JSON.stringify({
+              type: 'server_response',
+              id,
+              ok: false,
+              error: error instanceof Error ? error.message : String(error)
+            })
+          )
+        );
       return;
     }
     if (msg.type === 'response' && typeof msg.id === 'string') {
@@ -264,6 +290,79 @@ async function inlineExternalImages(html: string): Promise<string> {
     }
   }
   return result;
+}
+
+// Reverse channel: the plugin asks the server for project files.
+const IGNORED_DIRS = new Set([
+  'node_modules',
+  'dist',
+  '.git',
+  '.next',
+  'build',
+  'out',
+  '.cache',
+  'coverage'
+]);
+
+interface HtmlFileEntry {
+  path: string;
+  name: string;
+  dir: string;
+  size: number;
+}
+
+async function listHtmlFiles(): Promise<HtmlFileEntry[]> {
+  const results: HtmlFileEntry[] = [];
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (results.length >= 100 || depth > 6) return;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (results.length >= 100) break;
+      const full = resolve(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+        await walk(full, depth + 1);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.html')) {
+        let size = 0;
+        try {
+          size = (await stat(full)).size;
+        } catch {
+          // ignore
+        }
+        results.push({
+          path: relative(PROJECT_ROOT, full),
+          name: entry.name,
+          dir: relative(PROJECT_ROOT, dir) || '.',
+          size
+        });
+      }
+    }
+  }
+  await walk(PROJECT_ROOT, 0);
+  results.sort((a, b) => a.path.localeCompare(b.path));
+  return results;
+}
+
+async function handleServerRequest(command: string, params: Record<string, unknown>): Promise<unknown> {
+  switch (command) {
+    case 'list_html_files':
+      return { files: await listHtmlFiles() };
+    case 'read_html_file': {
+      const path = String(params.path ?? '');
+      if (!path) {
+        throw new Error('read_html_file requires "path".');
+      }
+      const html = await inlineExternalImages(await readHtmlFile(path));
+      return { html };
+    }
+    default:
+      throw new Error(`Unknown server command: ${command}`);
+  }
 }
 
 const IMAGE_SOURCE_SCHEMA = {
