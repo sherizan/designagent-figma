@@ -15,6 +15,7 @@ import {
   MainTabs
 } from './ui_components';
 import { UI_STYLES } from './ui_theme';
+import { renderHtmlToTree } from './ui_html';
 
 const BRIDGE_URL = 'ws://localhost:3790';
 
@@ -173,7 +174,7 @@ function App(): JSX.Element {
         return;
       }
 
-      if (message.type === 'BRIDGE_RESULT') {
+      if (message.type === 'BRIDGE_RESULT' || message.type === 'DESIGN_TREE_RESULT') {
         const socket = socketRef.current;
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(
@@ -279,13 +280,41 @@ function App(): JSX.Element {
           return;
         }
         if (msg.type === 'request' && typeof msg.id === 'string' && typeof msg.command === 'string') {
-          postPluginMessage({
-            type: 'BRIDGE_COMMAND',
-            id: msg.id,
-            command: msg.command,
-            params:
-              msg.params && typeof msg.params === 'object' ? (msg.params as Record<string, unknown>) : {}
-          });
+          const params =
+            msg.params && typeof msg.params === 'object' ? (msg.params as Record<string, unknown>) : {};
+          // html_to_design is handled in the UI iframe (it renders the HTML), then
+          // handed to the sandbox to build nodes — not a normal sandbox command.
+          if (msg.command === 'html_to_design') {
+            try {
+              const tree = renderHtmlToTree(
+                String(params.html ?? ''),
+                typeof params.width === 'number' ? params.width : 1280
+              );
+              postPluginMessage({
+                type: 'CREATE_DESIGN_TREE',
+                id: msg.id,
+                tree,
+                x: typeof params.x === 'number' ? params.x : undefined,
+                y: typeof params.y === 'number' ? params.y : undefined,
+                parentId: typeof params.parentId === 'string' ? params.parentId : undefined
+              });
+            } catch (renderError) {
+              try {
+                socket.send(
+                  JSON.stringify({
+                    type: 'response',
+                    id: msg.id,
+                    ok: false,
+                    error: renderError instanceof Error ? renderError.message : String(renderError)
+                  })
+                );
+              } catch {
+                // ignore
+              }
+            }
+            return;
+          }
+          postPluginMessage({ type: 'BRIDGE_COMMAND', id: msg.id, command: msg.command, params });
         }
       };
 
@@ -363,7 +392,7 @@ function App(): JSX.Element {
     <div className="app-shell">
       <style>{UI_STYLES}</style>
       <div className="app-body">
-        <AppHeader version="v1.4.0" />
+        <AppHeader version="v1.5.0" />
 
         <BridgeBar
           status={bridgeStatus}

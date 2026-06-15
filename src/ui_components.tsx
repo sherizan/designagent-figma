@@ -193,7 +193,8 @@ export function CapabilityView(): JSX.Element {
         ))}
       </div>
       <p className="prompt-hint">
-        Coming soon: paste HTML here to render it as Figma layers.
+        Claude can also render HTML into Figma over the bridge (e.g. “render index.html into
+        Figma”). Browsing your project’s HTML files here is coming next.
       </p>
     </div>
   );

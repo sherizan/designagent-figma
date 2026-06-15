@@ -6,6 +6,7 @@ import {
 import { generateDesignDoc, type DesignDocFrame } from './core/designdoc';
 import { generateHtml, type HtmlNode } from './core/htmldoc';
 import { loadAnnotationCategories } from './core/extract';
+import type { DesignTreeNode } from './shared/designtree';
 import { isScreenLikeNode } from './core/intent';
 import type { EmptyAnalysis, Mode } from './core/types';
 import type { ToPluginMessage, ToUIMessage } from './shared/messages';
@@ -754,6 +755,143 @@ async function exportHtml(): Promise<void> {
   }
 }
 
+// ---- HTML → Design: build Figma nodes from a rendered HTML tree (from the UI) ----
+
+async function buildDesignNode(
+  node: DesignTreeNode,
+  parent: BaseNode & ChildrenMixin
+): Promise<SceneNode> {
+  if (node.kind === 'text') {
+    const text = figma.createText();
+    parent.appendChild(text);
+    await loadFontForNewText(text);
+    text.characters = node.text ?? '';
+    if (node.fontSize && node.fontSize > 0) {
+      text.fontSize = node.fontSize;
+    }
+    if (node.fontWeight) {
+      try {
+        await applyTextWeight(text, node.fontWeight);
+      } catch {
+        // keep the default weight if the family lacks it
+      }
+    }
+    const fill = cssSolidPaint(node.textColor);
+    if (fill) {
+      text.fills = [fill];
+    }
+    const align = normalizeTextAlign(node.textAlign);
+    if (align) {
+      text.textAlignHorizontal = align;
+    }
+    try {
+      text.resize(Math.max(1, node.width), Math.max(1, node.height));
+    } catch {
+      // some text nodes resist fixed sizing; ignore
+    }
+    text.x = node.x;
+    text.y = node.y;
+    return text;
+  }
+
+  if (node.kind === 'image' && node.dataUrl) {
+    const rect = figma.createRectangle();
+    parent.appendChild(rect);
+    rect.resize(Math.max(1, node.width), Math.max(1, node.height));
+    rect.x = node.x;
+    rect.y = node.y;
+    try {
+      const base64 = node.dataUrl.replace(/^data:[^;]+;base64,/, '');
+      const image = figma.createImage(figma.base64Decode(base64));
+      rect.fills = [{ type: 'IMAGE', scaleMode: 'FILL', imageHash: image.hash }];
+    } catch {
+      rect.fills = [];
+    }
+    return rect;
+  }
+
+  const frame = figma.createFrame();
+  parent.appendChild(frame);
+  frame.resize(Math.max(1, node.width), Math.max(1, node.height));
+  frame.x = node.x;
+  frame.y = node.y;
+  frame.layoutMode = 'NONE';
+  frame.clipsContent = false;
+  const fill = cssSolidPaint(node.fill);
+  frame.fills = fill ? [fill] : [];
+  const stroke = cssSolidPaint(node.stroke);
+  if (stroke) {
+    frame.strokes = [stroke];
+    if (node.strokeWidth && node.strokeWidth > 0) {
+      frame.strokeWeight = node.strokeWidth;
+    }
+  }
+  if (node.cornerRadius && node.cornerRadius > 0) {
+    frame.cornerRadius = node.cornerRadius;
+  }
+  if (typeof node.opacity === 'number' && node.opacity < 1) {
+    frame.opacity = node.opacity;
+  }
+  if (node.shadow) {
+    const shadowColor = parseCssColor(node.shadow.color);
+    if (shadowColor) {
+      frame.effects = [
+        {
+          type: 'DROP_SHADOW',
+          color: {
+            r: shadowColor.color.r,
+            g: shadowColor.color.g,
+            b: shadowColor.color.b,
+            a: shadowColor.opacity
+          },
+          offset: { x: node.shadow.x, y: node.shadow.y },
+          radius: node.shadow.blur,
+          spread: node.shadow.spread,
+          visible: true,
+          blendMode: 'NORMAL'
+        }
+      ];
+    }
+  }
+  for (const child of node.children) {
+    await buildDesignNode(child, frame);
+  }
+  return frame;
+}
+
+async function createDesignTree(message: {
+  id: string;
+  tree: DesignTreeNode;
+  x?: number;
+  y?: number;
+  parentId?: string;
+}): Promise<void> {
+  try {
+    const parent = await resolveParentContainer(message.parentId);
+    const root = await buildDesignNode(message.tree, parent);
+    if (parent.type === 'PAGE' && 'x' in root) {
+      const layout = root as SceneNode & LayoutMixin;
+      layout.x = toNumber(message.x, 0);
+      layout.y = toNumber(message.y, 0);
+    }
+    figma.currentPage.selection = [root];
+    figma.viewport.scrollAndZoomIntoView([root]);
+    postToUI({
+      type: 'DESIGN_TREE_RESULT',
+      id: message.id,
+      ok: true,
+      result: { id: root.id, name: root.name }
+    });
+  } catch (error) {
+    postToUI({
+      type: 'DESIGN_TREE_RESULT',
+      id: message.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
 // ---- Claude Code bridge: execute DesignAgent actions requested over the MCP/WS bridge ----
 
 async function analyzePrimaryForBridge(): Promise<AnalysisCore> {
@@ -793,6 +931,39 @@ function parseHexColor(input: unknown): { color: RGB; opacity: number } {
 function solidPaint(input: unknown): SolidPaint {
   const { color, opacity } = parseHexColor(input);
   return { type: 'SOLID', color, opacity };
+}
+
+// Parse a CSS color string (rgb/rgba/hex) into a Figma RGB + opacity.
+function parseCssColor(input: unknown): { color: RGB; opacity: number } | null {
+  const value = String(input ?? '').trim();
+  if (!value || value === 'transparent' || value === 'none') {
+    return null;
+  }
+  const rgb = /^rgba?\(([^)]+)\)$/i.exec(value);
+  if (rgb && rgb[1]) {
+    const parts = rgb[1].split(',').map((p) => p.trim());
+    const r = Number(parts[0]) / 255;
+    const g = Number(parts[1]) / 255;
+    const b = Number(parts[2]) / 255;
+    const a = parts[3] != null ? Number(parts[3]) : 1;
+    if ([r, g, b].some((n) => Number.isNaN(n))) {
+      return null;
+    }
+    return { color: { r, g, b }, opacity: Number.isNaN(a) ? 1 : a };
+  }
+  if (value.startsWith('#')) {
+    try {
+      return parseHexColor(value);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function cssSolidPaint(input: unknown): SolidPaint | null {
+  const parsed = parseCssColor(input);
+  return parsed ? { type: 'SOLID', color: parsed.color, opacity: parsed.opacity } : null;
 }
 
 function applyStroke(node: SceneNode, params: Record<string, unknown>): void {
@@ -1574,6 +1745,11 @@ figma.ui.onmessage = (message: ToPluginMessage) => {
 
   if (message.type === 'BRIDGE_COMMAND') {
     void handleBridgeCommand(message.id, message.command, message.params);
+    return;
+  }
+
+  if (message.type === 'CREATE_DESIGN_TREE') {
+    void createDesignTree(message);
     return;
   }
 
