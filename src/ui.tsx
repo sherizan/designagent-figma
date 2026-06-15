@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { type AnalysisResult, type ExportedAsset } from './core/types';
+import { type AnalysisResult } from './core/types';
 import type { ToUIMessage } from './shared/messages';
 import {
   BridgeBar,
@@ -59,33 +59,9 @@ function postPluginMessage(message: unknown): void {
   parent.postMessage({ pluginMessage: message }, '*');
 }
 
-function pickPngAsset(assets: ExportedAsset[] | undefined): ExportedAsset | undefined {
-  if (!assets || assets.length === 0) {
-    return undefined;
-  }
-  return assets.find((asset) => asset.format === 'PNG') ?? assets[0];
-}
-
 function sanitizeFilename(name: string): string {
   const trimmed = name.trim().replace(/[\s/\\]+/g, '-').replace(/[^\w.-]/g, '');
   return trimmed.length > 0 ? trimmed : 'designagent';
-}
-
-function downloadAsset(asset: ExportedAsset): boolean {
-  try {
-    const extension = asset.format === 'SVG' ? 'svg' : 'png';
-    const filename = `${sanitizeFilename(asset.nodeName)}@${asset.scale}x.${extension}`;
-    const anchor = document.createElement('a');
-    anchor.href = asset.dataUrl;
-    anchor.download = filename;
-    anchor.rel = 'noopener';
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function downloadTextFile(filename: string, text: string, mime = 'text/markdown'): boolean {
@@ -447,12 +423,6 @@ function App(): JSX.Element {
     return renderTreeLocally(tree);
   };
 
-  const pngAsset = analysis.hasSelection ? pickPngAsset(analysis.assets) : undefined;
-  const imageSizeKb = useMemo(
-    () => (pngAsset ? Math.round(pngAsset.byteLength / 102.4) / 10 : undefined),
-    [pngAsset]
-  );
-
   const onExportDesignMd = () => {
     if (!analysis.hasSelection) {
       return;
@@ -467,15 +437,6 @@ function App(): JSX.Element {
     }
     setStatus('Generating HTML…');
     postPluginMessage({ type: 'EXPORT_HTML' });
-  };
-
-  const onSavePng = () => {
-    if (!pngAsset) {
-      return;
-    }
-    const ok = downloadAsset(pngAsset);
-    setStatus(ok ? 'PNG saved' : 'Save failed');
-    setTimeout(() => setStatus(''), 1600);
   };
 
   const errorHelpLink = error ? getErrorHelpLink(error) : undefined;
@@ -511,11 +472,8 @@ function App(): JSX.Element {
               intentLabel={toIntentLabel(analysis.intent)}
               selectedNodeName={analysis.selectedNode.name}
               status={status}
-              hasImageAsset={Boolean(pngAsset)}
-              imageSizeKb={imageSizeKb}
               onExportDesignMd={onExportDesignMd}
               onExportHtml={onExportHtml}
-              onSavePng={onSavePng}
             />
           ) : (
             <EmptyState message={analysis.message} />

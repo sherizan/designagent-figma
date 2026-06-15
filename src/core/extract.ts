@@ -1,6 +1,5 @@
 import type {
   AnnotationEntry,
-  ExportedAsset,
   LayoutSummary,
   ResolvedVariable,
   TextSummary,
@@ -935,90 +934,6 @@ export async function enrichUiSpec(
   return spec;
 }
 
-export interface ExportOptions {
-  maxBytesPerAsset?: number;
-  maxTotalBytes?: number;
-  includeSvg?: boolean;
-}
-
-const PNG_MAX_BYTES_DEFAULT = 512 * 1024;
-const TOTAL_MAX_BYTES_DEFAULT = 4 * 1024 * 1024;
-
-function bytesToBase64(bytes: Uint8Array): string {
-  return figma.base64Encode(bytes);
-}
-
-export async function exportAssetsForNode(
-  node: SceneNode,
-  options: ExportOptions = {}
-): Promise<ExportedAsset[]> {
-  if (!('exportAsync' in node)) {
-    return [];
-  }
-
-  const maxPerAsset = options.maxBytesPerAsset ?? PNG_MAX_BYTES_DEFAULT;
-  const maxTotal = options.maxTotalBytes ?? TOTAL_MAX_BYTES_DEFAULT;
-  const assets: ExportedAsset[] = [];
-  let totalBytes = 0;
-
-  async function tryPng(scale: number): Promise<void> {
-    try {
-      const bytes = await node.exportAsync({
-        format: 'PNG',
-        constraint: { type: 'SCALE', value: scale }
-      });
-      if (bytes.byteLength > maxPerAsset && scale > 1) {
-        return;
-      }
-      if (totalBytes + bytes.byteLength > maxTotal) {
-        return;
-      }
-      const base64 = bytesToBase64(bytes);
-      assets.push({
-        nodeId: node.id,
-        nodeName: node.name,
-        format: 'PNG',
-        scale,
-        dataUrl: `data:image/png;base64,${base64}`,
-        byteLength: bytes.byteLength
-      });
-      totalBytes += bytes.byteLength;
-    } catch {
-      // skip
-    }
-  }
-
-  await tryPng(1);
-
-  const isIconLike =
-    options.includeSvg !== false &&
-    'width' in node &&
-    'height' in node &&
-    node.width <= 256 &&
-    node.height <= 256;
-  if (isIconLike) {
-    try {
-      const svg = await node.exportAsync({ format: 'SVG_STRING' });
-      const bytes = new TextEncoder().encode(svg).byteLength;
-      if (totalBytes + bytes <= maxTotal) {
-        const base64 = bytesToBase64(new TextEncoder().encode(svg));
-        assets.push({
-          nodeId: node.id,
-          nodeName: node.name,
-          format: 'SVG',
-          scale: 1,
-          dataUrl: `data:image/svg+xml;base64,${base64}`,
-          byteLength: bytes
-        });
-        totalBytes += bytes;
-      }
-    } catch {
-      // skip
-    }
-  }
-
-  return assets;
-}
 
 export function extractUiSpec(root: SceneNode): UiSpec {
   const stats: MutableStats = {

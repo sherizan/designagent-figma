@@ -109,24 +109,12 @@ interface ExportPanelProps {
   intentLabel: string;
   selectedNodeName: string;
   status: string;
-  hasImageAsset: boolean;
-  imageSizeKb?: number;
   onExportDesignMd: () => void;
   onExportHtml: () => void;
-  onSavePng: () => void;
 }
 
 export function ExportPanel(props: ExportPanelProps): JSX.Element {
-  const {
-    intentLabel,
-    selectedNodeName,
-    status,
-    hasImageAsset,
-    imageSizeKb,
-    onExportDesignMd,
-    onExportHtml,
-    onSavePng
-  } = props;
+  const { intentLabel, selectedNodeName, status, onExportDesignMd, onExportHtml } = props;
 
   return (
     <div className="panel">
@@ -155,19 +143,11 @@ export function ExportPanel(props: ExportPanelProps): JSX.Element {
         </button>
       </div>
 
-      <div className="prompt-actions">
-        {status ? <span className="status-pill">{status}</span> : null}
-        {hasImageAsset ? (
-          <button
-            type="button"
-            className="btn"
-            onClick={onSavePng}
-            title={imageSizeKb ? `Save exported PNG (${imageSizeKb} KB)` : 'Save exported PNG'}
-          >
-            Save PNG
-          </button>
-        ) : null}
-      </div>
+      {status ? (
+        <div className="prompt-actions">
+          <span className="status-pill">{status}</span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -347,7 +327,7 @@ export function EmptyState({ message }: EmptyStateProps): JSX.Element {
 export function Footer(): JSX.Element {
   return (
     <div className="panel-footer">
-      <span className="version-tag">v1.9.3</span> · Built by Sherizan ·{' '}
+      <span className="version-tag">v1.9.4</span> · Built by Sherizan ·{' '}
       <a href="https://www.designagent.dev" target="_blank" rel="noreferrer">
         DesignAgent.dev
       </a>

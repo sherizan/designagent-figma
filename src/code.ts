@@ -636,7 +636,6 @@ async function collectDesignMd(): Promise<{ markdown: string; frameCount: number
       reusable ??
       (await analyzeNodeCoreAsync(node, {
         linkBase: fallbackLinkBase,
-        includeAssets: false,
         annotationCategories: categories
       }));
     frames.push({ core });
@@ -991,7 +990,7 @@ async function analyzePrimaryForBridge(): Promise<AnalysisCore> {
   if (cache && cache.primaryNodeId === primary.id && cache.linkBase === fallbackLinkBase) {
     return cache.core;
   }
-  return analyzeNodeCoreAsync(primary, { linkBase: fallbackLinkBase, includeAssets: false });
+  return analyzeNodeCoreAsync(primary, { linkBase: fallbackLinkBase });
 }
 
 function toNumber(value: unknown, fallback: number): number {

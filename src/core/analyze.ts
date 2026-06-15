@@ -1,10 +1,9 @@
-import { enrichUiSpec, exportAssetsForNode, extractUiSpec, loadAnnotationCategories } from './extract';
+import { enrichUiSpec, extractUiSpec, loadAnnotationCategories } from './extract';
 import { classifyIntent } from './intent';
 import { scoreUiSpec } from './score';
 import type {
   AnalysisPayload,
   ChecklistItem,
-  ExportedAsset,
   Intent,
   Mode,
   ScoreCategory,
@@ -15,7 +14,6 @@ import type {
 
 interface AnalyzeOptions {
   linkBase?: string;
-  includeAssets?: boolean;
   annotationCategories?: Map<string, string>;
 }
 
@@ -27,7 +25,6 @@ export interface AnalysisCore {
   checklist: ChecklistItem[];
   checklistByCategory: Record<ScoreCategory, ChecklistItem[]>;
   coverageWarnings: string[];
-  assets?: ExportedAsset[];
 }
 
 function toNodeIdParam(nodeId: string): string {
@@ -98,16 +95,6 @@ export async function analyzeNodeCoreAsync(
   const core = analyzeNodeCore(node, options);
   const categories = options?.annotationCategories ?? (await loadAnnotationCategories());
   await enrichUiSpec(core.uiSpec, node, { categories });
-  if (options?.includeAssets !== false) {
-    try {
-      const assets = await exportAssetsForNode(node);
-      if (assets.length > 0) {
-        core.assets = assets;
-      }
-    } catch {
-      // export is best-effort
-    }
-  }
   return core;
 }
 
@@ -123,8 +110,7 @@ export function composeAnalysisPayload(
     intent: core.intent,
     flowCapable,
     uiSpec: core.uiSpec,
-    coverageWarnings: core.coverageWarnings,
-    assets: core.assets
+    coverageWarnings: core.coverageWarnings
   };
 }
 

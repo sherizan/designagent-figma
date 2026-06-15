@@ -70,15 +70,6 @@ export interface ResolvedVariable {
   modes: Record<string, string>;
 }
 
-export interface ExportedAsset {
-  nodeId: string;
-  nodeName: string;
-  format: 'PNG' | 'SVG';
-  scale: number;
-  dataUrl: string;
-  byteLength: number;
-}
-
 export interface UiNodeSpec {
   id: string;
   name: string;
@@ -173,7 +164,6 @@ export interface AnalysisPayload {
   flowCapable: boolean;
   uiSpec: UiSpec;
   coverageWarnings: string[];
-  assets?: ExportedAsset[];
 }
 
 export interface EmptyAnalysis {
