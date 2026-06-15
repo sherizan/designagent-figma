@@ -22,6 +22,12 @@ const BRIDGE_META: Record<BridgeStatus, { color: string; label: string }> = {
 // Bridge title + live status, with Enable/Disable and a Setup disclosure.
 export function BridgeBar({ status, enabled, onToggle }: BridgeBarProps): JSX.Element {
   const meta = BRIDGE_META[status];
+  // Setup starts open and collapses once the bridge is connected; the user can
+  // still toggle it manually, and it re-opens if the connection drops.
+  const [setupOpen, setSetupOpen] = React.useState(true);
+  React.useEffect(() => {
+    setSetupOpen(status !== 'connected');
+  }, [status]);
   return (
     <div className="bridge-bar">
       <div className="bridge-bar-row">
@@ -49,7 +55,11 @@ export function BridgeBar({ status, enabled, onToggle }: BridgeBarProps): JSX.El
         </button>
       </div>
 
-      <details className="bridge-setup">
+      <details
+        className="bridge-setup"
+        open={setupOpen}
+        onToggle={(event) => setSetupOpen(event.currentTarget.open)}
+      >
         <summary>Setup</summary>
         <ol className="bridge-steps">
           <li>
@@ -337,7 +347,7 @@ export function EmptyState({ message }: EmptyStateProps): JSX.Element {
 export function Footer(): JSX.Element {
   return (
     <div className="panel-footer">
-      <span className="version-tag">v1.9.2</span> · Built by Sherizan ·{' '}
+      <span className="version-tag">v1.9.3</span> · Built by Sherizan ·{' '}
       <a href="https://www.designagent.dev" target="_blank" rel="noreferrer">
         DesignAgent.dev
       </a>
