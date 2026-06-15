@@ -41,9 +41,10 @@ const pending = new Map<
 >();
 
 function handleConnection(socket: WebSocket): void {
-  pluginSocket = socket;
+  // Don't assume every connection is the plugin — a newer server process may
+  // connect just to hand us a `takeover`. We only adopt a socket as the plugin
+  // once it identifies itself with `hello`.
   aliveSockets.add(socket);
-  log('DesignAgent plugin connected.');
 
   // ws protocol-level pong (from socket.ping()) — proves the peer is alive.
   socket.on('pong', () => {
@@ -99,11 +100,21 @@ function handleConnection(socket: WebSocket): void {
         entry.reject(new Error(msg.error || 'DesignAgent plugin reported an error.'));
       }
     }
+    // A newer server instance asks us to step down so it can own the bridge.
+    // Release the port; this (older) session keeps running but bridge-less.
+    if (msg.type === 'takeover') {
+      const who = String((msg as { instanceId?: unknown }).instanceId ?? '?');
+      log(`Another DesignAgent server (instance ${who}) is taking over; releasing port ${PORT}.`);
+      releaseBridge();
+      return;
+    }
     // The plugin announces itself with `hello`; acknowledge it so the plugin
     // only shows "Connected" once it has confirmed a live, end-to-end pairing
     // with *this* server instance (not merely an open socket to port 3790).
     if (msg.type === 'hello') {
+      pluginSocket = socket;
       aliveSockets.add(socket);
+      log('DesignAgent plugin connected.');
       try {
         socket.send(
           JSON.stringify({ type: 'hello_ack', serverInstanceId: SERVER_INSTANCE_ID, pid: process.pid })
@@ -137,21 +148,82 @@ function handleConnection(socket: WebSocket): void {
 // and the plugin connects to ws://localhost; CSP matches on the host name.
 const BIND_HOSTS = ['127.0.0.1', '::1'];
 const BIND_RETRY_MS = 250;
-const BIND_MAX_ATTEMPTS = 40; // ~10s of retries
+const BIND_RETRY_MAX_MS = 2000;
 
-// A previous server process (e.g. before a Claude Code restart) can still hold
-// the port for a moment. Rather than failing permanently and leaving the bridge
-// dead, retry the bind until the orphan releases it. The old process now exits
-// on stdin close (see main()), so the window is short.
+// The WebSocket servers we currently own (one per loopback host). Closed when a
+// newer server takes over (see releaseBridge).
+const wssList: WebSocketServer[] = [];
+
+// Give up the bridge: terminate clients and stop listening so the port frees for
+// a newer server. This process stays alive (still an MCP server over stdio) but
+// without a bridge — its tool calls will report "not connected" until restarted.
+function releaseBridge(): void {
+  pluginSocket = null;
+  for (const wss of wssList.splice(0)) {
+    for (const client of wss.clients) {
+      try {
+        client.terminate();
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      wss.close();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+// Ask whoever currently holds the port to step down, so the most recently
+// started session wins the bridge (matches the user's intent — they're working
+// in the new session). Best-effort; if the holder isn't one of our servers the
+// connect just fails and we keep retrying the bind.
+function requestTakeover(): void {
+  try {
+    const client = new WebSocket(`ws://127.0.0.1:${PORT}`);
+    client.on('open', () => {
+      try {
+        client.send(JSON.stringify({ type: 'takeover', instanceId: SERVER_INSTANCE_ID }));
+      } catch {
+        // ignore
+      }
+      setTimeout(() => {
+        try {
+          client.close();
+        } catch {
+          // ignore
+        }
+      }, 200);
+    });
+    client.on('error', () => {
+      // port held by something that isn't us; nothing to take over
+    });
+  } catch {
+    // ignore
+  }
+}
+
+// A previous server process (another Claude Code session, or an orphan before a
+// restart) can hold the port. Retry the bind indefinitely with backoff, and on
+// the first conflict ask the incumbent to step down — so a new session always
+// recovers the bridge instead of failing permanently after a fixed window.
 function bind(host: string, attempt = 1): void {
   const display = host.includes(':') ? `[${host}]` : host;
   const wss = new WebSocketServer({ host, port: PORT });
-  wss.on('listening', () => log(`WebSocket bridge listening on ws://${display}:${PORT}`));
+  wss.on('listening', () => {
+    wssList.push(wss);
+    log(`WebSocket bridge listening on ws://${display}:${PORT}`);
+  });
   wss.on('connection', handleConnection);
   wss.on('error', (error: NodeJS.ErrnoException) => {
-    if (error.code === 'EADDRINUSE' && attempt < BIND_MAX_ATTEMPTS) {
-      log(`Bind ${display}:${PORT} in use (attempt ${attempt}), retrying in ${BIND_RETRY_MS}ms…`);
-      setTimeout(() => bind(host, attempt + 1), BIND_RETRY_MS);
+    if (error.code === 'EADDRINUSE') {
+      if (attempt === 1) {
+        log(`Bind ${display}:${PORT} in use — asking the incumbent server to step down…`);
+        requestTakeover();
+      }
+      const delay = Math.min(BIND_RETRY_MAX_MS, BIND_RETRY_MS * attempt);
+      setTimeout(() => bind(host, attempt + 1), delay);
       return;
     }
     log(`Bind ${display}:${PORT} failed: ${error.message}`);
