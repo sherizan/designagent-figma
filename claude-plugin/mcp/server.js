@@ -10566,11 +10566,12 @@ var require_websocket_server = __commonJS({
 });
 
 // src/server.ts
+var import_node_child_process = require("node:child_process");
 var import_node_crypto = require("node:crypto");
 var import_promises = require("node:dns/promises");
 var import_promises2 = require("node:fs/promises");
 var import_node_net = require("node:net");
-var import_node_path = require("node:path");
+var import_node_path2 = require("node:path");
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -24795,21 +24796,297 @@ var import_subprotocol = __toESM(require_subprotocol(), 1);
 var import_websocket = __toESM(require_websocket(), 1);
 var import_websocket_server = __toESM(require_websocket_server(), 1);
 
-// src/server.ts
+// src/broker.ts
+var import_node_fs = require("node:fs");
+var import_node_os = require("node:os");
+var import_node_path = require("node:path");
+var BROKER_PROTOCOL_VERSION = 2;
 var PORT = Number(process.env.DESIGNAGENT_BRIDGE_PORT ?? 3790);
-var REQUEST_TIMEOUT_MS = 2e4;
+var BIND_HOSTS = ["127.0.0.1", "::1"];
 var HEARTBEAT_MS = 2e4;
+var IDLE_MS = Number(process.env.DESIGNAGENT_BROKER_IDLE_MS ?? 6e4);
+var LOG_FILE = (0, import_node_path.join)((0, import_node_os.tmpdir)(), "designagent-broker.log");
+function blog(...args) {
+  try {
+    (0, import_node_fs.appendFileSync)(LOG_FILE, `[broker ${(/* @__PURE__ */ new Date()).toISOString()}] ${args.join(" ")}
+`);
+  } catch {
+  }
+}
+function runBroker() {
+  const alive = /* @__PURE__ */ new WeakSet();
+  let plugin = null;
+  const servers = [];
+  const requestOrigin = /* @__PURE__ */ new Map();
+  const wssList = [];
+  let idleTimer = null;
+  function activeServer() {
+    return servers.length > 0 ? servers[servers.length - 1] : null;
+  }
+  function send(socket, payload) {
+    if (socket && socket.readyState === import_websocket.default.OPEN) {
+      try {
+        socket.send(JSON.stringify(payload));
+      } catch {
+      }
+    }
+  }
+  function ackPlugin() {
+    const active = activeServer();
+    if (!plugin || !active) {
+      return;
+    }
+    send(plugin, { type: "hello_ack", serverInstanceId: active.sessionId, pid: process.pid });
+  }
+  function armIdleTimer() {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+    if (servers.length === 0) {
+      idleTimer = setTimeout(() => {
+        if (servers.length === 0) {
+          blog(`idle for ${IDLE_MS}ms with no sessions; shutting down to free port ${PORT}.`);
+          process.exit(0);
+        }
+      }, IDLE_MS);
+    }
+  }
+  function dropServer(socket) {
+    const idx = servers.findIndex((s) => s.socket === socket);
+    if (idx === -1) {
+      return;
+    }
+    const wasActive = idx === servers.length - 1;
+    servers.splice(idx, 1);
+    for (const [id, origin] of requestOrigin) {
+      if (origin === socket) {
+        requestOrigin.delete(id);
+      }
+    }
+    if (wasActive) {
+      ackPlugin();
+    }
+    armIdleTimer();
+  }
+  function handleConnection(socket) {
+    alive.add(socket);
+    socket.on("pong", () => alive.add(socket));
+    socket.on("message", (data) => {
+      alive.add(socket);
+      let msg;
+      try {
+        msg = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+      if (!msg || typeof msg !== "object") {
+        return;
+      }
+      if (msg.type === "broker_shutdown") {
+        blog("received broker_shutdown; exiting.");
+        process.exit(0);
+      }
+      if (msg.type === "hello" && msg.role === "figma-plugin") {
+        plugin = socket;
+        blog("plugin connected.");
+        ackPlugin();
+        return;
+      }
+      if (msg.type === "register" && msg.role === "mcp-server") {
+        const version2 = typeof msg.version === "number" ? msg.version : 0;
+        send(socket, { type: "register_ack", brokerVersion: BROKER_PROTOCOL_VERSION });
+        if (version2 > BROKER_PROTOCOL_VERSION) {
+          blog(`server version ${version2} > broker ${BROKER_PROTOCOL_VERSION}; awaiting shutdown.`);
+          return;
+        }
+        const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "unknown";
+        servers.push({ socket, sessionId });
+        blog(`session ${sessionId} registered (active). ${servers.length} session(s).`);
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          idleTimer = null;
+        }
+        ackPlugin();
+        return;
+      }
+      if (socket === plugin) {
+        if (msg.type === "pong") {
+          return;
+        }
+        if (msg.type === "response" && typeof msg.id === "string") {
+          const origin = requestOrigin.get(msg.id);
+          requestOrigin.delete(msg.id);
+          send(origin ?? null, msg);
+          return;
+        }
+        if (msg.type === "server_request" && typeof msg.id === "string") {
+          const active = activeServer();
+          if (!active) {
+            send(plugin, {
+              type: "server_response",
+              id: msg.id,
+              ok: false,
+              error: "No active Claude session is connected to the bridge."
+            });
+            return;
+          }
+          send(active.socket, msg);
+          return;
+        }
+        return;
+      }
+      const fromServer = servers.find((s) => s.socket === socket);
+      if (fromServer) {
+        if (msg.type === "pong") {
+          return;
+        }
+        if (msg.type === "request" && typeof msg.id === "string") {
+          if (!plugin || plugin.readyState !== import_websocket.default.OPEN) {
+            send(socket, {
+              type: "response",
+              id: msg.id,
+              ok: false,
+              error: 'DesignAgent bridge is not connected. In Figma, open the DesignAgent plugin and click "Start" on the Claude bridge bar, then retry.'
+            });
+            return;
+          }
+          requestOrigin.set(msg.id, socket);
+          send(plugin, msg);
+          return;
+        }
+        if (msg.type === "server_response" && typeof msg.id === "string") {
+          send(plugin, msg);
+          return;
+        }
+        return;
+      }
+    });
+    socket.on("close", () => {
+      if (socket === plugin) {
+        plugin = null;
+        blog("plugin disconnected.");
+      } else {
+        dropServer(socket);
+      }
+    });
+    socket.on("error", () => {
+    });
+  }
+  setInterval(() => {
+    const sockets = [];
+    if (plugin) sockets.push(plugin);
+    for (const s of servers) sockets.push(s.socket);
+    for (const socket of sockets) {
+      if (socket.readyState !== import_websocket.default.OPEN) continue;
+      if (!alive.has(socket)) {
+        try {
+          socket.terminate();
+        } catch {
+        }
+        continue;
+      }
+      alive.delete(socket);
+      try {
+        socket.ping();
+        socket.send(JSON.stringify({ type: "ping" }));
+      } catch {
+      }
+    }
+  }, HEARTBEAT_MS);
+  function listen(host, fatalIfTaken) {
+    const display = host.includes(":") ? `[${host}]` : host;
+    const wss = new import_websocket_server.default({ host, port: PORT });
+    wss.on("listening", () => {
+      wssList.push(wss);
+      blog(`listening on ws://${display}:${PORT}`);
+    });
+    wss.on("connection", handleConnection);
+    wss.on("error", (error2) => {
+      if (error2.code === "EADDRINUSE") {
+        if (fatalIfTaken) {
+          blog(`port ${PORT} already owned on ${display}; exiting (another broker won).`);
+          process.exit(0);
+        }
+        blog(`secondary ${display}:${PORT} in use; serving on ${BIND_HOSTS[0]} only.`);
+        return;
+      }
+      blog(`bind ${display}:${PORT} failed: ${error2.message}`);
+    });
+  }
+  listen(BIND_HOSTS[0], true);
+  if (BIND_HOSTS[1]) {
+    listen(BIND_HOSTS[1], false);
+  }
+  armIdleTimer();
+  blog(`broker started (protocol v${BROKER_PROTOCOL_VERSION}, pid ${process.pid}).`);
+}
+
+// src/server.ts
+var IS_BROKER = process.argv.includes("--broker");
+var PORT2 = Number(process.env.DESIGNAGENT_BRIDGE_PORT ?? 3790);
+var REQUEST_TIMEOUT_MS = 2e4;
 var SERVER_INSTANCE_ID = (0, import_node_crypto.randomUUID)();
 function log(...args) {
   console.error("[designagent-mcp]", ...args);
 }
-var aliveSockets = /* @__PURE__ */ new WeakSet();
-var pluginSocket = null;
 var pending = /* @__PURE__ */ new Map();
-function handleConnection(socket) {
-  aliveSockets.add(socket);
-  socket.on("pong", () => {
-    aliveSockets.add(socket);
+var brokerSocket = null;
+var brokerReady = false;
+var reconnectTimer = null;
+var lastSpawnAt = 0;
+function spawnBrokerIfStale() {
+  const now = Date.now();
+  if (now - lastSpawnAt < 3e3) {
+    return;
+  }
+  lastSpawnAt = now;
+  try {
+    const child = (0, import_node_child_process.spawn)(process.execPath, [__filename, "--broker"], {
+      detached: true,
+      stdio: "ignore",
+      env: process.env
+    });
+    child.unref();
+    log("Spawned bridge broker.");
+  } catch (error2) {
+    log(`Failed to spawn broker: ${error2 instanceof Error ? error2.message : String(error2)}`);
+  }
+}
+function scheduleBrokerReconnect(spawnFirst) {
+  brokerReady = false;
+  if (reconnectTimer) {
+    return;
+  }
+  if (spawnFirst) {
+    spawnBrokerIfStale();
+  }
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectToBroker();
+  }, 500);
+}
+function connectToBroker() {
+  let socket;
+  try {
+    socket = new import_websocket.default(`ws://127.0.0.1:${PORT2}`);
+  } catch {
+    scheduleBrokerReconnect(true);
+    return;
+  }
+  brokerSocket = socket;
+  socket.on("open", () => {
+    try {
+      socket.send(
+        JSON.stringify({
+          type: "register",
+          role: "mcp-server",
+          sessionId: SERVER_INSTANCE_ID,
+          version: BROKER_PROTOCOL_VERSION
+        })
+      );
+    } catch {
+    }
   });
   socket.on("message", (data) => {
     let msg;
@@ -24821,19 +25098,30 @@ function handleConnection(socket) {
     if (!msg || typeof msg !== "object") {
       return;
     }
-    if (msg.type === "server_request" && typeof msg.id === "string" && typeof msg.command === "string") {
-      const id = msg.id;
-      const params = msg.params && typeof msg.params === "object" ? msg.params : {};
-      handleServerRequest(msg.command, params).then((result) => socket.send(JSON.stringify({ type: "server_response", id, ok: true, result }))).catch(
-        (error2) => socket.send(
-          JSON.stringify({
-            type: "server_response",
-            id,
-            ok: false,
-            error: error2 instanceof Error ? error2.message : String(error2)
-          })
-        )
-      );
+    if (msg.type === "register_ack") {
+      const brokerVersion = typeof msg.brokerVersion === "number" ? msg.brokerVersion : 0;
+      if (brokerVersion < BROKER_PROTOCOL_VERSION) {
+        log(`Broker v${brokerVersion} is older than v${BROKER_PROTOCOL_VERSION}; replacing it.`);
+        try {
+          socket.send(JSON.stringify({ type: "broker_shutdown" }));
+        } catch {
+        }
+        try {
+          socket.close();
+        } catch {
+        }
+        scheduleBrokerReconnect(true);
+        return;
+      }
+      brokerReady = true;
+      log(`Bridge broker ready (v${brokerVersion}).`);
+      return;
+    }
+    if (msg.type === "ping") {
+      try {
+        socket.send(JSON.stringify({ type: "pong" }));
+      } catch {
+      }
       return;
     }
     if (msg.type === "response" && typeof msg.id === "string") {
@@ -24848,131 +25136,42 @@ function handleConnection(socket) {
       } else {
         entry.reject(new Error(msg.error || "DesignAgent plugin reported an error."));
       }
-    }
-    if (msg.type === "takeover") {
-      const who = String(msg.instanceId ?? "?");
-      log(`Another DesignAgent server (instance ${who}) is taking over; releasing port ${PORT}.`);
-      releaseBridge();
       return;
     }
-    if (msg.type === "hello") {
-      pluginSocket = socket;
-      aliveSockets.add(socket);
-      log("DesignAgent plugin connected.");
-      try {
-        socket.send(
-          JSON.stringify({ type: "hello_ack", serverInstanceId: SERVER_INSTANCE_ID, pid: process.pid })
-        );
-      } catch {
-      }
+    if (msg.type === "server_request" && typeof msg.id === "string" && typeof msg.command === "string") {
+      const id = msg.id;
+      const params = msg.params && typeof msg.params === "object" ? msg.params : {};
+      handleServerRequest(msg.command, params).then(
+        (result) => socket.send(JSON.stringify({ type: "server_response", id, ok: true, result }))
+      ).catch(
+        (error2) => socket.send(
+          JSON.stringify({
+            type: "server_response",
+            id,
+            ok: false,
+            error: error2 instanceof Error ? error2.message : String(error2)
+          })
+        )
+      );
       return;
-    }
-    if (msg.type === "pong") {
-      aliveSockets.add(socket);
     }
   });
   socket.on("close", () => {
-    if (pluginSocket === socket) {
-      pluginSocket = null;
+    if (brokerSocket === socket) {
+      brokerSocket = null;
+      brokerReady = false;
     }
-    log("DesignAgent plugin disconnected.");
+    scheduleBrokerReconnect(true);
   });
-  socket.on("error", (error2) => {
-    log(`Plugin socket error: ${error2.message}`);
-  });
-}
-var BIND_HOSTS = ["127.0.0.1", "::1"];
-var BIND_RETRY_MS = 250;
-var BIND_RETRY_MAX_MS = 2e3;
-var wssList = [];
-function releaseBridge() {
-  pluginSocket = null;
-  for (const wss of wssList.splice(0)) {
-    for (const client of wss.clients) {
-      try {
-        client.terminate();
-      } catch {
-      }
-    }
-    try {
-      wss.close();
-    } catch {
-    }
-  }
-}
-function requestTakeover() {
-  try {
-    const client = new import_websocket.default(`ws://127.0.0.1:${PORT}`);
-    client.on("open", () => {
-      try {
-        client.send(JSON.stringify({ type: "takeover", instanceId: SERVER_INSTANCE_ID }));
-      } catch {
-      }
-      setTimeout(() => {
-        try {
-          client.close();
-        } catch {
-        }
-      }, 200);
-    });
-    client.on("error", () => {
-    });
-  } catch {
-  }
-}
-function bind(host, attempt = 1) {
-  const display = host.includes(":") ? `[${host}]` : host;
-  const wss = new import_websocket_server.default({ host, port: PORT });
-  wss.on("listening", () => {
-    wssList.push(wss);
-    log(`WebSocket bridge listening on ws://${display}:${PORT}`);
-  });
-  wss.on("connection", handleConnection);
-  wss.on("error", (error2) => {
-    if (error2.code === "EADDRINUSE") {
-      if (attempt === 1) {
-        log(`Bind ${display}:${PORT} in use \u2014 asking the incumbent server to step down\u2026`);
-        requestTakeover();
-      }
-      const delay = Math.min(BIND_RETRY_MAX_MS, BIND_RETRY_MS * attempt);
-      setTimeout(() => bind(host, attempt + 1), delay);
-      return;
-    }
-    log(`Bind ${display}:${PORT} failed: ${error2.message}`);
+  socket.on("error", () => {
   });
 }
-for (const host of BIND_HOSTS) {
-  bind(host);
-}
-setInterval(() => {
-  const socket = pluginSocket;
-  if (!socket || socket.readyState !== import_websocket.default.OPEN) {
-    return;
-  }
-  if (!aliveSockets.has(socket)) {
-    log("Plugin socket missed heartbeat; terminating.");
-    if (pluginSocket === socket) {
-      pluginSocket = null;
-    }
-    try {
-      socket.terminate();
-    } catch {
-    }
-    return;
-  }
-  aliveSockets.delete(socket);
-  try {
-    socket.ping();
-    socket.send(JSON.stringify({ type: "ping" }));
-  } catch {
-  }
-}, HEARTBEAT_MS);
 function callPlugin(command, params = {}) {
   return new Promise((resolve2, reject) => {
-    if (!pluginSocket || pluginSocket.readyState !== import_websocket.default.OPEN) {
+    if (!brokerSocket || brokerSocket.readyState !== import_websocket.default.OPEN || !brokerReady) {
       reject(
         new Error(
-          'DesignAgent bridge is not connected. In Figma, open the DesignAgent plugin and click "Enable" on the Claude bridge bar, then retry.'
+          'DesignAgent bridge is starting up or not connected. In Figma, open the DesignAgent plugin and click "Start" on the Claude bridge bar, then retry.'
         )
       );
       return;
@@ -24984,7 +25183,7 @@ function callPlugin(command, params = {}) {
     }, REQUEST_TIMEOUT_MS);
     pending.set(id, { resolve: resolve2, reject, timer });
     try {
-      pluginSocket.send(JSON.stringify({ type: "request", id, command, params }));
+      brokerSocket.send(JSON.stringify({ type: "request", id, command, params }));
     } catch (error2) {
       pending.delete(id);
       clearTimeout(timer);
@@ -25032,11 +25231,11 @@ async function loadImageBase64(args) {
   }
   return buf.toString("base64");
 }
-var PROJECT_ROOT = process.env.DESIGNAGENT_PROJECT_DIR ? (0, import_node_path.resolve)(process.env.DESIGNAGENT_PROJECT_DIR) : process.cwd();
+var PROJECT_ROOT = process.env.DESIGNAGENT_PROJECT_DIR ? (0, import_node_path2.resolve)(process.env.DESIGNAGENT_PROJECT_DIR) : process.cwd();
 function resolveInProject(path) {
-  const abs = (0, import_node_path.resolve)(PROJECT_ROOT, path);
-  const rel = (0, import_node_path.relative)(PROJECT_ROOT, abs);
-  if (rel.startsWith("..") || (0, import_node_path.isAbsolute)(rel)) {
+  const abs = (0, import_node_path2.resolve)(PROJECT_ROOT, path);
+  const rel = (0, import_node_path2.relative)(PROJECT_ROOT, abs);
+  if (rel.startsWith("..") || (0, import_node_path2.isAbsolute)(rel)) {
     throw new Error("Path is outside the project directory.");
   }
   return abs;
@@ -25129,7 +25328,7 @@ async function listHtmlFiles() {
     }
     for (const entry of entries) {
       if (results.length >= 100) break;
-      const full = (0, import_node_path.resolve)(dir, entry.name);
+      const full = (0, import_node_path2.resolve)(dir, entry.name);
       if (entry.isDirectory()) {
         if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
         await walk(full, depth + 1);
@@ -25140,9 +25339,9 @@ async function listHtmlFiles() {
         } catch {
         }
         results.push({
-          path: (0, import_node_path.relative)(PROJECT_ROOT, full),
+          path: (0, import_node_path2.relative)(PROJECT_ROOT, full),
           name: entry.name,
-          dir: (0, import_node_path.relative)(PROJECT_ROOT, dir) || ".",
+          dir: (0, import_node_path2.relative)(PROJECT_ROOT, dir) || ".",
           size
         });
       }
@@ -25642,14 +25841,19 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log(`DesignAgent MCP server ready (stdio). instance=${SERVER_INSTANCE_ID} pid=${process.pid}`);
+  connectToBroker();
   const exit = () => {
-    log("stdin closed; shutting down to release the bridge port.");
+    log("stdin closed; shutting down.");
     process.exit(0);
   };
   process.stdin.on("close", exit);
   process.stdin.on("end", exit);
 }
-main().catch((error2) => {
-  log(`Fatal: ${error2 instanceof Error ? error2.message : String(error2)}`);
-  process.exit(1);
-});
+if (IS_BROKER) {
+  runBroker();
+} else {
+  main().catch((error2) => {
+    log(`Fatal: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    process.exit(1);
+  });
+}

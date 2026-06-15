@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
@@ -6,20 +7,22 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocket } from 'ws';
+import { runBroker, BROKER_PROTOCOL_VERSION } from './broker';
 
 // DesignAgent MCP server.
 //
-// Architecture: Claude Code launches this over stdio. It also runs a local
-// WebSocket server that the DesignAgent Figma plugin (its UI iframe) connects to
-// when the user enables the bridge. MCP tool calls are forwarded to the plugin,
-// which runs them against the live Figma document and returns the result.
+// Architecture: Claude Code launches this over stdio (one process per session).
+// A single persistent *broker* daemon owns the bridge port; both this server and
+// the Figma plugin connect to it as WebSocket clients, and it relays MCP tool
+// calls to the plugin (which runs them against the live Figma document). Run with
+// `--broker` to be the broker itself (we spawn it on demand). See broker.ts.
 //
 // IMPORTANT: stdout is reserved for the MCP protocol. All logging goes to stderr.
 
+const IS_BROKER = process.argv.includes('--broker');
 const PORT = Number(process.env.DESIGNAGENT_BRIDGE_PORT ?? 3790);
 const REQUEST_TIMEOUT_MS = 20000;
-const HEARTBEAT_MS = 20000;
 
 // Identifies this specific server process. Sent to the plugin in the handshake
 // ack so the plugin can tell when it has (re)paired with a *different* server
@@ -30,36 +33,90 @@ function log(...args: unknown[]): void {
   console.error('[designagent-mcp]', ...args);
 }
 
-// ---- WebSocket bridge to the Figma plugin ----
+// ---- Bridge to the Figma plugin (via the broker daemon) ----
+//
+// We do NOT bind the port ourselves. A single persistent broker owns it (see
+// broker.ts); we connect to it as a client and relay tool calls to the plugin
+// through it. If no broker is running we spawn one (detached) and reconnect.
 
-// The ws library has no typings for our liveness flag; track it on the side.
-const aliveSockets = new WeakSet<WebSocket>();
-let pluginSocket: WebSocket | null = null;
 const pending = new Map<
   string,
   { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
 >();
 
-function handleConnection(socket: WebSocket): void {
-  // Don't assume every connection is the plugin — a newer server process may
-  // connect just to hand us a `takeover`. We only adopt a socket as the plugin
-  // once it identifies itself with `hello`.
-  aliveSockets.add(socket);
+let brokerSocket: WebSocket | null = null;
+let brokerReady = false;
+let reconnectTimer: NodeJS.Timeout | null = null;
+let lastSpawnAt = 0;
 
-  // ws protocol-level pong (from socket.ping()) — proves the peer is alive.
-  socket.on('pong', () => {
-    aliveSockets.add(socket);
+function spawnBrokerIfStale(): void {
+  const now = Date.now();
+  if (now - lastSpawnAt < 3000) {
+    return; // avoid a flurry of spawns while reconnecting
+  }
+  lastSpawnAt = now;
+  try {
+    const child = spawn(process.execPath, [__filename, '--broker'], {
+      detached: true,
+      stdio: 'ignore',
+      env: process.env
+    });
+    child.unref();
+    log('Spawned bridge broker.');
+  } catch (error) {
+    log(`Failed to spawn broker: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function scheduleBrokerReconnect(spawnFirst: boolean): void {
+  brokerReady = false;
+  if (reconnectTimer) {
+    return;
+  }
+  if (spawnFirst) {
+    spawnBrokerIfStale();
+  }
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectToBroker();
+  }, 500);
+}
+
+function connectToBroker(): void {
+  let socket: WebSocket;
+  try {
+    socket = new WebSocket(`ws://127.0.0.1:${PORT}`);
+  } catch {
+    scheduleBrokerReconnect(true);
+    return;
+  }
+  brokerSocket = socket;
+
+  socket.on('open', () => {
+    try {
+      socket.send(
+        JSON.stringify({
+          type: 'register',
+          role: 'mcp-server',
+          sessionId: SERVER_INSTANCE_ID,
+          version: BROKER_PROTOCOL_VERSION
+        })
+      );
+    } catch {
+      // ignore; close/reconnect will handle it
+    }
   });
 
   socket.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
     let msg: {
       type?: string;
       id?: string;
+      command?: string;
+      params?: unknown;
       ok?: boolean;
       result?: unknown;
       error?: string;
-      command?: string;
-      params?: unknown;
+      brokerVersion?: number;
     };
     try {
       msg = JSON.parse(data.toString());
@@ -69,24 +126,41 @@ function handleConnection(socket: WebSocket): void {
     if (!msg || typeof msg !== 'object') {
       return;
     }
-    // Reverse channel: the plugin asks the server (filesystem) for something.
-    if (msg.type === 'server_request' && typeof msg.id === 'string' && typeof msg.command === 'string') {
-      const id = msg.id;
-      const params = msg.params && typeof msg.params === 'object' ? (msg.params as Record<string, unknown>) : {};
-      handleServerRequest(msg.command, params)
-        .then((result) => socket.send(JSON.stringify({ type: 'server_response', id, ok: true, result })))
-        .catch((error: unknown) =>
-          socket.send(
-            JSON.stringify({
-              type: 'server_response',
-              id,
-              ok: false,
-              error: error instanceof Error ? error.message : String(error)
-            })
-          )
-        );
+
+    if (msg.type === 'register_ack') {
+      const brokerVersion = typeof msg.brokerVersion === 'number' ? msg.brokerVersion : 0;
+      if (brokerVersion < BROKER_PROTOCOL_VERSION) {
+        // An older broker bundle is still running. Ask it to step down, then
+        // respawn a current one.
+        log(`Broker v${brokerVersion} is older than v${BROKER_PROTOCOL_VERSION}; replacing it.`);
+        try {
+          socket.send(JSON.stringify({ type: 'broker_shutdown' }));
+        } catch {
+          // ignore
+        }
+        try {
+          socket.close();
+        } catch {
+          // ignore
+        }
+        scheduleBrokerReconnect(true);
+        return;
+      }
+      brokerReady = true;
+      log(`Bridge broker ready (v${brokerVersion}).`);
       return;
     }
+
+    if (msg.type === 'ping') {
+      try {
+        socket.send(JSON.stringify({ type: 'pong' }));
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    // Tool-call result from the plugin.
     if (msg.type === 'response' && typeof msg.id === 'string') {
       const entry = pending.get(msg.id);
       if (!entry) {
@@ -99,175 +173,56 @@ function handleConnection(socket: WebSocket): void {
       } else {
         entry.reject(new Error(msg.error || 'DesignAgent plugin reported an error.'));
       }
-    }
-    // A newer server instance asks us to step down so it can own the bridge.
-    // Release the port; this (older) session keeps running but bridge-less.
-    if (msg.type === 'takeover') {
-      const who = String((msg as { instanceId?: unknown }).instanceId ?? '?');
-      log(`Another DesignAgent server (instance ${who}) is taking over; releasing port ${PORT}.`);
-      releaseBridge();
       return;
     }
-    // The plugin announces itself with `hello`; acknowledge it so the plugin
-    // only shows "Connected" once it has confirmed a live, end-to-end pairing
-    // with *this* server instance (not merely an open socket to port 3790).
-    if (msg.type === 'hello') {
-      pluginSocket = socket;
-      aliveSockets.add(socket);
-      log('DesignAgent plugin connected.');
-      try {
-        socket.send(
-          JSON.stringify({ type: 'hello_ack', serverInstanceId: SERVER_INSTANCE_ID, pid: process.pid })
+
+    // Reverse channel: the plugin asks us (the active session) for a filesystem op.
+    if (
+      msg.type === 'server_request' &&
+      typeof msg.id === 'string' &&
+      typeof msg.command === 'string'
+    ) {
+      const id = msg.id;
+      const params =
+        msg.params && typeof msg.params === 'object' ? (msg.params as Record<string, unknown>) : {};
+      handleServerRequest(msg.command, params)
+        .then((result) =>
+          socket.send(JSON.stringify({ type: 'server_response', id, ok: true, result }))
+        )
+        .catch((error: unknown) =>
+          socket.send(
+            JSON.stringify({
+              type: 'server_response',
+              id,
+              ok: false,
+              error: error instanceof Error ? error.message : String(error)
+            })
+          )
         );
-      } catch {
-        // ignore
-      }
       return;
-    }
-    // App-level 'pong' (reply to our JSON ping) also marks the socket alive.
-    if (msg.type === 'pong') {
-      aliveSockets.add(socket);
     }
   });
 
   socket.on('close', () => {
-    if (pluginSocket === socket) {
-      pluginSocket = null;
+    if (brokerSocket === socket) {
+      brokerSocket = null;
+      brokerReady = false;
     }
-    log('DesignAgent plugin disconnected.');
+    // Broker may have idle-exited or never existed — respawn + reconnect.
+    scheduleBrokerReconnect(true);
   });
 
-  socket.on('error', (error: Error) => {
-    log(`Plugin socket error: ${error.message}`);
+  socket.on('error', () => {
+    // 'close' follows; reconnect handled there.
   });
 }
-
-// Bind both loopback addresses (IPv4 127.0.0.1 + IPv6 ::1) so the plugin reaches
-// us regardless of how "localhost" resolves on this machine — while staying
-// loopback-only (never exposed to the LAN). The manifest allows http://localhost
-// and the plugin connects to ws://localhost; CSP matches on the host name.
-const BIND_HOSTS = ['127.0.0.1', '::1'];
-const BIND_RETRY_MS = 250;
-const BIND_RETRY_MAX_MS = 2000;
-
-// The WebSocket servers we currently own (one per loopback host). Closed when a
-// newer server takes over (see releaseBridge).
-const wssList: WebSocketServer[] = [];
-
-// Give up the bridge: terminate clients and stop listening so the port frees for
-// a newer server. This process stays alive (still an MCP server over stdio) but
-// without a bridge — its tool calls will report "not connected" until restarted.
-function releaseBridge(): void {
-  pluginSocket = null;
-  for (const wss of wssList.splice(0)) {
-    for (const client of wss.clients) {
-      try {
-        client.terminate();
-      } catch {
-        // ignore
-      }
-    }
-    try {
-      wss.close();
-    } catch {
-      // ignore
-    }
-  }
-}
-
-// Ask whoever currently holds the port to step down, so the most recently
-// started session wins the bridge (matches the user's intent — they're working
-// in the new session). Best-effort; if the holder isn't one of our servers the
-// connect just fails and we keep retrying the bind.
-function requestTakeover(): void {
-  try {
-    const client = new WebSocket(`ws://127.0.0.1:${PORT}`);
-    client.on('open', () => {
-      try {
-        client.send(JSON.stringify({ type: 'takeover', instanceId: SERVER_INSTANCE_ID }));
-      } catch {
-        // ignore
-      }
-      setTimeout(() => {
-        try {
-          client.close();
-        } catch {
-          // ignore
-        }
-      }, 200);
-    });
-    client.on('error', () => {
-      // port held by something that isn't us; nothing to take over
-    });
-  } catch {
-    // ignore
-  }
-}
-
-// A previous server process (another Claude Code session, or an orphan before a
-// restart) can hold the port. Retry the bind indefinitely with backoff, and on
-// the first conflict ask the incumbent to step down — so a new session always
-// recovers the bridge instead of failing permanently after a fixed window.
-function bind(host: string, attempt = 1): void {
-  const display = host.includes(':') ? `[${host}]` : host;
-  const wss = new WebSocketServer({ host, port: PORT });
-  wss.on('listening', () => {
-    wssList.push(wss);
-    log(`WebSocket bridge listening on ws://${display}:${PORT}`);
-  });
-  wss.on('connection', handleConnection);
-  wss.on('error', (error: NodeJS.ErrnoException) => {
-    if (error.code === 'EADDRINUSE') {
-      if (attempt === 1) {
-        log(`Bind ${display}:${PORT} in use — asking the incumbent server to step down…`);
-        requestTakeover();
-      }
-      const delay = Math.min(BIND_RETRY_MAX_MS, BIND_RETRY_MS * attempt);
-      setTimeout(() => bind(host, attempt + 1), delay);
-      return;
-    }
-    log(`Bind ${display}:${PORT} failed: ${error.message}`);
-  });
-}
-for (const host of BIND_HOSTS) {
-  bind(host);
-}
-
-// Heartbeat so dead (including half-open) connections are noticed and cleared.
-// First drop any socket that didn't answer the previous round, then probe again
-// with both a ws-level ping and the app-level JSON ping the plugin UI expects.
-setInterval(() => {
-  const socket = pluginSocket;
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    return;
-  }
-  if (!aliveSockets.has(socket)) {
-    log('Plugin socket missed heartbeat; terminating.');
-    if (pluginSocket === socket) {
-      pluginSocket = null;
-    }
-    try {
-      socket.terminate();
-    } catch {
-      // ignore
-    }
-    return;
-  }
-  aliveSockets.delete(socket);
-  try {
-    socket.ping();
-    socket.send(JSON.stringify({ type: 'ping' }));
-  } catch {
-    // ignore
-  }
-}, HEARTBEAT_MS);
 
 function callPlugin(command: string, params: Record<string, unknown> = {}): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    if (!pluginSocket || pluginSocket.readyState !== WebSocket.OPEN) {
+    if (!brokerSocket || brokerSocket.readyState !== WebSocket.OPEN || !brokerReady) {
       reject(
         new Error(
-          'DesignAgent bridge is not connected. In Figma, open the DesignAgent plugin and click "Enable" on the Claude bridge bar, then retry.'
+          'DesignAgent bridge is starting up or not connected. In Figma, open the DesignAgent plugin and click "Start" on the Claude bridge bar, then retry.'
         )
       );
       return;
@@ -279,7 +234,7 @@ function callPlugin(command: string, params: Record<string, unknown> = {}): Prom
     }, REQUEST_TIMEOUT_MS);
     pending.set(id, { resolve, reject, timer });
     try {
-      pluginSocket.send(JSON.stringify({ type: 'request', id, command, params }));
+      brokerSocket.send(JSON.stringify({ type: 'request', id, command, params }));
     } catch (error) {
       pending.delete(id);
       clearTimeout(timer);
@@ -1060,19 +1015,25 @@ async function main(): Promise<void> {
   await server.connect(transport);
   log(`DesignAgent MCP server ready (stdio). instance=${SERVER_INSTANCE_ID} pid=${process.pid}`);
 
-  // When Claude Code replaces or shuts down this server, our stdin closes.
-  // Exit promptly so we release the WebSocket port (3790) instead of orphaning
-  // and squatting it — which would leave the replacement server unable to bind
-  // and the plugin paired to a dead instance.
+  // Connect to the bridge broker (spawning it if needed) once we're up.
+  connectToBroker();
+
+  // When Claude Code shuts this session down, our stdin closes. Exit promptly so
+  // the broker sees us leave (and idle-exits once the last session is gone).
   const exit = () => {
-    log('stdin closed; shutting down to release the bridge port.');
+    log('stdin closed; shutting down.');
     process.exit(0);
   };
   process.stdin.on('close', exit);
   process.stdin.on('end', exit);
 }
 
-main().catch((error) => {
-  log(`Fatal: ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
-});
+if (IS_BROKER) {
+  // This process is the persistent relay daemon, not an MCP server.
+  runBroker();
+} else {
+  main().catch((error) => {
+    log(`Fatal: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  });
+}
