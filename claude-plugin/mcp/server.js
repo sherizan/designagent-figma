@@ -24936,7 +24936,7 @@ async function loadImageBase64(args) {
   }
   return buf.toString("base64");
 }
-var PROJECT_ROOT = process.cwd();
+var PROJECT_ROOT = process.env.DESIGNAGENT_PROJECT_DIR ? (0, import_node_path.resolve)(process.env.DESIGNAGENT_PROJECT_DIR) : process.cwd();
 async function readHtmlFile(path) {
   const abs = (0, import_node_path.resolve)(PROJECT_ROOT, path);
   const rel = (0, import_node_path.relative)(PROJECT_ROOT, abs);
@@ -25056,7 +25056,7 @@ async function listHtmlFiles() {
 async function handleServerRequest(command, params) {
   switch (command) {
     case "list_html_files":
-      return { files: await listHtmlFiles() };
+      return { root: PROJECT_ROOT, files: await listHtmlFiles() };
     case "read_html_file": {
       const path = String(params.path ?? "");
       if (!path) {

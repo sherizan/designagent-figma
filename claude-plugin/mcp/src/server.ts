@@ -206,7 +206,11 @@ async function loadImageBase64(args: {
   return buf.toString('base64');
 }
 
-const PROJECT_ROOT = process.cwd();
+// The directory the file browser scans. Defaults to where Claude Code launched
+// the server; override with DESIGNAGENT_PROJECT_DIR if your HTML lives elsewhere.
+const PROJECT_ROOT = process.env.DESIGNAGENT_PROJECT_DIR
+  ? resolve(process.env.DESIGNAGENT_PROJECT_DIR)
+  : process.cwd();
 
 // Read an .html file from inside the project (the dir Claude Code launched in).
 async function readHtmlFile(path: string): Promise<string> {
@@ -351,7 +355,7 @@ async function listHtmlFiles(): Promise<HtmlFileEntry[]> {
 async function handleServerRequest(command: string, params: Record<string, unknown>): Promise<unknown> {
   switch (command) {
     case 'list_html_files':
-      return { files: await listHtmlFiles() };
+      return { root: PROJECT_ROOT, files: await listHtmlFiles() };
     case 'read_html_file': {
       const path = String(params.path ?? '');
       if (!path) {
