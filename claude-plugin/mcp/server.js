@@ -3304,8 +3304,8 @@ var require_utils = __commonJS({
     var HOST_DELIMS = { "@": "%40", "/": "%2F", "?": "%3F", "#": "%23", ":": "%3A" };
     var HOST_DELIM_RE = /[@/?#:]/g;
     var HOST_DELIM_NO_COLON_RE = /[@/?#]/g;
-    function reescapeHostDelimiters(host, isIP) {
-      const re = isIP ? HOST_DELIM_NO_COLON_RE : HOST_DELIM_RE;
+    function reescapeHostDelimiters(host, isIP2) {
+      const re = isIP2 ? HOST_DELIM_NO_COLON_RE : HOST_DELIM_RE;
       re.lastIndex = 0;
       return host.replace(re, (ch) => HOST_DELIMS[ch]);
     }
@@ -3787,7 +3787,7 @@ var require_fast_uri = __commonJS({
         fragment: void 0
       };
       let malformedAuthorityOrPort = false;
-      let isIP = false;
+      let isIP2 = false;
       if (options.reference === "suffix") {
         if (options.scheme) {
           uri = options.scheme + ":" + uri;
@@ -3817,9 +3817,9 @@ var require_fast_uri = __commonJS({
           if (ipv4result === false) {
             const ipv6result = normalizeIPv6(parsed.host);
             parsed.host = ipv6result.host.toLowerCase();
-            isIP = ipv6result.isIPV6;
+            isIP2 = ipv6result.isIPV6;
           } else {
-            isIP = true;
+            isIP2 = true;
           }
         }
         if (parsed.scheme === void 0 && parsed.userinfo === void 0 && parsed.host === void 0 && parsed.port === void 0 && parsed.query === void 0 && !parsed.path) {
@@ -3836,7 +3836,7 @@ var require_fast_uri = __commonJS({
         }
         const schemeHandler = getSchemeHandler(options.scheme || parsed.scheme);
         if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport)) {
-          if (parsed.host && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) {
+          if (parsed.host && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP2 === false && nonSimpleDomain(parsed.host)) {
             try {
               parsed.host = URL.domainToASCII(parsed.host.toLowerCase());
             } catch (e) {
@@ -3850,7 +3850,7 @@ var require_fast_uri = __commonJS({
               parsed.scheme = unescape(parsed.scheme);
             }
             if (parsed.host !== void 0) {
-              parsed.host = reescapeHostDelimiters(unescape(parsed.host), isIP);
+              parsed.host = reescapeHostDelimiters(unescape(parsed.host), isIP2);
             }
           }
           if (parsed.path) {
@@ -10567,7 +10567,9 @@ var require_websocket_server = __commonJS({
 
 // src/server.ts
 var import_node_crypto = require("node:crypto");
-var import_promises = require("node:fs/promises");
+var import_promises = require("node:dns/promises");
+var import_promises2 = require("node:fs/promises");
+var import_node_net = require("node:net");
 var import_node_path = require("node:path");
 
 // node_modules/zod/v3/external.js
@@ -24902,7 +24904,7 @@ async function loadImageBase64(args) {
     const m = /^data:[^;]+;base64,(.+)$/.exec(args.data);
     buf = Buffer.from(m ? m[1] : args.data, "base64");
   } else if (args.path) {
-    buf = await (0, import_promises.readFile)(args.path);
+    buf = await (0, import_promises2.readFile)(args.path);
   } else if (args.url) {
     const res = await fetch(args.url);
     if (!res.ok) {
@@ -24926,7 +24928,50 @@ async function readHtmlFile(path) {
   if (rel.startsWith("..") || (0, import_node_path.isAbsolute)(rel)) {
     throw new Error("Path is outside the project directory.");
   }
-  return (0, import_promises.readFile)(abs, "utf8");
+  return (0, import_promises2.readFile)(abs, "utf8");
+}
+function isPrivateAddress(ip) {
+  const family = (0, import_node_net.isIP)(ip);
+  if (family === 4) {
+    const o = ip.split(".").map(Number);
+    if (o[0] === 127 || o[0] === 10 || o[0] === 0) return true;
+    if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;
+    if (o[0] === 192 && o[1] === 168) return true;
+    if (o[0] === 169 && o[1] === 254) return true;
+    if (o[0] === 100 && o[1] >= 64 && o[1] <= 127) return true;
+    return false;
+  }
+  if (family === 6) {
+    const v = ip.toLowerCase();
+    if (v === "::1" || v === "::") return true;
+    if (v.startsWith("fe80") || v.startsWith("fc") || v.startsWith("fd")) return true;
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+    if (mapped) return isPrivateAddress(mapped[1]);
+    return false;
+  }
+  return true;
+}
+async function assertPublicUrl(rawUrl) {
+  const url = new URL(rawUrl);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Blocked URL scheme");
+  }
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  const addrs = await (0, import_promises.lookup)(host, { all: true });
+  if (addrs.length === 0 || addrs.some((a) => isPrivateAddress(a.address))) {
+    throw new Error("Blocked non-public address");
+  }
+}
+async function safeImageFetch(rawUrl, hops = 0) {
+  if (hops > 3) return null;
+  await assertPublicUrl(rawUrl);
+  const res = await fetch(rawUrl, { redirect: "manual" });
+  if (res.status >= 300 && res.status < 400) {
+    const location = res.headers.get("location");
+    if (!location) return null;
+    return safeImageFetch(new URL(location, rawUrl).toString(), hops + 1);
+  }
+  return res;
 }
 async function inlineExternalImages(html) {
   const matches = Array.from(html.matchAll(/<img\b[^>]*\bsrc=["'](https?:\/\/[^"']+)["']/gi));
@@ -24936,8 +24981,8 @@ async function inlineExternalImages(html) {
     if (budget <= 0) break;
     const url = match[1];
     try {
-      const res = await fetch(url);
-      if (!res.ok) continue;
+      const res = await safeImageFetch(url);
+      if (!res || !res.ok) continue;
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length > MAX_IMAGE_BYTES) continue;
       const contentType = res.headers.get("content-type") || "image/png";

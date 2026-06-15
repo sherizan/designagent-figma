@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
 import { readFile } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -190,8 +192,58 @@ async function readHtmlFile(path: string): Promise<string> {
   return readFile(abs, 'utf8');
 }
 
+// SSRF guard: reject loopback / private / link-local / metadata addresses.
+function isPrivateAddress(ip: string): boolean {
+  const family = isIP(ip);
+  if (family === 4) {
+    const o = ip.split('.').map(Number);
+    if (o[0] === 127 || o[0] === 10 || o[0] === 0) return true;
+    if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;
+    if (o[0] === 192 && o[1] === 168) return true;
+    if (o[0] === 169 && o[1] === 254) return true; // link-local + cloud metadata
+    if (o[0] === 100 && o[1] >= 64 && o[1] <= 127) return true; // CGNAT
+    return false;
+  }
+  if (family === 6) {
+    const v = ip.toLowerCase();
+    if (v === '::1' || v === '::') return true;
+    if (v.startsWith('fe80') || v.startsWith('fc') || v.startsWith('fd')) return true;
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+    if (mapped) return isPrivateAddress(mapped[1]);
+    return false;
+  }
+  return true; // unparseable → treat as unsafe
+}
+
+async function assertPublicUrl(rawUrl: string): Promise<void> {
+  const url = new URL(rawUrl);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('Blocked URL scheme');
+  }
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  const addrs = await lookup(host, { all: true });
+  if (addrs.length === 0 || addrs.some((a) => isPrivateAddress(a.address))) {
+    throw new Error('Blocked non-public address');
+  }
+}
+
+// Fetch an image URL with SSRF protections: validate the host, follow redirects
+// manually and re-validate each hop.
+async function safeImageFetch(rawUrl: string, hops = 0): Promise<Response | null> {
+  if (hops > 3) return null;
+  await assertPublicUrl(rawUrl);
+  const res = await fetch(rawUrl, { redirect: 'manual' });
+  if (res.status >= 300 && res.status < 400) {
+    const location = res.headers.get('location');
+    if (!location) return null;
+    return safeImageFetch(new URL(location, rawUrl).toString(), hops + 1);
+  }
+  return res;
+}
+
 // Inline external <img src="http(s)://…"> as data URLs so the plugin can embed
-// them (the plugin UI can't fetch arbitrary domains). Best-effort, budgeted.
+// them (the plugin UI can't fetch arbitrary domains). Best-effort, budgeted,
+// and SSRF-guarded (skips loopback/private/metadata hosts).
 async function inlineExternalImages(html: string): Promise<string> {
   const matches = Array.from(html.matchAll(/<img\b[^>]*\bsrc=["'](https?:\/\/[^"']+)["']/gi));
   let result = html;
@@ -200,15 +252,15 @@ async function inlineExternalImages(html: string): Promise<string> {
     if (budget <= 0) break;
     const url = match[1];
     try {
-      const res = await fetch(url);
-      if (!res.ok) continue;
+      const res = await safeImageFetch(url);
+      if (!res || !res.ok) continue;
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length > MAX_IMAGE_BYTES) continue;
       const contentType = res.headers.get('content-type') || 'image/png';
       result = result.split(url).join(`data:${contentType};base64,${buf.toString('base64')}`);
       budget -= 1;
     } catch {
-      // skip unreachable images
+      // skip unreachable / blocked images
     }
   }
   return result;
