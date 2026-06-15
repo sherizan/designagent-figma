@@ -7,7 +7,11 @@ import type { DesignTreeNode, DesignTreeShadow } from './shared/designtree';
 // Security: the render iframe uses sandbox="allow-same-origin" WITHOUT
 // allow-scripts, so no JavaScript runs — not <script>, not inline handlers like
 // onerror/onload. We only need layout + computed styles, never execution.
-// allow-same-origin lets this document read the iframe's DOM to measure it.
+
+interface Box {
+  left: number;
+  top: number;
+}
 
 function px(value: string): number {
   const n = parseFloat(value);
@@ -50,29 +54,11 @@ function parseBoxShadow(value: string): DesignTreeShadow | undefined {
   };
 }
 
-function getDirectText(el: Element): string {
-  let text = '';
-  el.childNodes.forEach((child) => {
-    if (child.nodeType === 3) {
-      text += child.textContent ?? '';
-    }
-  });
-  return text.replace(/\s+/g, ' ').trim();
+function isHidden(cs: CSSStyleDeclaration): boolean {
+  return cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0;
 }
 
-function buildNode(el: Element, win: Window, parentRect: DOMRect, isRoot: boolean): DesignTreeNode {
-  const rect = el.getBoundingClientRect();
-  const cs = win.getComputedStyle(el);
-
-  const node: DesignTreeNode = {
-    kind: 'frame',
-    x: isRoot ? 0 : rect.left - parentRect.left,
-    y: isRoot ? 0 : rect.top - parentRect.top,
-    width: rect.width,
-    height: rect.height,
-    children: []
-  };
-
+function applyBoxStyles(node: DesignTreeNode, cs: CSSStyleDeclaration): void {
   if (isVisibleColor(cs.backgroundColor)) {
     node.fill = cs.backgroundColor;
   }
@@ -93,42 +79,63 @@ function buildNode(el: Element, win: Window, parentRect: DOMRect, isRoot: boolea
   if (shadow) {
     node.shadow = shadow;
   }
+}
+
+// Walk an element into a node, positioned relative to `parent`. Child elements
+// recurse; text nodes are measured precisely with a Range so they land exactly
+// where the browser drew them (beside icons, inline runs, etc.).
+function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
+  const rect = el.getBoundingClientRect();
+  const cs = win.getComputedStyle(el);
+
+  const node: DesignTreeNode = {
+    kind: 'frame',
+    x: rect.left - parent.left,
+    y: rect.top - parent.top,
+    width: rect.width,
+    height: rect.height,
+    children: []
+  };
+  applyBoxStyles(node, cs);
 
   if (el.tagName === 'IMG') {
     const src = (el as HTMLImageElement).getAttribute('src') ?? '';
     if (src.startsWith('data:')) {
       node.kind = 'image';
       node.dataUrl = src;
+      return node;
     }
   }
 
-  for (const child of Array.from(el.children)) {
-    const childCs = win.getComputedStyle(child);
-    if (childCs.display === 'none' || childCs.visibility === 'hidden') {
-      continue;
+  for (const child of Array.from(el.childNodes)) {
+    if (child.nodeType === 1) {
+      const childEl = child as Element;
+      const childCs = win.getComputedStyle(childEl);
+      if (isHidden(childCs)) continue;
+      const cr = childEl.getBoundingClientRect();
+      if (cr.width <= 0 || cr.height <= 0) continue;
+      node.children.push(buildNode(childEl, win, rect));
+    } else if (child.nodeType === 3) {
+      const text = (child.textContent ?? '').replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      const range = el.ownerDocument.createRange();
+      range.selectNodeContents(child);
+      const tr = range.getBoundingClientRect();
+      if (tr.width <= 0 || tr.height <= 0) continue;
+      node.children.push({
+        kind: 'text',
+        x: tr.left - rect.left,
+        y: tr.top - rect.top,
+        width: tr.width,
+        height: tr.height,
+        text,
+        fontSize: px(cs.fontSize),
+        fontWeight: fontWeightToNumber(cs.fontWeight),
+        textColor: cs.color,
+        textAlign: cssAlignToFigma(cs.textAlign),
+        children: []
+      });
     }
-    const childRect = child.getBoundingClientRect();
-    if (childRect.width <= 0 || childRect.height <= 0) {
-      continue;
-    }
-    node.children.push(buildNode(child, win, rect, false));
-  }
-
-  const directText = getDirectText(el);
-  if (directText && node.kind !== 'image') {
-    node.children.push({
-      kind: 'text',
-      x: 0,
-      y: 0,
-      width: rect.width,
-      height: rect.height,
-      text: directText,
-      fontSize: px(cs.fontSize),
-      fontWeight: fontWeightToNumber(cs.fontWeight),
-      textColor: cs.color,
-      textAlign: cssAlignToFigma(cs.textAlign),
-      children: []
-    });
   }
 
   return node;
@@ -136,7 +143,6 @@ function buildNode(el: Element, win: Window, parentRect: DOMRect, isRoot: boolea
 
 export function renderHtmlToTree(html: string, width = 1280): DesignTreeNode {
   const iframe = document.createElement('iframe');
-  // No allow-scripts → nothing in the HTML executes (scripts or inline handlers).
   iframe.setAttribute('sandbox', 'allow-same-origin');
   iframe.style.position = 'fixed';
   iframe.style.left = '-100000px';
@@ -152,7 +158,6 @@ export function renderHtmlToTree(html: string, width = 1280): DesignTreeNode {
     if (!doc || !win) {
       throw new Error('Could not access the render frame.');
     }
-    // Synchronously populate the sandboxed document (no scripts run).
     doc.open();
     doc.write(html);
     doc.close();
@@ -160,7 +165,46 @@ export function renderHtmlToTree(html: string, width = 1280): DesignTreeNode {
     if (!body) {
       throw new Error('Rendered HTML has no <body>.');
     }
-    return buildNode(body, win, body.getBoundingClientRect(), true);
+
+    // Trim to the content's bounding box so a vertically-centered card doesn't
+    // become a giant mostly-empty frame.
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const el of Array.from(body.querySelectorAll('*'))) {
+      if (isHidden(win.getComputedStyle(el))) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) continue;
+      left = Math.min(left, r.left);
+      top = Math.min(top, r.top);
+      right = Math.max(right, r.right);
+      bottom = Math.max(bottom, r.bottom);
+    }
+    const content: Box = Number.isFinite(left) ? { left, top } : { left: 0, top: 0 };
+    const rootWidth = Number.isFinite(left) ? right - left : body.getBoundingClientRect().width;
+    const rootHeight = Number.isFinite(top) ? bottom - top : body.getBoundingClientRect().height;
+
+    const root: DesignTreeNode = {
+      kind: 'frame',
+      x: 0,
+      y: 0,
+      width: rootWidth,
+      height: rootHeight,
+      children: []
+    };
+
+    for (const child of Array.from(body.childNodes)) {
+      if (child.nodeType === 1) {
+        const el = child as Element;
+        if (isHidden(win.getComputedStyle(el))) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        root.children.push(buildNode(el, win, content));
+      }
+    }
+
+    return root;
   } finally {
     document.body.removeChild(iframe);
   }
