@@ -129,14 +129,26 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
       if (cr.width <= 0 || cr.height <= 0) continue;
       node.children.push(buildNode(childEl, win, rect));
     } else if (child.nodeType === 3) {
-      const text = (child.textContent ?? '').replace(/\s+/g, ' ').trim();
-      if (!text) continue;
+      const raw = (child.textContent ?? '').replace(/\s+/g, ' ').trim();
+      if (!raw) continue;
       const range = el.ownerDocument.createRange();
       range.selectNodeContents(child);
       const tr = range.getBoundingClientRect();
       if (tr.width <= 0 || tr.height <= 0) continue;
       // One client rect per visual line — >1 means the source text wrapped.
       const multiline = range.getClientRects().length > 1;
+      // Bake text-transform into the string so glyphs match what was measured.
+      const transform = cs.textTransform;
+      const text =
+        transform === 'uppercase'
+          ? raw.toUpperCase()
+          : transform === 'lowercase'
+          ? raw.toLowerCase()
+          : transform === 'capitalize'
+          ? raw.replace(/\b\w/g, (c) => c.toUpperCase())
+          : raw;
+      const letterSpacing = cs.letterSpacing && cs.letterSpacing !== 'normal' ? px(cs.letterSpacing) : 0;
+      const lineHeight = cs.lineHeight && cs.lineHeight !== 'normal' ? px(cs.lineHeight) : 0;
       node.children.push({
         kind: 'text',
         x: tr.left - rect.left,
@@ -148,6 +160,8 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
         fontWeight: fontWeightToNumber(cs.fontWeight),
         textColor: cs.color,
         textAlign: cssAlignToFigma(cs.textAlign),
+        letterSpacing,
+        lineHeight,
         multiline,
         children: []
       });

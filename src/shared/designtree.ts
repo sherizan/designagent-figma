@@ -29,6 +29,8 @@ export interface DesignTreeNode {
   fontWeight?: number;
   textAlign?: string;
   textColor?: string;
+  letterSpacing?: number;
+  lineHeight?: number;
   multiline?: boolean;
   // image / svg
   dataUrl?: string;
