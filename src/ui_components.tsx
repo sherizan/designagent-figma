@@ -171,7 +171,7 @@ export function ExportPanel(props: ExportPanelProps): JSX.Element {
 }
 
 const BRIDGE_CAPABILITIES: Array<{ label: string; detail: string }> = [
-  { label: 'Read', detail: 'spec · score · DESIGN.md · issues' },
+  { label: 'Read', detail: 'spec · DESIGN.md · HTML · issues' },
   { label: 'Build', detail: 'frames · text · shapes · images' },
   { label: 'Style', detail: 'fills · strokes · radius · shadow · type' },
   { label: 'Layout', detail: 'move · resize · group · clone · delete' }
