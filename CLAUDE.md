@@ -67,25 +67,32 @@ and the Claude plugin drifting apart):
 The UI tag uses a `v1.x.y` form; the three JSON versions use `0.x.y` and should match each
 other. Even when a change only touches one side, bump all four so installed versions stay in sync.
 
-## Testing in Figma (figma-console MCP)
+## Testing in Figma (designagent MCP bridge)
 
 There are no automated tests — verification is visual, in Figma Desktop.
 
-> **Note:** the figma-console MCP and its **Figma Desktop Bridge** plugin are a separate,
-> standalone dev tool — NOT part of this repo and unrelated to DesignAgent's own code. They're
-> just an optional aid for driving Figma from Claude Code. DesignAgent runs fine without them.
+> **Note:** the **designagent** MCP server is part of *this* repo (`claude-plugin/mcp/`). It's a
+> live two-way bridge — it talks to the running DesignAgent plugin over a local WebSocket
+> (`ws://localhost:3790`) to read and manipulate the *design*. It deliberately has **no**
+> plugin-reload, screenshot, or console-log tools, so reloading a fresh build and eyeballing
+> the UI are manual steps in Figma. Because DesignAgent is both the plugin under development
+> *and* the bridge host, re-running it drops and re-establishes the bridge.
 
 1. Build: `npm run build` (or keep `npm run watch` running).
-2. Load DesignAgent once via **Plugins → Development → Import plugin from manifest…** →
-   repo-root `manifest.json`.
-3. For the live MCP loop, the external **Figma Desktop Bridge** plugin must also be open in
-   Figma (Plugins → Development → Figma Desktop Bridge). Then use the figma-console MCP to:
-   - `figma_get_status` (probe) / `figma_diagnose` — check the connection
-   - `figma_get_selection`, `figma_get_file_data` — inspect what the plugin sees
-   - `figma_reload_plugin` — reload after a rebuild
-   - `figma_take_screenshot`, `figma_get_console_logs` — verify the UI / catch errors
+2. Load DesignAgent via **Plugins → Development → Import plugin from manifest…** → repo-root
+   `manifest.json` (first time only; after that just re-run it).
+3. In the DesignAgent panel, click **Enable** on the "Claude bridge" bar — the dot turns green
+   when the MCP is connected. Then use the designagent MCP tools (all prefixed
+   `mcp__plugin_designagent_designagent__`):
+   - `status` — confirm the bridge; see the file / page / current selection
+   - `get_spec`, `get_score`, `get_design_md`, `list_issues` — inspect what the plugin extracts
+   - `focus` / `select` — drive the Figma selection
+   - `annotate`, `apply_fix`, plus the create/style/layout tools — act on the design
+4. To load a fresh build, **re-run the DesignAgent plugin** in Figma (there's no programmatic
+   reload); the bridge reconnects on its own. Verify the UI visually in the panel.
 
-Use the **`/reload`** slash command to run build → reload → screenshot in one step.
+Use the **`/reload`** slash command to run build → check the bridge → report what the rebuilt
+plugin sees for the current selection.
 
 ## Useful skills / MCP (already available)
 

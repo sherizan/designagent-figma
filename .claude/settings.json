@@ -6,13 +6,13 @@
       "Bash(npm run watch:*)",
       "Bash(npm run typecheck:*)",
       "WebFetch(domain:developers.figma.com)",
-      "mcp__figma-console__figma_get_status",
-      "mcp__figma-console__figma_diagnose",
-      "mcp__figma-console__figma_get_selection",
-      "mcp__figma-console__figma_get_file_data",
-      "mcp__figma-console__figma_take_screenshot",
-      "mcp__figma-console__figma_get_console_logs",
-      "mcp__figma-console__figma_reload_plugin"
+      "mcp__plugin_designagent_designagent__status",
+      "mcp__plugin_designagent_designagent__get_score",
+      "mcp__plugin_designagent_designagent__get_spec",
+      "mcp__plugin_designagent_designagent__get_design_md",
+      "mcp__plugin_designagent_designagent__list_issues",
+      "mcp__plugin_designagent_designagent__focus",
+      "mcp__plugin_designagent_designagent__select"
     ]
   }
 }
