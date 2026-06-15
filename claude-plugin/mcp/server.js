@@ -25063,14 +25063,14 @@ function resolveProjectRoot(opts) {
   }
   const gitRoot = (opts.gitRootOf ?? findGitRoot)(opts.cwd);
   if (gitRoot) {
-    return gitRoot;
+    return (0, import_node_path2.resolve)(gitRoot);
   }
   return (0, import_node_path2.resolve)(opts.cwd);
 }
 function deriveProjectLabel(root) {
   const parts = (0, import_node_path2.resolve)(root).split(import_node_path2.sep).filter(Boolean);
   if (parts.length === 0) {
-    return root;
+    return (0, import_node_path2.resolve)(root);
   }
   return parts.slice(-2).join("/");
 }

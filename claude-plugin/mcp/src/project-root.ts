@@ -37,7 +37,7 @@ export function resolveProjectRoot(opts: ResolveProjectRootOpts): string {
   }
   const gitRoot = (opts.gitRootOf ?? findGitRoot)(opts.cwd);
   if (gitRoot) {
-    return gitRoot;
+    return resolve(gitRoot);
   }
   return resolve(opts.cwd);
 }
@@ -48,7 +48,7 @@ export function deriveProjectLabel(root: string): string {
     .split(sep)
     .filter(Boolean);
   if (parts.length === 0) {
-    return root;
+    return resolve(root);
   }
   return parts.slice(-2).join('/');
 }
