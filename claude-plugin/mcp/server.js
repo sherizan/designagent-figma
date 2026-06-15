@@ -24937,13 +24937,16 @@ async function loadImageBase64(args) {
   return buf.toString("base64");
 }
 var PROJECT_ROOT = process.env.DESIGNAGENT_PROJECT_DIR ? (0, import_node_path.resolve)(process.env.DESIGNAGENT_PROJECT_DIR) : process.cwd();
-async function readHtmlFile(path) {
+function resolveInProject(path) {
   const abs = (0, import_node_path.resolve)(PROJECT_ROOT, path);
   const rel = (0, import_node_path.relative)(PROJECT_ROOT, abs);
   if (rel.startsWith("..") || (0, import_node_path.isAbsolute)(rel)) {
     throw new Error("Path is outside the project directory.");
   }
-  return (0, import_promises2.readFile)(abs, "utf8");
+  return abs;
+}
+async function readHtmlFile(path) {
+  return (0, import_promises2.readFile)(resolveInProject(path), "utf8");
 }
 function isPrivateAddress(ip) {
   const family = (0, import_node_net.isIP)(ip);
@@ -25064,6 +25067,22 @@ async function handleServerRequest(command, params) {
       }
       const html = await inlineExternalImages(await readHtmlFile(path));
       return { html };
+    }
+    case "check_design_md": {
+      const path = String(params.path ?? "DESIGN.md");
+      try {
+        const content = await (0, import_promises2.readFile)(resolveInProject(path), "utf8");
+        return { exists: true, root: PROJECT_ROOT, path, content };
+      } catch {
+        return { exists: false, root: PROJECT_ROOT, path };
+      }
+    }
+    case "write_design_md": {
+      const path = String(params.path ?? "DESIGN.md");
+      const content = String(params.content ?? "");
+      const abs = resolveInProject(path);
+      await (0, import_promises2.writeFile)(abs, content, "utf8");
+      return { ok: true, root: PROJECT_ROOT, path, bytes: Buffer.byteLength(content, "utf8") };
     }
     default:
       throw new Error(`Unknown server command: ${command}`);

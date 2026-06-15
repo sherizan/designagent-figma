@@ -109,12 +109,32 @@ interface ExportPanelProps {
   intentLabel: string;
   selectedNodeName: string;
   status: string;
+  bridgeConnected: boolean;
+  designChecked: boolean;
+  designExists: boolean;
+  designRoot: string;
+  onSyncDesignMd: () => void;
   onExportDesignMd: () => void;
   onExportHtml: () => void;
 }
 
 export function ExportPanel(props: ExportPanelProps): JSX.Element {
-  const { intentLabel, selectedNodeName, status, onExportDesignMd, onExportHtml } = props;
+  const {
+    intentLabel,
+    selectedNodeName,
+    status,
+    bridgeConnected,
+    designChecked,
+    designExists,
+    designRoot,
+    onSyncDesignMd,
+    onExportDesignMd,
+    onExportHtml
+  } = props;
+
+  // Confirm-first before overwriting an existing DESIGN.md.
+  const [confirming, setConfirming] = React.useState(false);
+  React.useEffect(() => setConfirming(false), [designExists, selectedNodeName]);
 
   return (
     <div className="panel">
@@ -124,6 +144,55 @@ export function ExportPanel(props: ExportPanelProps): JSX.Element {
           <div className="selection-name-inline">{selectedNodeName}</div>
         </div>
       </div>
+
+      {bridgeConnected ? (
+        <div className="designmd-sync">
+          <div className="designmd-sync-info">
+            <span className="designmd-sync-title">
+              {designExists ? 'DESIGN.md in your project' : 'No DESIGN.md yet'}
+            </span>
+            <span className="designmd-sync-path">
+              {designRoot
+                ? designExists
+                  ? `${designRoot}/DESIGN.md`
+                  : `Will create in ${designRoot}`
+                : 'Checking project…'}
+            </span>
+          </div>
+          {designExists ? (
+            confirming ? (
+              <div className="designmd-sync-confirm">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    setConfirming(false);
+                    onSyncDesignMd();
+                  }}
+                >
+                  Confirm overwrite
+                </button>
+                <button type="button" className="btn" onClick={() => setConfirming(false)}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button type="button" className="btn-primary" onClick={() => setConfirming(true)}>
+                Update
+              </button>
+            )
+          ) : (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={onSyncDesignMd}
+              disabled={!designChecked}
+            >
+              Create
+            </button>
+          )}
+        </div>
+      ) : null}
 
       <p className="export-hint">Turn this selection into something you can build from.</p>
 
@@ -327,7 +396,7 @@ export function EmptyState({ message }: EmptyStateProps): JSX.Element {
 export function Footer(): JSX.Element {
   return (
     <div className="panel-footer">
-      <span className="version-tag">v1.10.0</span> · Built by Sherizan ·{' '}
+      <span className="version-tag">v1.11.0</span> · Built by Sherizan ·{' '}
       <a href="https://www.designagent.dev" target="_blank" rel="noreferrer">
         DesignAgent.dev
       </a>
