@@ -24948,6 +24948,10 @@ function runBroker() {
         const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "unknown";
         const root = typeof msg.root === "string" ? msg.root : "";
         const label = typeof msg.label === "string" && msg.label ? msg.label : sessionId.slice(0, 8);
+        const existingIdx = servers.findIndex((s) => s.sessionId === sessionId);
+        if (existingIdx !== -1) {
+          servers.splice(existingIdx, 1);
+        }
         servers.push({ socket, sessionId, root, label });
         blog(`session ${sessionId} (label: ${label}, root: ${root || "?"}) registered (active). ${servers.length} session(s).`);
         if (idleTimer) {
