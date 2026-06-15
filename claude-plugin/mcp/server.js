@@ -2981,7 +2981,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve2.call(this, root, ref);
+      let _sch = resolve3.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3008,7 +3008,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve2(root, ref) {
+    function resolve3(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3639,7 +3639,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve2(baseURI, relativeURI, options) {
+    function resolve3(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -3897,7 +3897,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve2,
+      resolve: resolve3,
       resolveComponent,
       equal,
       serialize,
@@ -10571,7 +10571,7 @@ var import_node_crypto = require("node:crypto");
 var import_promises = require("node:dns/promises");
 var import_promises2 = require("node:fs/promises");
 var import_node_net = require("node:net");
-var import_node_path2 = require("node:path");
+var import_node_path3 = require("node:path");
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -22665,7 +22665,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
+        await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -22682,7 +22682,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve3, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -22760,7 +22760,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve2(parseResult.data);
+            resolve3(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -23021,12 +23021,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve3, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve2, interval);
+      const timeoutId = setTimeout(resolve3, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -24126,7 +24126,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
+      await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -24775,12 +24775,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve2) => {
+    return new Promise((resolve3) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve2();
+        resolve3();
       } else {
-        this._stdout.once("drain", resolve2);
+        this._stdout.once("drain", resolve3);
       }
     });
   }
@@ -25036,6 +25036,45 @@ function runBroker() {
   blog(`broker started (protocol v${BROKER_PROTOCOL_VERSION}, pid ${process.pid}).`);
 }
 
+// src/project-root.ts
+var import_node_fs2 = require("node:fs");
+var import_node_path2 = require("node:path");
+function findGitRoot(start) {
+  let dir = (0, import_node_path2.resolve)(start);
+  for (; ; ) {
+    if ((0, import_node_fs2.existsSync)((0, import_node_path2.resolve)(dir, ".git"))) {
+      return dir;
+    }
+    const parent = (0, import_node_path2.dirname)(dir);
+    if (parent === dir) {
+      return null;
+    }
+    dir = parent;
+  }
+}
+function resolveProjectRoot(opts) {
+  const override = opts.projectDirEnv?.trim();
+  if (override) {
+    return (0, import_node_path2.resolve)(override);
+  }
+  const workspace = opts.claudeProjectDir?.trim();
+  if (workspace) {
+    return (0, import_node_path2.resolve)(workspace);
+  }
+  const gitRoot = (opts.gitRootOf ?? findGitRoot)(opts.cwd);
+  if (gitRoot) {
+    return gitRoot;
+  }
+  return (0, import_node_path2.resolve)(opts.cwd);
+}
+function deriveProjectLabel(root) {
+  const parts = (0, import_node_path2.resolve)(root).split(import_node_path2.sep).filter(Boolean);
+  if (parts.length === 0) {
+    return root;
+  }
+  return parts.slice(-2).join("/");
+}
+
 // src/server.ts
 var IS_BROKER = process.argv.includes("--broker");
 var PORT2 = Number(process.env.DESIGNAGENT_BRIDGE_PORT ?? 3790);
@@ -25097,7 +25136,9 @@ function connectToBroker() {
           role: "mcp-server",
           sessionId: SERVER_INSTANCE_ID,
           version: BROKER_PROTOCOL_VERSION,
-          buildMtime: BUILD_MTIME
+          buildMtime: BUILD_MTIME,
+          root: PROJECT_ROOT,
+          label: PROJECT_LABEL
         })
       );
     } catch {
@@ -25186,7 +25227,7 @@ function connectToBroker() {
   });
 }
 function callPlugin(command, params = {}) {
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve3, reject) => {
     if (!brokerSocket || brokerSocket.readyState !== import_websocket.default.OPEN || !brokerReady) {
       reject(
         new Error(
@@ -25200,7 +25241,7 @@ function callPlugin(command, params = {}) {
       pending.delete(id);
       reject(new Error(`DesignAgent plugin did not respond within ${REQUEST_TIMEOUT_MS / 1e3}s.`));
     }, REQUEST_TIMEOUT_MS);
-    pending.set(id, { resolve: resolve2, reject, timer });
+    pending.set(id, { resolve: resolve3, reject, timer });
     try {
       brokerSocket.send(JSON.stringify({ type: "request", id, command, params }));
     } catch (error2) {
@@ -25258,11 +25299,16 @@ async function loadImageBase64(args) {
   }
   return buf.toString("base64");
 }
-var PROJECT_ROOT = process.env.DESIGNAGENT_PROJECT_DIR ? (0, import_node_path2.resolve)(process.env.DESIGNAGENT_PROJECT_DIR) : process.cwd();
+var PROJECT_ROOT = resolveProjectRoot({
+  projectDirEnv: process.env.DESIGNAGENT_PROJECT_DIR,
+  claudeProjectDir: process.env.CLAUDE_PROJECT_DIR,
+  cwd: process.cwd()
+});
+var PROJECT_LABEL = deriveProjectLabel(PROJECT_ROOT);
 function resolveInProject(path) {
-  const abs = (0, import_node_path2.resolve)(PROJECT_ROOT, path);
-  const rel = (0, import_node_path2.relative)(PROJECT_ROOT, abs);
-  if (rel.startsWith("..") || (0, import_node_path2.isAbsolute)(rel)) {
+  const abs = (0, import_node_path3.resolve)(PROJECT_ROOT, path);
+  const rel = (0, import_node_path3.relative)(PROJECT_ROOT, abs);
+  if (rel.startsWith("..") || (0, import_node_path3.isAbsolute)(rel)) {
     throw new Error("Path is outside the project directory.");
   }
   return abs;
@@ -25355,7 +25401,7 @@ async function listHtmlFiles() {
     }
     for (const entry of entries) {
       if (results.length >= 100) break;
-      const full = (0, import_node_path2.resolve)(dir, entry.name);
+      const full = (0, import_node_path3.resolve)(dir, entry.name);
       if (entry.isDirectory()) {
         if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
         await walk(full, depth + 1);
@@ -25366,9 +25412,9 @@ async function listHtmlFiles() {
         } catch {
         }
         results.push({
-          path: (0, import_node_path2.relative)(PROJECT_ROOT, full),
+          path: (0, import_node_path3.relative)(PROJECT_ROOT, full),
           name: entry.name,
-          dir: (0, import_node_path2.relative)(PROJECT_ROOT, dir) || ".",
+          dir: (0, import_node_path3.relative)(PROJECT_ROOT, dir) || ".",
           size
         });
       }
