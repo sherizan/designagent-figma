@@ -1,51 +1,54 @@
 export const UI_STYLES = `
+  /* DesignAgent brand — warm paper + Claude coral (see designagent.dev / site/DESIGN.md).
+     Coral #d97757 is the single accent; surfaces are warm paper, ink is warm near-black. */
   :root {
-    --bg: #f4f5f7;
+    --bg: #faf7f2;
     --surface: #ffffff;
-    --surface-soft: #f6f7f9;
-    --surface-hover: #eef0f3;
-    --border: rgba(17, 18, 23, 0.09);
-    --border-strong: rgba(17, 18, 23, 0.17);
-    --text: #16171b;
-    --text-muted: #5a5d66;
-    --text-dim: #8c8f99;
-    --primary-bg: #16171b;
+    --surface-soft: #f5f0e8;
+    --surface-hover: #efe8dc;
+    --border: #ece4d6;
+    --border-strong: #dccfba;
+    --text: #23201c;
+    --text-muted: #6f675b;
+    --text-dim: #9a9184;
+    --primary-bg: #d97757;
     --primary-text: #ffffff;
-    --primary-hover: #2c2e36;
-    --accent: #16a34a;
-    --accent-soft: rgba(22, 163, 74, 0.12);
+    --primary-hover: #c8643f;
+    --accent: #c2603a;
+    --accent-soft: rgba(217, 119, 87, 0.12);
     --ok: #15803d;
-    --danger-bg: rgba(220, 38, 38, 0.07);
-    --danger-border: rgba(220, 38, 38, 0.26);
-    --danger-text: #b42318;
-    --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 1px rgba(16, 24, 40, 0.03);
-    --skeleton-1: #ecedf1;
-    --skeleton-2: #f5f6f8;
+    --danger-bg: rgba(196, 99, 74, 0.08);
+    --danger-border: rgba(196, 99, 74, 0.30);
+    --danger-text: #b34a30;
+    --shadow: 0 1px 2px rgba(35, 32, 28, 0.06), 0 1px 1px rgba(35, 32, 28, 0.04);
+    --skeleton-1: #ece5d9;
+    --skeleton-2: #f5f1ea;
   }
 
+  /* Warm-dark variant: the paper inverts to warm ink, coral stays the accent. */
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0b0b0d;
-      --surface: #16161a;
-      --surface-soft: #1b1b1f;
-      --surface-hover: #232328;
-      --border: rgba(255, 255, 255, 0.09);
-      --border-strong: rgba(255, 255, 255, 0.17);
-      --text: #fafafa;
-      --text-muted: #a8a8b3;
-      --text-dim: #71717a;
-      --primary-bg: #fafafa;
-      --primary-text: #09090b;
-      --primary-hover: #e4e4e7;
-      --accent: #4ade80;
-      --accent-soft: rgba(74, 222, 128, 0.14);
+      --bg: #1a1613;
+      --surface: #23201c;
+      --surface-soft: #2a2621;
+      --surface-hover: #332e28;
+      --border: rgba(250, 247, 242, 0.10);
+      --border-strong: rgba(250, 247, 242, 0.20);
+      --text: #faf7f2;
+      --text-muted: #b4a99b;
+      --text-dim: #8c857a;
+      --primary-bg: #d97757;
+      --primary-text: #ffffff;
+      --primary-hover: #e4895f;
+      --accent: #e58a68;
+      --accent-soft: rgba(217, 119, 87, 0.20);
       --ok: #4ade80;
-      --danger-bg: rgba(239, 68, 68, 0.10);
-      --danger-border: rgba(239, 68, 68, 0.32);
-      --danger-text: #fca5a5;
-      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-      --skeleton-1: #1b1b1f;
-      --skeleton-2: #26262b;
+      --danger-bg: rgba(232, 140, 120, 0.12);
+      --danger-border: rgba(232, 140, 120, 0.32);
+      --danger-text: #ef9d86;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+      --skeleton-1: #2a2621;
+      --skeleton-2: #353029;
     }
   }
 
@@ -87,6 +90,28 @@ export const UI_STYLES = `
     justify-content: space-between;
     gap: 10px;
     padding: 2px 2px 0;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .brand-mark {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    background: var(--primary-bg);
+    color: var(--primary-text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    line-height: 1;
+    box-shadow: 0 1px 2px rgba(217, 119, 87, 0.35);
   }
 
   .header-copy {
