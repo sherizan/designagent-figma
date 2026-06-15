@@ -114,6 +114,7 @@ interface ExportPanelProps {
   designExists: boolean;
   designRoot: string;
   onSyncDesignMd: () => void;
+  onApplyToFigma: () => void;
   onExportDesignMd: () => void;
   onExportHtml: () => void;
 }
@@ -128,6 +129,7 @@ export function ExportPanel(props: ExportPanelProps): JSX.Element {
     designExists,
     designRoot,
     onSyncDesignMd,
+    onApplyToFigma,
     onExportDesignMd,
     onExportHtml
   } = props;
@@ -177,9 +179,19 @@ export function ExportPanel(props: ExportPanelProps): JSX.Element {
                 </button>
               </div>
             ) : (
-              <button type="button" className="btn-primary" onClick={() => setConfirming(true)}>
-                Update
-              </button>
+              <div className="designmd-sync-confirm">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={onApplyToFigma}
+                  title="Apply DESIGN.md tokens into this Figma file"
+                >
+                  Apply
+                </button>
+                <button type="button" className="btn-primary" onClick={() => setConfirming(true)}>
+                  Update
+                </button>
+              </div>
             )
           ) : (
             <button
@@ -396,7 +408,7 @@ export function EmptyState({ message }: EmptyStateProps): JSX.Element {
 export function Footer(): JSX.Element {
   return (
     <div className="panel-footer">
-      <span className="version-tag">v1.11.0</span> · Built by Sherizan ·{' '}
+      <span className="version-tag">v1.12.0</span> · Built by Sherizan ·{' '}
       <a href="https://www.designagent.dev" target="_blank" rel="noreferrer">
         DesignAgent.dev
       </a>
