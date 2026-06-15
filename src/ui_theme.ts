@@ -84,14 +84,6 @@ export const UI_STYLES = `
     gap: 10px;
   }
 
-  .app-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 2px 2px 0;
-  }
-
   .brand {
     display: flex;
     align-items: center;
@@ -127,22 +119,11 @@ export const UI_STYLES = `
     color: var(--text);
   }
 
-  .sub {
-    margin: 3px 0 0;
-    font-size: 12px;
-    line-height: 1.4;
-    color: var(--text-muted);
-  }
-
   .version-tag {
     font-size: 10.5px;
     font-weight: 500;
     color: var(--text-dim);
-    padding: 2px 8px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    flex-shrink: 0;
-    align-self: center;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
 
   button {
@@ -502,12 +483,9 @@ export const UI_STYLES = `
     color: var(--text);
   }
 
+  /* Flat top bar styled like a header — no card container. */
   .bridge-bar {
-    border: 1px solid var(--border);
-    background: var(--surface);
-    border-radius: 10px;
-    padding: 10px 12px;
-    box-shadow: var(--shadow);
+    padding: 2px 2px 0;
   }
 
   .bridge-bar-row {
@@ -527,10 +505,12 @@ export const UI_STYLES = `
   .bridge-status {
     display: inline-flex;
     align-items: center;
-    gap: 9px;
-    font-size: 12.5px;
-    font-weight: 600;
-    color: var(--text);
+    gap: 6px;
+    margin-top: 3px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.4;
+    color: var(--text-muted);
     min-width: 0;
   }
 
@@ -541,8 +521,8 @@ export const UI_STYLES = `
   }
 
   .bridge-dot {
-    width: 9px;
-    height: 9px;
+    width: 8px;
+    height: 8px;
     border-radius: 999px;
     flex: none;
   }

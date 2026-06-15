@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client';
 import { type AnalysisResult, type ExportedAsset } from './core/types';
 import type { ToUIMessage } from './shared/messages';
 import {
-  AppHeader,
   BridgeBar,
   type BridgeStatus,
   CapabilityView,
@@ -485,8 +484,6 @@ function App(): JSX.Element {
     <div className="app-shell">
       <style>{UI_STYLES}</style>
       <div className="app-body">
-        <AppHeader version="v1.9.1" />
-
         <BridgeBar
           status={bridgeStatus}
           enabled={bridgeEnabled}

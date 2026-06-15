@@ -3,27 +3,6 @@ import { Frame } from 'lucide-react';
 
 export type MainTab = 'design-to-code' | 'code-to-design';
 
-interface AppHeaderProps {
-  version: string;
-}
-
-export function AppHeader({ version }: AppHeaderProps): JSX.Element {
-  return (
-    <div className="app-header">
-      <div className="brand">
-        <span className="brand-mark" aria-hidden="true">
-          ↔
-        </span>
-        <div className="header-copy">
-          <h1 className="title">DesignAgent</h1>
-          <p className="sub">Design ↔ code, both directions.</p>
-        </div>
-      </div>
-      <div className="version-tag">{version}</div>
-    </div>
-  );
-}
-
 export type BridgeStatus = 'off' | 'connecting' | 'connected' | 'error';
 
 interface BridgeBarProps {
@@ -33,30 +12,38 @@ interface BridgeBarProps {
 }
 
 const BRIDGE_META: Record<BridgeStatus, { color: string; label: string }> = {
-  off: { color: '#9f9faa', label: 'Claude bridge off' },
-  connecting: { color: '#e0a83d', label: 'Claude bridge — connecting…' },
-  connected: { color: '#3bba6d', label: 'Claude bridge — connected' },
-  error: { color: '#e0653d', label: 'Claude bridge — retrying…' }
+  off: { color: '#9f9faa', label: 'Off' },
+  connecting: { color: '#e0a83d', label: 'Connecting…' },
+  connected: { color: '#3bba6d', label: 'Connected' },
+  error: { color: '#e0653d', label: 'Retrying…' }
 };
 
-// Global, always-visible connection bar — the bridge powers both directions, so it
-// lives at the app level rather than inside a tab.
+// The app's top bar — styled like a header (flat, no card). It's the Claude
+// Bridge title + live status, with Enable/Disable and a Setup disclosure.
 export function BridgeBar({ status, enabled, onToggle }: BridgeBarProps): JSX.Element {
   const meta = BRIDGE_META[status];
   return (
     <div className="bridge-bar">
       <div className="bridge-bar-row">
-        <span className="bridge-status">
-          <span
-            className="bridge-dot"
-            aria-hidden="true"
-            style={{
-              backgroundColor: meta.color,
-              boxShadow: status === 'connected' ? `0 0 0 3px ${meta.color}33` : 'none'
-            }}
-          />
-          <span>{meta.label}</span>
-        </span>
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">
+            ↔
+          </span>
+          <div className="header-copy">
+            <h1 className="title">Claude Bridge</h1>
+            <span className="bridge-status">
+              <span
+                className="bridge-dot"
+                aria-hidden="true"
+                style={{
+                  backgroundColor: meta.color,
+                  boxShadow: status === 'connected' ? `0 0 0 3px ${meta.color}33` : 'none'
+                }}
+              />
+              <span>{meta.label}</span>
+            </span>
+          </div>
+        </div>
         <button type="button" className={enabled ? 'btn' : 'btn-primary'} onClick={onToggle}>
           {enabled ? 'Disable' : 'Enable'}
         </button>
@@ -350,7 +337,7 @@ export function EmptyState({ message }: EmptyStateProps): JSX.Element {
 export function Footer(): JSX.Element {
   return (
     <div className="panel-footer">
-      Built by Sherizan ·{' '}
+      <span className="version-tag">v1.9.2</span> · Built by Sherizan ·{' '}
       <a href="https://www.designagent.dev" target="_blank" rel="noreferrer">
         DesignAgent.dev
       </a>
