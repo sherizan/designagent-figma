@@ -893,6 +893,46 @@ export const UI_STYLES = `
     padding: 0 4px;
   }
 
+  .html-file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .html-file {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--surface-soft);
+    padding: 8px 11px;
+  }
+
+  .html-file-info {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .html-file-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .html-file-dir {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
   .panel-footer {
     margin-top: auto;
     text-align: center;

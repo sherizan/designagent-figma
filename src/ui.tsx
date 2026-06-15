@@ -10,10 +10,13 @@ import {
   EmptyState,
   ExportPanel,
   Footer,
+  type HtmlFileEntry,
+  HtmlBrowser,
   LoadingPanel,
   type MainTab,
   MainTabs
 } from './ui_components';
+import type { DesignTreeNode } from './shared/designtree';
 import { UI_STYLES } from './ui_theme';
 import { renderHtmlToTree } from './ui_html';
 
@@ -132,6 +135,9 @@ function App(): JSX.Element {
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<number | null>(null);
   const reconnectAttempt = useRef<number>(0);
+  type Resolver = (msg: { ok: boolean; result?: unknown; error?: string }) => void;
+  const serverPending = useRef<Map<string, Resolver>>(new Map());
+  const localRenders = useRef<Map<string, Resolver>>(new Map());
 
   useEffect(() => {
     const listener = (event: MessageEvent<{ pluginMessage?: ToUIMessage }>) => {
@@ -172,6 +178,17 @@ function App(): JSX.Element {
         setStatus(saved ? 'HTML saved' : 'Export failed');
         setTimeout(() => setStatus(''), 2600);
         return;
+      }
+
+      if (message.type === 'DESIGN_TREE_RESULT') {
+        // Local (UI-initiated) renders resolve a pending promise; bridge renders
+        // forward their result over the WS.
+        const local = localRenders.current.get(message.id);
+        if (local) {
+          localRenders.current.delete(message.id);
+          local({ ok: message.ok, result: message.result, error: message.error });
+          return;
+        }
       }
 
       if (message.type === 'BRIDGE_RESULT' || message.type === 'DESIGN_TREE_RESULT') {
@@ -279,6 +296,14 @@ function App(): JSX.Element {
           }
           return;
         }
+        if (msg.type === 'server_response' && typeof msg.id === 'string') {
+          const resolver = serverPending.current.get(msg.id);
+          if (resolver) {
+            serverPending.current.delete(msg.id);
+            resolver(msg as { ok: boolean; result?: unknown; error?: string });
+          }
+          return;
+        }
         if (msg.type === 'request' && typeof msg.id === 'string' && typeof msg.command === 'string') {
           const params =
             msg.params && typeof msg.params === 'object' ? (msg.params as Record<string, unknown>) : {};
@@ -355,6 +380,68 @@ function App(): JSX.Element {
     };
   }, [bridgeEnabled]);
 
+  function newId(prefix = ''): string {
+    const uuid =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2);
+    return prefix + uuid;
+  }
+
+  // Ask the MCP server (over the WS) for something only it can do (filesystem).
+  const callServer = (command: string, params: Record<string, unknown> = {}): Promise<unknown> => {
+    return new Promise((resolve, reject) => {
+      const socket = socketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        reject(new Error('Claude bridge is not connected.'));
+        return;
+      }
+      const id = newId();
+      const timer = window.setTimeout(() => {
+        serverPending.current.delete(id);
+        reject(new Error('The bridge server did not respond.'));
+      }, 20000);
+      serverPending.current.set(id, (msg) => {
+        window.clearTimeout(timer);
+        if (msg.ok) {
+          resolve(msg.result);
+        } else {
+          reject(new Error(msg.error || 'Bridge server error.'));
+        }
+      });
+      socket.send(JSON.stringify({ type: 'server_request', id, command, params }));
+    });
+  };
+
+  // Render a tree in the sandbox and await the result (UI-initiated, not a bridge call).
+  const renderTreeLocally = (
+    tree: DesignTreeNode
+  ): Promise<{ ok: boolean; result?: unknown; error?: string }> => {
+    return new Promise((resolve) => {
+      const id = newId('local:');
+      const timer = window.setTimeout(() => {
+        localRenders.current.delete(id);
+        resolve({ ok: false, error: 'Render timed out.' });
+      }, 30000);
+      localRenders.current.set(id, (msg) => {
+        window.clearTimeout(timer);
+        resolve(msg);
+      });
+      postPluginMessage({ type: 'CREATE_DESIGN_TREE', id, tree });
+    });
+  };
+
+  const listHtmlFiles = async (): Promise<HtmlFileEntry[]> => {
+    const result = (await callServer('list_html_files')) as { files?: HtmlFileEntry[] };
+    return result && Array.isArray(result.files) ? result.files : [];
+  };
+
+  const renderHtmlFile = async (path: string) => {
+    const result = (await callServer('read_html_file', { path })) as { html?: string };
+    const tree = renderHtmlToTree(String(result?.html ?? ''));
+    return renderTreeLocally(tree);
+  };
+
   const pngAsset = analysis.hasSelection ? pickPngAsset(analysis.assets) : undefined;
   const imageSizeKb = useMemo(
     () => (pngAsset ? Math.round(pngAsset.byteLength / 102.4) / 10 : undefined),
@@ -392,7 +479,7 @@ function App(): JSX.Element {
     <div className="app-shell">
       <style>{UI_STYLES}</style>
       <div className="app-body">
-        <AppHeader version="v1.5.0" />
+        <AppHeader version="v1.6.0" />
 
         <BridgeBar
           status={bridgeStatus}
@@ -431,7 +518,14 @@ function App(): JSX.Element {
             <EmptyState message={analysis.message} />
           )
         ) : (
-          <CapabilityView />
+          <>
+            <CapabilityView />
+            <HtmlBrowser
+              connected={bridgeStatus === 'connected'}
+              listFiles={listHtmlFiles}
+              renderFile={renderHtmlFile}
+            />
+          </>
         )}
       </div>
 

@@ -194,8 +194,105 @@ export function CapabilityView(): JSX.Element {
       </div>
       <p className="prompt-hint">
         Claude can also render HTML into Figma over the bridge (e.g. “render index.html into
-        Figma”). Browsing your project’s HTML files here is coming next.
+        Figma”), or browse this project’s HTML files below.
       </p>
+    </div>
+  );
+}
+
+export interface HtmlFileEntry {
+  path: string;
+  name: string;
+  dir: string;
+  size: number;
+}
+
+interface HtmlBrowserProps {
+  connected: boolean;
+  listFiles: () => Promise<HtmlFileEntry[]>;
+  renderFile: (path: string) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+}
+
+export function HtmlBrowser({ connected, listFiles, renderFile }: HtmlBrowserProps): JSX.Element {
+  const [files, setFiles] = React.useState<HtmlFileEntry[]>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [rendering, setRendering] = React.useState<string | null>(null);
+  const [status, setStatus] = React.useState('');
+
+  const refresh = React.useCallback(async () => {
+    if (!connected) return;
+    setLoading(true);
+    setStatus('');
+    try {
+      setFiles(await listFiles());
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Failed to list files');
+    } finally {
+      setLoading(false);
+    }
+  }, [connected, listFiles]);
+
+  React.useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (!connected) {
+    return (
+      <div className="panel">
+        <p className="bridge-explainer">
+          Enable the Claude bridge above to browse and render this project’s HTML files.
+        </p>
+      </div>
+    );
+  }
+
+  const onRender = async (path: string) => {
+    setRendering(path);
+    setStatus('');
+    try {
+      const result = await renderFile(path);
+      setStatus(result.ok ? `Rendered ${path}` : `Failed: ${result.error ?? 'unknown error'}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Render failed');
+    } finally {
+      setRendering(null);
+      setTimeout(() => setStatus(''), 3000);
+    }
+  };
+
+  return (
+    <div className="panel">
+      <div className="meta-row">
+        <div className="section-subtitle">Project HTML → Design</div>
+        <button type="button" className="btn" onClick={() => void refresh()} disabled={loading}>
+          {loading ? '…' : 'Refresh'}
+        </button>
+      </div>
+      {status ? <p className="prompt-hint">{status}</p> : null}
+      {files.length === 0 ? (
+        <p className="bridge-explainer">
+          {loading ? 'Scanning project…' : 'No .html files found in this project.'}
+        </p>
+      ) : (
+        <div className="html-file-list">
+          {files.map((file) => (
+            <div key={file.path} className="html-file">
+              <div className="html-file-info">
+                <span className="html-file-name">{file.name}</span>
+                {file.dir !== '.' ? <span className="html-file-dir">{file.dir}</span> : null}
+              </div>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void onRender(file.path)}
+                disabled={rendering !== null}
+              >
+                {rendering === file.path ? 'Rendering…' : 'Render'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

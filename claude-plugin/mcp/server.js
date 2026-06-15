@@ -24816,6 +24816,21 @@ function handleConnection(socket) {
     if (!msg || typeof msg !== "object") {
       return;
     }
+    if (msg.type === "server_request" && typeof msg.id === "string" && typeof msg.command === "string") {
+      const id = msg.id;
+      const params = msg.params && typeof msg.params === "object" ? msg.params : {};
+      handleServerRequest(msg.command, params).then((result) => socket.send(JSON.stringify({ type: "server_response", id, ok: true, result }))).catch(
+        (error2) => socket.send(
+          JSON.stringify({
+            type: "server_response",
+            id,
+            ok: false,
+            error: error2 instanceof Error ? error2.message : String(error2)
+          })
+        )
+      );
+      return;
+    }
     if (msg.type === "response" && typeof msg.id === "string") {
       const entry = pending.get(msg.id);
       if (!entry) {
@@ -24992,6 +25007,67 @@ async function inlineExternalImages(html) {
     }
   }
   return result;
+}
+var IGNORED_DIRS = /* @__PURE__ */ new Set([
+  "node_modules",
+  "dist",
+  ".git",
+  ".next",
+  "build",
+  "out",
+  ".cache",
+  "coverage"
+]);
+async function listHtmlFiles() {
+  const results = [];
+  async function walk(dir, depth) {
+    if (results.length >= 100 || depth > 6) return;
+    let entries;
+    try {
+      entries = await (0, import_promises2.readdir)(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (results.length >= 100) break;
+      const full = (0, import_node_path.resolve)(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
+        await walk(full, depth + 1);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".html")) {
+        let size = 0;
+        try {
+          size = (await (0, import_promises2.stat)(full)).size;
+        } catch {
+        }
+        results.push({
+          path: (0, import_node_path.relative)(PROJECT_ROOT, full),
+          name: entry.name,
+          dir: (0, import_node_path.relative)(PROJECT_ROOT, dir) || ".",
+          size
+        });
+      }
+    }
+  }
+  await walk(PROJECT_ROOT, 0);
+  results.sort((a, b) => a.path.localeCompare(b.path));
+  return results;
+}
+async function handleServerRequest(command, params) {
+  switch (command) {
+    case "list_html_files":
+      return { files: await listHtmlFiles() };
+    case "read_html_file": {
+      const path = String(params.path ?? "");
+      if (!path) {
+        throw new Error('read_html_file requires "path".');
+      }
+      const html = await inlineExternalImages(await readHtmlFile(path));
+      return { html };
+    }
+    default:
+      throw new Error(`Unknown server command: ${command}`);
+  }
 }
 var IMAGE_SOURCE_SCHEMA = {
   url: external_exports.string().optional().describe("Image URL (fetched by the server)."),
