@@ -21,6 +21,39 @@ import { renderHtmlToTree } from './ui_html';
 
 const BRIDGE_URL = 'ws://localhost:3790';
 
+// Forward this iframe's console into the sandbox's log buffer so the console_logs
+// bridge tool sees UI logs alongside sandbox logs. Installed before anything else.
+(function captureUiConsole(): void {
+  const fmt = (value: unknown): string => {
+    if (typeof value === 'string') return value;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  };
+  const c = console as unknown as Record<string, ((...a: unknown[]) => void) | undefined>;
+  for (const level of ['log', 'info', 'warn', 'error'] as const) {
+    const original = c[level]?.bind(console);
+    c[level] = (...args: unknown[]) => {
+      try {
+        parent.postMessage(
+          {
+            pluginMessage: {
+              type: 'UI_CONSOLE_LOG',
+              entry: { ts: Date.now(), level, text: args.map(fmt).join(' ') }
+            }
+          },
+          '*'
+        );
+      } catch {
+        // never let logging break the UI
+      }
+      if (original) original(...args);
+    };
+  }
+})();
+
 const INITIAL_ANALYSIS: AnalysisResult = {
   hasSelection: false,
   mode: 'system-first',

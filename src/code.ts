@@ -18,6 +18,49 @@ const PANEL_SIZE = {
   height: 720
 };
 
+// ---- Console capture (backs the console_logs bridge tool) ----
+// Override console.* into a ring buffer so the bridge can return the plugin's
+// own logs for debugging. The UI iframe forwards its logs here too (UI_CONSOLE_LOG).
+interface LogEntry {
+  ts: number;
+  level: string;
+  source: 'sandbox' | 'ui';
+  text: string;
+}
+const LOG_BUFFER_MAX = 1000;
+const logBuffer: LogEntry[] = [];
+
+function pushLog(level: string, source: 'sandbox' | 'ui', text: string): void {
+  logBuffer.push({ ts: Date.now(), level, source, text });
+  if (logBuffer.length > LOG_BUFFER_MAX) {
+    logBuffer.splice(0, logBuffer.length - LOG_BUFFER_MAX);
+  }
+}
+
+function formatLogArg(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+(function captureConsole(): void {
+  const c = console as unknown as Record<string, ((...a: unknown[]) => void) | undefined>;
+  for (const level of ['log', 'info', 'warn', 'error'] as const) {
+    const original = c[level]?.bind(console);
+    c[level] = (...args: unknown[]) => {
+      try {
+        pushLog(level, 'sandbox', args.map(formatLogArg).join(' '));
+      } catch {
+        // never let logging break the plugin
+      }
+      if (original) original(...args);
+    };
+  }
+})();
+
 interface AnalysisCache {
   selectionSignature: string;
   primaryNodeId: string;
@@ -1852,9 +1895,76 @@ async function runBridgeCommand(
       }
       return { count: results.length, results };
     }
+    case 'take_screenshot':
+      return takeScreenshot(params);
+    case 'console_logs':
+      return readConsoleLogs(params);
     default:
       throw new Error(`Unknown command: ${command}`);
   }
+}
+
+// Export a node/selection/page to PNG (base64) so Claude can see the design.
+async function takeScreenshot(
+  params: Record<string, unknown>
+): Promise<{ base64: string; mimeType: string; name: string; nodeId: string; width: number; height: number }> {
+  const nodeId = typeof params.nodeId === 'string' ? params.nodeId : '';
+  let target: BaseNode | null = null;
+  if (nodeId) {
+    target = await figma.getNodeByIdAsync(nodeId);
+    if (!target) {
+      throw new Error(`No node with id ${nodeId}.`);
+    }
+  } else if (figma.currentPage.selection.length > 0) {
+    target = figma.currentPage.selection[0] ?? null;
+  } else {
+    target = figma.currentPage;
+  }
+  if (!target || !('exportAsync' in target)) {
+    throw new Error('Nothing to screenshot. Select a node or pass a nodeId.');
+  }
+  const exportable = target as BaseNode & { exportAsync: SceneNode['exportAsync'] };
+
+  const requested = toNumber(params.scale, 2);
+  let scale = Math.max(0.5, Math.min(4, requested));
+  const HARD_MAX = 4 * 1024 * 1024; // 4 MB ceiling on the bridge payload
+
+  let bytes = await exportable.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: scale } });
+  if (bytes.byteLength > 1.5 * 1024 * 1024 && scale > 1) {
+    scale = 1;
+    bytes = await exportable.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
+  }
+  if (bytes.byteLength > HARD_MAX) {
+    throw new Error(
+      `Screenshot is ${(bytes.byteLength / 1024 / 1024).toFixed(1)} MB; too large to send. Capture a smaller node via nodeId.`
+    );
+  }
+  const width = 'width' in target ? Math.round((target as { width: number }).width * scale) : 0;
+  const height = 'height' in target ? Math.round((target as { height: number }).height * scale) : 0;
+  return {
+    base64: figma.base64Encode(bytes),
+    mimeType: 'image/png',
+    name: target.name,
+    nodeId: target.id,
+    width,
+    height
+  };
+}
+
+// Return the captured console buffer (sandbox + forwarded UI logs).
+function readConsoleLogs(params: Record<string, unknown>): {
+  entries: LogEntry[];
+  total: number;
+} {
+  const level = typeof params.level === 'string' ? params.level : '';
+  const limit = Math.max(1, Math.min(LOG_BUFFER_MAX, toNumber(params.limit, 200)));
+  const filtered = level ? logBuffer.filter((e) => e.level === level) : logBuffer.slice();
+  const entries = filtered.slice(-limit);
+  const total = filtered.length;
+  if (params.clear === true) {
+    logBuffer.length = 0;
+  }
+  return { entries, total };
 }
 
 async function handleBridgeCommand(
@@ -1917,6 +2027,11 @@ function tickFocusedNode(): void {
 setInterval(tickFocusedNode, FOCUSED_POLL_MS);
 
 figma.ui.onmessage = (message: ToPluginMessage) => {
+  if (message.type === 'UI_CONSOLE_LOG') {
+    pushLog(message.entry.level, 'ui', message.entry.text);
+    return;
+  }
+
   if (message.type === 'SET_MODE') {
     activeMode = message.mode;
     void computeAndPostAnalysis();

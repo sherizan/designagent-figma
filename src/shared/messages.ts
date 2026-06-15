@@ -39,6 +39,7 @@ export type ToPluginMessage =
   | { type: 'EXPORT_DESIGN_MD' }
   | { type: 'EXPORT_HTML' }
   | { type: 'APPLY_DESIGN_MD'; content: string }
+  | { type: 'UI_CONSOLE_LOG'; entry: { ts: number; level: string; text: string } }
   | { type: 'BRIDGE_COMMAND'; id: string; command: string; params: Record<string, unknown> }
   | {
       type: 'CREATE_DESIGN_TREE';
