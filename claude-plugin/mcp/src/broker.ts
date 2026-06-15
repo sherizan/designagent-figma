@@ -233,11 +233,17 @@ export function runBroker(): void {
         const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : 'unknown';
         const root = typeof msg.root === 'string' ? msg.root : '';
         const label = typeof msg.label === 'string' && msg.label ? msg.label : sessionId.slice(0, 8); // 8-char UUID prefix fallback
-        // A server reconnects with the same SERVER_INSTANCE_ID; replace any prior
-        // entry for this session so the picker never shows duplicate rows.
+        // Replace any prior entry for this session (a reconnect reuses SERVER_INSTANCE_ID),
+        // and purge the old socket's in-flight tool calls so they don't dangle.
         const existingIdx = servers.findIndex((s) => s.sessionId === sessionId);
         if (existingIdx !== -1) {
+          const prevSocket = servers[existingIdx]!.socket;
           servers.splice(existingIdx, 1);
+          for (const [id, origin] of requestOrigin) {
+            if (origin === prevSocket) {
+              requestOrigin.delete(id);
+            }
+          }
         }
         // Newest registration becomes active.
         servers.push({ socket, sessionId, root, label });

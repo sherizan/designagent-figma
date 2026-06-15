@@ -24950,7 +24950,13 @@ function runBroker() {
         const label = typeof msg.label === "string" && msg.label ? msg.label : sessionId.slice(0, 8);
         const existingIdx = servers.findIndex((s) => s.sessionId === sessionId);
         if (existingIdx !== -1) {
+          const prevSocket = servers[existingIdx].socket;
           servers.splice(existingIdx, 1);
+          for (const [id, origin] of requestOrigin) {
+            if (origin === prevSocket) {
+              requestOrigin.delete(id);
+            }
+          }
         }
         servers.push({ socket, sessionId, root, label });
         blog(`session ${sessionId} (label: ${label}, root: ${root || "?"}) registered (active). ${servers.length} session(s).`);
