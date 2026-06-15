@@ -908,11 +908,46 @@ async function buildDesignNode(
 
   for (const child of node.children) {
     const created = await buildDesignNode(child, frame);
-    if (node.layout && child.stretch && 'layoutAlign' in created) {
+    if (node.layout && child.absolute && 'layoutPositioning' in created) {
+      // Margin-inset child: keep its measured x/y instead of flowing it.
+      (created as SceneNode & { layoutPositioning: 'ABSOLUTE' }).layoutPositioning = 'ABSOLUTE';
+      (created as SceneNode & LayoutMixin).x = child.x;
+      (created as SceneNode & LayoutMixin).y = child.y;
+    } else if (node.layout && child.stretch && 'layoutAlign' in created) {
       (created as SceneNode & { layoutAlign: 'STRETCH' }).layoutAlign = 'STRETCH';
     }
   }
   return frame;
+}
+
+// Tidy default placement: drop a new top-level node to the right of the
+// rightmost existing node, aligned to the topmost — so generated frames line up
+// in a row instead of stacking at the origin and overlapping prior work.
+const CANVAS_GUTTER = 80;
+
+function nextCanvasPosition(excludeId?: string): { x: number; y: number } {
+  let maxRight = -Infinity;
+  let minTop = Infinity;
+  for (const child of figma.currentPage.children) {
+    if (child.id === excludeId || !('x' in child) || !('width' in child)) continue;
+    const node = child as SceneNode & LayoutMixin;
+    maxRight = Math.max(maxRight, node.x + node.width);
+    minTop = Math.min(minTop, node.y);
+  }
+  if (maxRight === -Infinity) return { x: 0, y: 0 };
+  return { x: Math.round(maxRight + CANVAS_GUTTER), y: Math.round(minTop) };
+}
+
+// Honor an explicit x/y from the caller; otherwise auto-place tidily.
+function placeOnPage(node: SceneNode & LayoutMixin, x: unknown, y: unknown): void {
+  if (x == null && y == null) {
+    const pos = nextCanvasPosition(node.id);
+    node.x = pos.x;
+    node.y = pos.y;
+  } else {
+    node.x = toNumber(x, 0);
+    node.y = toNumber(y, 0);
+  }
 }
 
 async function createDesignTree(message: {
@@ -926,9 +961,7 @@ async function createDesignTree(message: {
     const parent = await resolveParentContainer(message.parentId);
     const root = await buildDesignNode(message.tree, parent);
     if (parent.type === 'PAGE' && 'x' in root) {
-      const layout = root as SceneNode & LayoutMixin;
-      layout.x = toNumber(message.x, 0);
-      layout.y = toNumber(message.y, 0);
+      placeOnPage(root as SceneNode & LayoutMixin, message.x, message.y);
     }
     figma.currentPage.selection = [root];
     figma.viewport.scrollAndZoomIntoView([root]);
@@ -1328,8 +1361,7 @@ async function runBridgeCommand(
       applyStroke(frame, params);
       parent.appendChild(frame);
       if (parent.type === 'PAGE') {
-        frame.x = toNumber(params.x, 0);
-        frame.y = toNumber(params.y, 0);
+        placeOnPage(frame, params.x, params.y);
       }
       return selectAndReturn(frame);
     }
@@ -1350,8 +1382,7 @@ async function runBridgeCommand(
       applyStroke(node, params);
       parent.appendChild(node);
       if (parent.type === 'PAGE') {
-        node.x = toNumber(params.x, 0);
-        node.y = toNumber(params.y, 0);
+        placeOnPage(node, params.x, params.y);
       }
       return selectAndReturn(node);
     }
@@ -1382,8 +1413,7 @@ async function runBridgeCommand(
         text.name = String(params.name);
       }
       if (parent.type === 'PAGE') {
-        text.x = toNumber(params.x, 0);
-        text.y = toNumber(params.y, 0);
+        placeOnPage(text, params.x, params.y);
       }
       return selectAndReturn(text);
     }
@@ -1503,8 +1533,7 @@ async function runBridgeCommand(
       rect.fills = [paint];
       parent.appendChild(rect);
       if (parent.type === 'PAGE') {
-        rect.x = toNumber(params.x, 0);
-        rect.y = toNumber(params.y, 0);
+        placeOnPage(rect, params.x, params.y);
       }
       return { ...selectAndReturn(rect), width, height };
     }
@@ -1650,8 +1679,7 @@ async function runBridgeCommand(
       const parent = await resolveParentContainer(params.parentId);
       parent.appendChild(instance);
       if (parent.type === 'PAGE') {
-        if (params.x != null) instance.x = toNumber(params.x, 0);
-        if (params.y != null) instance.y = toNumber(params.y, 0);
+        placeOnPage(instance, params.x, params.y);
       }
       return selectAndReturn(instance);
     }

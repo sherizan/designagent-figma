@@ -45,5 +45,6 @@ export interface DesignTreeNode {
   primaryAxisAlign?: 'MIN' | 'CENTER' | 'MAX' | 'SPACE_BETWEEN';
   counterAxisAlign?: 'MIN' | 'CENTER' | 'MAX';
   stretch?: boolean; // fill the parent's counter axis (e.g. full-width in a column)
+  absolute?: boolean; // pin at x/y inside an auto-layout parent (margin-inset children)
   children: DesignTreeNode[];
 }
