@@ -24807,9 +24807,7 @@ var aliveSockets = /* @__PURE__ */ new WeakSet();
 var pluginSocket = null;
 var pending = /* @__PURE__ */ new Map();
 function handleConnection(socket) {
-  pluginSocket = socket;
   aliveSockets.add(socket);
-  log("DesignAgent plugin connected.");
   socket.on("pong", () => {
     aliveSockets.add(socket);
   });
@@ -24851,8 +24849,16 @@ function handleConnection(socket) {
         entry.reject(new Error(msg.error || "DesignAgent plugin reported an error."));
       }
     }
+    if (msg.type === "takeover") {
+      const who = String(msg.instanceId ?? "?");
+      log(`Another DesignAgent server (instance ${who}) is taking over; releasing port ${PORT}.`);
+      releaseBridge();
+      return;
+    }
     if (msg.type === "hello") {
+      pluginSocket = socket;
       aliveSockets.add(socket);
+      log("DesignAgent plugin connected.");
       try {
         socket.send(
           JSON.stringify({ type: "hello_ack", serverInstanceId: SERVER_INSTANCE_ID, pid: process.pid })
@@ -24877,16 +24883,59 @@ function handleConnection(socket) {
 }
 var BIND_HOSTS = ["127.0.0.1", "::1"];
 var BIND_RETRY_MS = 250;
-var BIND_MAX_ATTEMPTS = 40;
+var BIND_RETRY_MAX_MS = 2e3;
+var wssList = [];
+function releaseBridge() {
+  pluginSocket = null;
+  for (const wss of wssList.splice(0)) {
+    for (const client of wss.clients) {
+      try {
+        client.terminate();
+      } catch {
+      }
+    }
+    try {
+      wss.close();
+    } catch {
+    }
+  }
+}
+function requestTakeover() {
+  try {
+    const client = new import_websocket.default(`ws://127.0.0.1:${PORT}`);
+    client.on("open", () => {
+      try {
+        client.send(JSON.stringify({ type: "takeover", instanceId: SERVER_INSTANCE_ID }));
+      } catch {
+      }
+      setTimeout(() => {
+        try {
+          client.close();
+        } catch {
+        }
+      }, 200);
+    });
+    client.on("error", () => {
+    });
+  } catch {
+  }
+}
 function bind(host, attempt = 1) {
   const display = host.includes(":") ? `[${host}]` : host;
   const wss = new import_websocket_server.default({ host, port: PORT });
-  wss.on("listening", () => log(`WebSocket bridge listening on ws://${display}:${PORT}`));
+  wss.on("listening", () => {
+    wssList.push(wss);
+    log(`WebSocket bridge listening on ws://${display}:${PORT}`);
+  });
   wss.on("connection", handleConnection);
   wss.on("error", (error2) => {
-    if (error2.code === "EADDRINUSE" && attempt < BIND_MAX_ATTEMPTS) {
-      log(`Bind ${display}:${PORT} in use (attempt ${attempt}), retrying in ${BIND_RETRY_MS}ms\u2026`);
-      setTimeout(() => bind(host, attempt + 1), BIND_RETRY_MS);
+    if (error2.code === "EADDRINUSE") {
+      if (attempt === 1) {
+        log(`Bind ${display}:${PORT} in use \u2014 asking the incumbent server to step down\u2026`);
+        requestTakeover();
+      }
+      const delay = Math.min(BIND_RETRY_MAX_MS, BIND_RETRY_MS * attempt);
+      setTimeout(() => bind(host, attempt + 1), delay);
       return;
     }
     log(`Bind ${display}:${PORT} failed: ${error2.message}`);
