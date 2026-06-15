@@ -109,6 +109,23 @@ export function runBroker(): void {
     send(plugin, { type: 'hello_ack', serverInstanceId: active.sessionId, pid: process.pid });
   }
 
+  // Tell the plugin which projects are connected and which is the effective target.
+  function broadcastSessions(): void {
+    if (!plugin) {
+      return;
+    }
+    const target = routeTarget();
+    send(plugin, {
+      type: 'sessions',
+      sessions: servers.map((s) => ({
+        id: s.sessionId,
+        label: s.label,
+        root: s.root,
+        selected: target ? s.sessionId === target.sessionId : false
+      }))
+    });
+  }
+
   function armIdleTimer(): void {
     if (idleTimer) {
       clearTimeout(idleTimer);
@@ -145,6 +162,7 @@ export function runBroker(): void {
       // Promote the next-newest session and re-pair the plugin to it.
       ackPlugin();
     }
+    broadcastSessions();
     armIdleTimer();
   }
 
@@ -189,6 +207,7 @@ export function runBroker(): void {
         plugin = socket;
         blog('plugin connected.');
         ackPlugin(); // no-op until a session is active; then the plugin pairs
+        broadcastSessions();
         return;
       }
 
@@ -222,6 +241,7 @@ export function runBroker(): void {
           idleTimer = null;
         }
         ackPlugin();
+        broadcastSessions();
         return;
       }
 
@@ -250,6 +270,15 @@ export function runBroker(): void {
             return;
           }
           send(target.socket, msg);
+          return;
+        }
+        // The plugin picks which connected project to use for filesystem ops.
+        if (msg.type === 'select_session' && typeof msg.sessionId === 'string') {
+          if (servers.some((s) => s.sessionId === msg.sessionId)) {
+            selectedSessionId = msg.sessionId;
+            blog(`plugin selected session ${msg.sessionId}.`);
+          }
+          broadcastSessions();
           return;
         }
         return;

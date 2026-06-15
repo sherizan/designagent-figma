@@ -24855,6 +24855,21 @@ function runBroker() {
     }
     send(plugin, { type: "hello_ack", serverInstanceId: active.sessionId, pid: process.pid });
   }
+  function broadcastSessions() {
+    if (!plugin) {
+      return;
+    }
+    const target = routeTarget();
+    send(plugin, {
+      type: "sessions",
+      sessions: servers.map((s) => ({
+        id: s.sessionId,
+        label: s.label,
+        root: s.root,
+        selected: target ? s.sessionId === target.sessionId : false
+      }))
+    });
+  }
   function armIdleTimer() {
     if (idleTimer) {
       clearTimeout(idleTimer);
@@ -24888,6 +24903,7 @@ function runBroker() {
     if (wasActive) {
       ackPlugin();
     }
+    broadcastSessions();
     armIdleTimer();
   }
   function handleConnection(socket) {
@@ -24912,6 +24928,7 @@ function runBroker() {
         plugin = socket;
         blog("plugin connected.");
         ackPlugin();
+        broadcastSessions();
         return;
       }
       if (msg.type === "register" && msg.role === "mcp-server") {
@@ -24938,6 +24955,7 @@ function runBroker() {
           idleTimer = null;
         }
         ackPlugin();
+        broadcastSessions();
         return;
       }
       if (socket === plugin) {
@@ -24962,6 +24980,14 @@ function runBroker() {
             return;
           }
           send(target.socket, msg);
+          return;
+        }
+        if (msg.type === "select_session" && typeof msg.sessionId === "string") {
+          if (servers.some((s) => s.sessionId === msg.sessionId)) {
+            selectedSessionId = msg.sessionId;
+            blog(`plugin selected session ${msg.sessionId}.`);
+          }
+          broadcastSessions();
           return;
         }
         return;
