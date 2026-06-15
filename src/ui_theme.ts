@@ -529,6 +529,47 @@ export const UI_STYLES = `
     flex: none;
   }
 
+  .designmd-sync {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 4px 0 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-soft);
+  }
+
+  .designmd-sync-info {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .designmd-sync-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .designmd-sync-path {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .designmd-sync-confirm {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+  }
+
   .export-hint {
     margin: 0 0 12px;
     font-size: 12.5px;

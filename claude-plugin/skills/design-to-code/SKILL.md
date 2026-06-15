@@ -13,10 +13,11 @@ description: >-
 
 # Build UI from a DESIGN.md spec
 
-A `DESIGN.md` is a structured spec exported by the DesignAgent Figma plugin. It
-is the **authoritative source of truth** for what to build: real design tokens
-(often with light/dark modes), the component inventory with variant props, layout
-semantics, key text, designer intent (annotations), and a per-frame Figma link.
+A `DESIGN.md` is a structured spec exported by the DesignAgent Figma plugin,
+following the design.md spec. It is the **authoritative source of truth** for what
+to build: a YAML token frontmatter (`colors`, `typography`, `spacing`, `rounded`,
+`components`) plus a prose body covering layout, shapes, elevation, and designer
+notes.
 
 Your job is to turn that spec into code that a designer would recognize as *their*
 design — not an approximation. The spec exists precisely so you don't have to
@@ -55,42 +56,34 @@ expresses it. Honor both.
 
 1. **DESIGN.md — authoritative.** Use its tokens, component names, layout, and
    text verbatim. Don't re-derive values you've already been given.
-2. **Figma MCP (if available) — for gaps only.** Each frame has a Figma link. Use
-   an MCP (the official Figma MCP, or another connected Figma tool) to fetch what
-   the spec doesn't carry: deep subtree detail, Code Connect mappings, prototype
-   interactions, or exact assets. Query by the per-frame link.
-3. **Unresolved → leave a TODO** with the node id / frame and the exact missing
+2. **Figma MCP (if available) — for gaps only.** Use an MCP (the official Figma
+   MCP, or another connected Figma tool) to fetch what the spec doesn't carry:
+   deep subtree detail, Code Connect mappings, prototype interactions, or exact
+   assets — or ask the user to re-export DESIGN.md from the relevant selection.
+3. **Unresolved → leave a TODO** naming the component/section and the exact missing
    detail. Never invent values to fill a gap.
 
 ## 4. The build method
 
-**Tokens first.** Map the spec's `Design tokens` onto the project's token system —
-reuse an existing token when one matches, otherwise add it in the project's
-convention. Reference tokens in code; don't hard-code the raw hex/number when a
+**Tokens first.** Map the frontmatter token maps (`colors`, `typography`,
+`spacing`, `rounded`) onto the project's token system — reuse an existing token
+when one matches, otherwise add it in the project's convention. Reference tokens in code; don't hard-code the raw hex/number when a
 token covers it. This is what keeps the build in sync with the design system
 instead of drifting into magic numbers.
 
-**Mode-aware.** When a token lists 2+ modes (e.g. `Light=#fff, Dark=#080809`),
-emit mode-aware code — Tailwind `dark:` variants, SwiftUI dynamic colors, Compose
-color schemes, CSS `prefers-color-scheme`. The modes are in the spec because the
-design is meant to adapt.
+**Reuse components.** The `components` map lists components with their key tokens
+(e.g. `backgroundColor`, `textColor`, referencing color tokens). Map each to an
+existing project component. Only create a new shared component when the same
+structure repeats 2+ times — premature abstraction of a one-off is just noise.
 
-**Reuse components.** The `Component inventory` lists real components with their
-variant props (e.g. `Button — Type=Primary, Size=Large`). Map each to an existing
-project component and pass the matching props. Only create a new shared component
-when the same structure repeats 2+ times — premature abstraction of a one-off is
-just noise.
+**Layout from semantics.** The `## Layout` section describes the auto-layout
+intent (direction, gap) per frame. Translate it directly: vertical auto-layout →
+a column/VStack with that gap; alignment maps to justify/align. Don't reconstruct
+spacing by eye when the values are stated.
 
-**Layout from semantics.** The per-frame `Layout` line describes auto-layout
-intent (direction, gap, padding, alignment). Translate it directly: vertical
-auto-layout → a column/VStack with that gap and padding; alignment maps to
-justify/align. Don't reconstruct spacing by eye when the values are stated.
-
-**Use the real text.** Use the `Key text` strings as-is rather than lorem/placeholder.
-
-**Honor designer intent.** `Designer intent` entries are explicit requirements
-from the designer (e.g. "Primary CTA must be sticky"). They override generic
-conventions — satisfy every one.
+**Honor designer intent.** **Designer notes** (under Do's and Don'ts) are explicit
+requirements from the designer (e.g. "Primary CTA must be sticky"). They override
+generic conventions — satisfy every one.
 
 **Determinism.** Implement only what the spec evidences. No speculative states,
 extra screens, alternate variations, or "while I'm here" features. If the design
@@ -112,12 +105,15 @@ expensive to retrofit.
 
 ## Reading the spec quickly
 
-A DESIGN.md is plain Markdown with predictable sections:
-- **Overview** — a table of frames (name, type, size, intent, AI-ready score).
-- **Frames** — one `###` block per frame: layout, key text, components, intent,
-  and the Figma link.
-- **Design tokens / Components** — the merged, deduped inventories to map from.
-- **Footer** — the `@DESIGN.md` consumption note.
+A DESIGN.md follows the design.md spec: **YAML token frontmatter** (the normative
+values) between `---` fences, then a prose body in a fixed section order.
 
-Skim the overview to scope the work, then build frame by frame, leaning on the
-shared token/component sections as your mapping tables.
+- **Frontmatter** — `colors`, `typography`, `spacing`, `rounded`, `components`
+  maps. These are the source of truth; component entries reference color tokens
+  like `{colors.primary}`.
+- **Prose body** — Overview, Colors, Typography, Layout, Elevation & Depth,
+  Shapes, Components, then **Do's and Don'ts** (which may include **Designer
+  notes** — explicit requirements to honor).
+
+Read the frontmatter first to load the tokens, then the prose for how to apply
+them. Token values are authoritative; the prose is context.

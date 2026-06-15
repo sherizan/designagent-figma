@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -212,14 +212,20 @@ const PROJECT_ROOT = process.env.DESIGNAGENT_PROJECT_DIR
   ? resolve(process.env.DESIGNAGENT_PROJECT_DIR)
   : process.cwd();
 
-// Read an .html file from inside the project (the dir Claude Code launched in).
-async function readHtmlFile(path: string): Promise<string> {
+// Resolve a path inside the project (the dir Claude Code launched in), rejecting
+// anything that escapes it. Shared by every filesystem read/write below.
+function resolveInProject(path: string): string {
   const abs = resolve(PROJECT_ROOT, path);
   const rel = relative(PROJECT_ROOT, abs);
   if (rel.startsWith('..') || isAbsolute(rel)) {
     throw new Error('Path is outside the project directory.');
   }
-  return readFile(abs, 'utf8');
+  return abs;
+}
+
+// Read an .html file from inside the project (the dir Claude Code launched in).
+async function readHtmlFile(path: string): Promise<string> {
+  return readFile(resolveInProject(path), 'utf8');
 }
 
 // SSRF guard: reject loopback / private / link-local / metadata addresses.
@@ -363,6 +369,22 @@ async function handleServerRequest(command: string, params: Record<string, unkno
       }
       const html = await inlineExternalImages(await readHtmlFile(path));
       return { html };
+    }
+    case 'check_design_md': {
+      const path = String(params.path ?? 'DESIGN.md');
+      try {
+        const content = await readFile(resolveInProject(path), 'utf8');
+        return { exists: true, root: PROJECT_ROOT, path, content };
+      } catch {
+        return { exists: false, root: PROJECT_ROOT, path };
+      }
+    }
+    case 'write_design_md': {
+      const path = String(params.path ?? 'DESIGN.md');
+      const content = String(params.content ?? '');
+      const abs = resolveInProject(path);
+      await writeFile(abs, content, 'utf8');
+      return { ok: true, root: PROJECT_ROOT, path, bytes: Buffer.byteLength(content, 'utf8') };
     }
     default:
       throw new Error(`Unknown server command: ${command}`);

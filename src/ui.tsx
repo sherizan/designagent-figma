@@ -107,6 +107,13 @@ function App(): JSX.Element {
   >(null);
   const [bridgeEnabled, setBridgeEnabled] = useState<boolean>(false);
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>('off');
+  const [designMd, setDesignMd] = useState<{
+    checked: boolean;
+    exists: boolean;
+    root: string;
+  }>({ checked: false, exists: false, root: '' });
+  // Whether the next DESIGN_MD_RESULT should download or write to the project.
+  const designMdIntent = useRef<'download' | 'sync'>('download');
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<number | null>(null);
   const reconnectAttempt = useRef<number>(0);
@@ -140,6 +147,19 @@ function App(): JSX.Element {
 
       if (message.type === 'DESIGN_MD_RESULT') {
         setError('');
+        if (designMdIntent.current === 'sync') {
+          // Write the generated spec into the project folder via the bridge.
+          designMdIntent.current = 'download';
+          callServer('write_design_md', { content: message.markdown })
+            .then((res) => {
+              const r = res as { path?: string };
+              setStatus(`Synced to ${r?.path ?? 'DESIGN.md'}`);
+              void checkDesignMd();
+            })
+            .catch((e) => setStatus(e instanceof Error ? e.message : 'Sync failed'))
+            .finally(() => setTimeout(() => setStatus(''), 2600));
+          return;
+        }
         const saved = downloadTextFile(message.filename, message.markdown, 'text/markdown');
         const label = message.frameCount === 1 ? 'frame' : 'frames';
         setStatus(saved ? `DESIGN.md saved (${message.frameCount} ${label})` : 'Export failed');
@@ -423,11 +443,49 @@ function App(): JSX.Element {
     return renderTreeLocally(tree);
   };
 
+  // Ask the server whether DESIGN.md already lives in the project folder.
+  async function checkDesignMd(): Promise<void> {
+    try {
+      const r = (await callServer('check_design_md')) as {
+        exists?: boolean;
+        root?: string;
+      };
+      setDesignMd({
+        checked: true,
+        exists: Boolean(r?.exists),
+        root: typeof r?.root === 'string' ? r.root : ''
+      });
+    } catch {
+      setDesignMd({ checked: false, exists: false, root: '' });
+    }
+  }
+
+  // Re-check whenever the bridge connects; clear when it drops.
+  useEffect(() => {
+    if (bridgeStatus === 'connected') {
+      void checkDesignMd();
+    } else {
+      setDesignMd({ checked: false, exists: false, root: '' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bridgeStatus]);
+
   const onExportDesignMd = () => {
     if (!analysis.hasSelection) {
       return;
     }
+    designMdIntent.current = 'download';
     setStatus('Generating DESIGN.md…');
+    postPluginMessage({ type: 'EXPORT_DESIGN_MD' });
+  };
+
+  // Generate from the current selection and write it into the project folder.
+  const syncDesignMd = () => {
+    if (!analysis.hasSelection) {
+      return;
+    }
+    designMdIntent.current = 'sync';
+    setStatus(designMd.exists ? 'Updating DESIGN.md…' : 'Creating DESIGN.md…');
     postPluginMessage({ type: 'EXPORT_DESIGN_MD' });
   };
 
@@ -472,6 +530,11 @@ function App(): JSX.Element {
               intentLabel={toIntentLabel(analysis.intent)}
               selectedNodeName={analysis.selectedNode.name}
               status={status}
+              bridgeConnected={bridgeStatus === 'connected'}
+              designChecked={designMd.checked}
+              designExists={designMd.exists}
+              designRoot={designMd.root}
+              onSyncDesignMd={syncDesignMd}
               onExportDesignMd={onExportDesignMd}
               onExportHtml={onExportHtml}
             />
