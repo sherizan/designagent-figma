@@ -25196,6 +25196,14 @@ function ok(value) {
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   return { content: [{ type: "text", text }] };
 }
+function okImage(base642, mimeType, caption) {
+  const content = [];
+  if (caption) {
+    content.push({ type: "text", text: caption });
+  }
+  content.push({ type: "image", data: base642, mimeType });
+  return { content };
+}
 function fail(error2) {
   const message = error2 instanceof Error ? error2.message : String(error2);
   return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
@@ -25836,6 +25844,43 @@ server.registerTool(
       return fail(error2);
     }
   }
+);
+server.registerTool(
+  "take_screenshot",
+  {
+    description: "Render the current design to a PNG and return it as an image so you can see the result. With no arguments it captures the current selection (or the whole page if nothing is selected). Pass a nodeId to capture a specific node. Exports the design geometry, not the Figma app UI.",
+    inputSchema: {
+      nodeId: external_exports.string().optional().describe("Node id to capture. Defaults to the selection, else the page."),
+      scale: external_exports.number().optional().describe("Export scale (0.5\u20134, default 2). Lowered automatically if the image is large.")
+    }
+  },
+  async (args) => {
+    try {
+      const result = await callPlugin("take_screenshot", {
+        nodeId: args.nodeId,
+        scale: args.scale
+      });
+      if (!result?.base64) {
+        return fail(new Error("No image was produced."));
+      }
+      const caption = `${result.name ?? "node"} \u2014 ${Math.round(result.width ?? 0)}\xD7${Math.round(result.height ?? 0)}`;
+      return okImage(result.base64, result.mimeType ?? "image/png", caption);
+    } catch (error2) {
+      return fail(error2);
+    }
+  }
+);
+server.registerTool(
+  "console_logs",
+  {
+    description: "Return the DesignAgent plugin's captured console output (sandbox + UI) for debugging \u2014 newest last. Filter by level and limit the count; pass clear:true to empty the buffer after reading.",
+    inputSchema: {
+      level: external_exports.enum(["log", "info", "warn", "error"]).optional().describe("Only return this level."),
+      limit: external_exports.number().optional().describe("Max entries to return (default 200)."),
+      clear: external_exports.boolean().optional().describe("Clear the buffer after returning.")
+    }
+  },
+  async (args) => run("console_logs", { level: args.level, limit: args.limit, clear: args.clear })
 );
 async function main() {
   const transport = new StdioServerTransport();

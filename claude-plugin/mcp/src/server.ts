@@ -247,11 +247,24 @@ function callPlugin(command: string, params: Record<string, unknown> = {}): Prom
 
 const server = new McpServer({ name: 'designagent', version: '0.1.0' });
 
-type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
+type ToolContent =
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mimeType: string };
+type ToolResult = { content: ToolContent[]; isError?: boolean };
 
 function ok(value: unknown): ToolResult {
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
   return { content: [{ type: 'text', text }] };
+}
+
+// Return an image (base64) so the model can actually see it, with an optional caption.
+function okImage(base64: string, mimeType: string, caption?: string): ToolResult {
+  const content: ToolContent[] = [];
+  if (caption) {
+    content.push({ type: 'text', text: caption });
+  }
+  content.push({ type: 'image', data: base64, mimeType });
+  return { content };
 }
 
 function fail(error: unknown): ToolResult {
@@ -1008,6 +1021,56 @@ server.registerTool(
       return fail(error);
     }
   }
+);
+
+server.registerTool(
+  'take_screenshot',
+  {
+    description:
+      'Render the current design to a PNG and return it as an image so you can see the result. ' +
+      'With no arguments it captures the current selection (or the whole page if nothing is selected). ' +
+      'Pass a nodeId to capture a specific node. Exports the design geometry, not the Figma app UI.',
+    inputSchema: {
+      nodeId: z.string().optional().describe('Node id to capture. Defaults to the selection, else the page.'),
+      scale: z.number().optional().describe('Export scale (0.5–4, default 2). Lowered automatically if the image is large.')
+    }
+  },
+  async (args) => {
+    try {
+      const result = (await callPlugin('take_screenshot', {
+        nodeId: args.nodeId,
+        scale: args.scale
+      })) as {
+        base64?: string;
+        mimeType?: string;
+        name?: string;
+        width?: number;
+        height?: number;
+      };
+      if (!result?.base64) {
+        return fail(new Error('No image was produced.'));
+      }
+      const caption = `${result.name ?? 'node'} — ${Math.round(result.width ?? 0)}×${Math.round(result.height ?? 0)}`;
+      return okImage(result.base64, result.mimeType ?? 'image/png', caption);
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.registerTool(
+  'console_logs',
+  {
+    description:
+      "Return the DesignAgent plugin's captured console output (sandbox + UI) for debugging — " +
+      'newest last. Filter by level and limit the count; pass clear:true to empty the buffer after reading.',
+    inputSchema: {
+      level: z.enum(['log', 'info', 'warn', 'error']).optional().describe('Only return this level.'),
+      limit: z.number().optional().describe('Max entries to return (default 200).'),
+      clear: z.boolean().optional().describe('Clear the buffer after returning.')
+    }
+  },
+  async (args) => run('console_logs', { level: args.level, limit: args.limit, clear: args.clear })
 );
 
 async function main(): Promise<void> {

@@ -72,11 +72,11 @@ other. Even when a change only touches one side, bump all four so installed vers
 There are no automated tests — verification is visual, in Figma Desktop.
 
 > **Note:** the **designagent** MCP server is part of *this* repo (`claude-plugin/mcp/`). It's a
-> live two-way bridge — it talks to the running DesignAgent plugin over a local WebSocket
-> (`ws://localhost:3790`) to read and manipulate the *design*. It deliberately has **no**
-> plugin-reload, screenshot, or console-log tools, so reloading a fresh build and eyeballing
-> the UI are manual steps in Figma. Because DesignAgent is both the plugin under development
-> *and* the bridge host, re-running it drops and re-establishes the bridge.
+> live two-way bridge — it talks to the running DesignAgent plugin over a local WebSocket (via a
+> persistent broker daemon on `ws://localhost:3790`) to read and manipulate the *design*. It can
+> `take_screenshot` (see the rendered design) and `console_logs` (read the plugin's captured
+> console), but there is **no programmatic plugin-reload** — Figma exposes no API to reload a
+> plugin's own code, so loading a fresh build is a manual re-run in Figma.
 
 1. Build: `npm run build` (or keep `npm run watch` running).
 2. Load DesignAgent via **Plugins → Development → Import plugin from manifest…** → repo-root
@@ -88,8 +88,10 @@ There are no automated tests — verification is visual, in Figma Desktop.
    - `get_spec`, `get_score`, `get_design_md`, `list_issues` — inspect what the plugin extracts
    - `focus` / `select` — drive the Figma selection
    - `annotate`, `apply_fix`, plus the create/style/layout tools — act on the design
+   - `take_screenshot` — render the selection/page to a PNG you can see; `console_logs` — read the
+     plugin's captured console (sandbox + UI) for debugging
 4. To load a fresh build, **re-run the DesignAgent plugin** in Figma (there's no programmatic
-   reload); the bridge reconnects on its own. Verify the UI visually in the panel.
+   reload); the bridge reconnects on its own. Verify the UI with `take_screenshot`.
 
 Use the **`/reload`** slash command to run build → check the bridge → report what the rebuilt
 plugin sees for the current selection.
