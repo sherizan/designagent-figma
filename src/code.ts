@@ -784,14 +784,45 @@ async function buildDesignNode(
     if (align) {
       text.textAlignHorizontal = align;
     }
-    try {
-      text.resize(Math.max(1, node.width), Math.max(1, node.height));
-    } catch {
-      // some text nodes resist fixed sizing; ignore
+    // Single-line text hugs its content (no re-wrapping in the fallback font);
+    // wrapped text keeps its width and grows in height.
+    if (node.multiline) {
+      text.textAutoResize = 'HEIGHT';
+      try {
+        text.resize(Math.max(1, node.width), Math.max(1, node.height));
+      } catch {
+        // ignore
+      }
+    } else {
+      text.textAutoResize = 'WIDTH_AND_HEIGHT';
     }
     text.x = node.x;
     text.y = node.y;
     return text;
+  }
+
+  if (node.kind === 'svg' && node.svg) {
+    let svgNode: FrameNode;
+    try {
+      svgNode = figma.createNodeFromSvg(node.svg);
+    } catch {
+      const fallback = figma.createFrame();
+      parent.appendChild(fallback);
+      fallback.resize(Math.max(1, node.width), Math.max(1, node.height));
+      fallback.fills = [];
+      fallback.x = node.x;
+      fallback.y = node.y;
+      return fallback;
+    }
+    parent.appendChild(svgNode);
+    try {
+      svgNode.resize(Math.max(1, node.width), Math.max(1, node.height));
+    } catch {
+      // some svg nodes resist resize
+    }
+    svgNode.x = node.x;
+    svgNode.y = node.y;
+    return svgNode;
   }
 
   if (node.kind === 'image' && node.dataUrl) {

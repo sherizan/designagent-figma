@@ -98,7 +98,20 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
   };
   applyBoxStyles(node, cs);
 
-  if (el.tagName === 'IMG') {
+  const tag = el.tagName.toLowerCase();
+
+  if (tag === 'svg') {
+    // Rebuilt as real vectors via figma.createNodeFromSvg in the sandbox.
+    try {
+      node.kind = 'svg';
+      node.svg = new XMLSerializer().serializeToString(el);
+    } catch {
+      // fall back to an empty frame
+    }
+    return node;
+  }
+
+  if (tag === 'img') {
     const src = (el as HTMLImageElement).getAttribute('src') ?? '';
     if (src.startsWith('data:')) {
       node.kind = 'image';
@@ -122,6 +135,8 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
       range.selectNodeContents(child);
       const tr = range.getBoundingClientRect();
       if (tr.width <= 0 || tr.height <= 0) continue;
+      // One client rect per visual line — >1 means the source text wrapped.
+      const multiline = range.getClientRects().length > 1;
       node.children.push({
         kind: 'text',
         x: tr.left - rect.left,
@@ -133,6 +148,7 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
         fontWeight: fontWeightToNumber(cs.fontWeight),
         textColor: cs.color,
         textAlign: cssAlignToFigma(cs.textAlign),
+        multiline,
         children: []
       });
     }
