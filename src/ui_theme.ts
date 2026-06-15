@@ -496,10 +496,12 @@ export const UI_STYLES = `
   }
 
   .bridge-bar .bridge-setup {
-    margin-top: 10px;
-    border: none;
-    background: transparent;
-    padding: 0;
+    margin-top: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 14px;
+    box-shadow: var(--shadow);
   }
 
   .bridge-status {
