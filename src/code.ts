@@ -4,6 +4,7 @@ import {
   type AnalysisCore
 } from './core/analyze';
 import { generateDesignDoc, type DesignDocFrame } from './core/designdoc';
+import { parseDesignMd } from './core/parsedesignmd';
 import { generateHtml, type HtmlNode } from './core/htmldoc';
 import { loadAnnotationCategories } from './core/extract';
 import type { DesignTreeNode } from './shared/designtree';
@@ -656,6 +657,151 @@ async function exportDesignMd(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to export DESIGN.md';
     postToUI({ type: 'ERROR', message });
+  }
+}
+
+// ---- DESIGN.md → Figma (apply tokens) ----
+
+// Resolve a requested family + weight to an installed font style, loading it.
+// Falls back to Inter Regular when the family/weight isn't available.
+async function resolveAndLoadFont(family: string, weight?: number): Promise<FontName> {
+  const fonts = await figma.listAvailableFontsAsync();
+  const styles = fonts.filter((f) => f.fontName.family === family).map((f) => f.fontName.style);
+  if (styles.length > 0) {
+    const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, '');
+    const candidates = weight ? WEIGHT_ALIASES[String(weight)] ?? ['Regular'] : ['Regular'];
+    const style =
+      styles.find((s) => candidates.some((c) => norm(c) === norm(s))) ??
+      (styles.includes('Regular') ? 'Regular' : styles[0]);
+    if (style) {
+      const fontName = { family, style };
+      try {
+        await figma.loadFontAsync(fontName);
+        return fontName;
+      } catch {
+        // fall through to Inter
+      }
+    }
+  }
+  const fallback = { family: 'Inter', style: 'Regular' };
+  await figma.loadFontAsync(fallback);
+  return fallback;
+}
+
+// Apply a DESIGN.md's token frontmatter into the current Figma file: colors and
+// spacing/radius become variables in a "DESIGN.md" collection; typography becomes
+// text styles. Existing variables/styles of the same name are updated in place.
+async function applyDesignMdToFigma(content: string): Promise<void> {
+  try {
+    const parsed = parseDesignMd(content);
+    let colors = 0;
+    let numbers = 0;
+    let textStyles = 0;
+
+    const hasVars =
+      Object.keys(parsed.colors).length +
+        Object.keys(parsed.spacing).length +
+        Object.keys(parsed.rounded).length >
+      0;
+
+    if (hasVars) {
+      const collections = await figma.variables.getLocalVariableCollectionsAsync();
+      const collection =
+        collections.find((c) => c.name === 'DESIGN.md') ??
+        figma.variables.createVariableCollection('DESIGN.md');
+      const mode = collection.modes[0];
+      if (!mode) {
+        throw new Error('Variable collection has no mode.');
+      }
+      const modeId = mode.modeId;
+
+      const existing = new Map<string, Variable>();
+      for (const id of collection.variableIds) {
+        const v = await figma.variables.getVariableByIdAsync(id);
+        if (v) existing.set(v.name, v);
+      }
+      const upsert = (
+        name: string,
+        type: 'COLOR' | 'FLOAT',
+        value: RGBA | number
+      ): void => {
+        let variable = existing.get(name);
+        if (!variable) {
+          variable = figma.variables.createVariable(name, collection, type);
+          existing.set(name, variable);
+        }
+        variable.setValueForMode(modeId, value);
+      };
+
+      for (const [name, raw] of Object.entries(parsed.colors)) {
+        const parsedColor = parseCssColor(raw);
+        if (!parsedColor) continue;
+        upsert(`color/${name}`, 'COLOR', {
+          r: parsedColor.color.r,
+          g: parsedColor.color.g,
+          b: parsedColor.color.b,
+          a: parsedColor.opacity
+        });
+        colors += 1;
+      }
+      for (const [name, value] of Object.entries(parsed.spacing)) {
+        upsert(`spacing/${name}`, 'FLOAT', value);
+        numbers += 1;
+      }
+      for (const [name, value] of Object.entries(parsed.rounded)) {
+        upsert(`radius/${name}`, 'FLOAT', value);
+        numbers += 1;
+      }
+    }
+
+    if (parsed.typography.length > 0) {
+      const styles = await figma.getLocalTextStylesAsync();
+      const byName = new Map(styles.map((s) => [s.name, s]));
+      for (const token of parsed.typography) {
+        const fontName = await resolveAndLoadFont(token.fontFamily ?? 'Inter', token.fontWeight);
+        let style = byName.get(token.key);
+        if (!style) {
+          style = figma.createTextStyle();
+          style.name = token.key;
+          byName.set(token.key, style);
+        }
+        style.fontName = fontName;
+        if (token.fontSize && token.fontSize > 0) {
+          style.fontSize = token.fontSize;
+        }
+        if (token.lineHeight) {
+          const lh = token.lineHeight.trim();
+          const n = parseFloat(lh);
+          if (Number.isFinite(n)) {
+            style.lineHeight = lh.endsWith('px')
+              ? { unit: 'PIXELS', value: n }
+              : { unit: 'PERCENT', value: n * 100 };
+          }
+        }
+        if (token.letterSpacing) {
+          const ls = token.letterSpacing.trim();
+          const n = parseFloat(ls);
+          if (Number.isFinite(n) && ls.endsWith('px')) {
+            style.letterSpacing = { unit: 'PIXELS', value: n };
+          } else if (Number.isFinite(n) && ls.endsWith('%')) {
+            style.letterSpacing = { unit: 'PERCENT', value: n };
+          }
+        }
+        textStyles += 1;
+      }
+    }
+
+    postToUI({
+      type: 'APPLY_DESIGN_MD_RESULT',
+      ok: true,
+      result: { colors, numbers, textStyles }
+    });
+  } catch (error) {
+    postToUI({
+      type: 'APPLY_DESIGN_MD_RESULT',
+      ok: false,
+      error: error instanceof Error ? error.message : 'Failed to apply DESIGN.md'
+    });
   }
 }
 
@@ -1833,6 +1979,11 @@ figma.ui.onmessage = (message: ToPluginMessage) => {
 
   if (message.type === 'CREATE_DESIGN_TREE') {
     void createDesignTree(message);
+    return;
+  }
+
+  if (message.type === 'APPLY_DESIGN_MD') {
+    void applyDesignMdToFigma(message.content);
     return;
   }
 

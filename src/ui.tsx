@@ -202,6 +202,23 @@ function App(): JSX.Element {
         return;
       }
 
+      if (message.type === 'APPLY_DESIGN_MD_RESULT') {
+        if (message.ok) {
+          const r = message.result as {
+            colors?: number;
+            numbers?: number;
+            textStyles?: number;
+          };
+          setStatus(
+            `Applied ${r?.colors ?? 0} colors, ${r?.numbers ?? 0} sizes, ${r?.textStyles ?? 0} text styles`
+          );
+        } else {
+          setStatus(message.error || 'Apply failed');
+        }
+        setTimeout(() => setStatus(''), 3200);
+        return;
+      }
+
       if (message.type === 'ERROR') {
         setError(message.message);
         setAnalyzing(null);
@@ -489,6 +506,24 @@ function App(): JSX.Element {
     postPluginMessage({ type: 'EXPORT_DESIGN_MD' });
   };
 
+  // Read the project's DESIGN.md and apply its tokens into the Figma file.
+  const applyToFigma = async () => {
+    setStatus('Reading DESIGN.md…');
+    try {
+      const r = (await callServer('check_design_md')) as { content?: string };
+      if (!r?.content) {
+        setStatus('DESIGN.md not found');
+        setTimeout(() => setStatus(''), 2600);
+        return;
+      }
+      setStatus('Applying to Figma…');
+      postPluginMessage({ type: 'APPLY_DESIGN_MD', content: r.content });
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : 'Apply failed');
+      setTimeout(() => setStatus(''), 2600);
+    }
+  };
+
   const onExportHtml = () => {
     if (!analysis.hasSelection) {
       return;
@@ -535,6 +570,7 @@ function App(): JSX.Element {
               designExists={designMd.exists}
               designRoot={designMd.root}
               onSyncDesignMd={syncDesignMd}
+              onApplyToFigma={applyToFigma}
               onExportDesignMd={onExportDesignMd}
               onExportHtml={onExportHtml}
             />
