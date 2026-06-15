@@ -40,7 +40,7 @@ function HeartbeatReadout({ at }: { at: number }): JSX.Element {
 }
 
 // The app's top bar — styled like a header (flat, no card). It's the Claude
-// Bridge title + live status, with Enable/Disable and a Setup disclosure.
+// Bridge title + live status, with Start/Stop and a Setup disclosure.
 export function BridgeBar({
   status,
   enabled,
@@ -74,10 +74,10 @@ export function BridgeBar({
                 }}
               />
               <span>{meta.label}</span>
-              {status === 'connected' && lastHeartbeatAt !== null ? (
-                <HeartbeatReadout at={lastHeartbeatAt} />
-              ) : null}
             </span>
+            {status === 'connected' && lastHeartbeatAt !== null ? (
+              <HeartbeatReadout at={lastHeartbeatAt} />
+            ) : null}
           </div>
         </div>
         <div className="bridge-actions">
@@ -87,7 +87,7 @@ export function BridgeBar({
             </button>
           ) : null}
           <button type="button" className={enabled ? 'btn' : 'btn-primary'} onClick={onToggle}>
-            {enabled ? 'Disable' : 'Enable'}
+            {enabled ? 'Stop' : 'Start'}
           </button>
         </div>
       </div>
@@ -106,7 +106,7 @@ export function BridgeBar({
             <code>/plugin install designagent@designagent</code>, then restart Claude Code.
           </li>
           <li>
-            Click <strong>Enable</strong> above — the dot turns green when connected.
+            Click <strong>Start</strong> above — the dot turns green when connected.
           </li>
         </ol>
       </details>
@@ -445,7 +445,7 @@ export function EmptyState({ message }: EmptyStateProps): JSX.Element {
 export function Footer(): JSX.Element {
   return (
     <div className="panel-footer">
-      <span className="version-tag">v1.12.0</span> · Built by Sherizan ·{' '}
+      <span className="version-tag">v1.12.1</span> · Built by Sherizan ·{' '}
       <a href="https://www.designagent.dev" target="_blank" rel="noreferrer">
         DesignAgent.dev
       </a>

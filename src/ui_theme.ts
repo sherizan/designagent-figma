@@ -88,6 +88,7 @@ export const UI_STYLES = `
     display: flex;
     align-items: center;
     gap: 10px;
+    flex: 1;
     min-width: 0;
   }
 
@@ -503,15 +504,12 @@ export const UI_STYLES = `
   }
 
   .bridge-heartbeat {
-    color: var(--text-muted);
-    opacity: 0.7;
+    display: block;
+    margin-top: 1px;
+    font-size: 11px;
+    color: var(--text-dim);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
-  }
-
-  .bridge-status .bridge-heartbeat::before {
-    content: '·';
-    margin: 0 6px 0 2px;
   }
 
   .bridge-bar .bridge-setup {
