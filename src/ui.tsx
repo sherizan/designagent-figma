@@ -553,14 +553,17 @@ function App(): JSX.Element {
     });
   };
 
-  // Pick which connected project the plugin reads/writes; refresh derived views.
+  // Pick which connected project the plugin reads/writes. The broker re-broadcasts
+  // `sessions` with the new selection, which re-runs the DESIGN.md check via the
+  // selected-session effect — so we don't (and must not) call checkDesignMd() here
+  // (it would race ahead of the broker and read the previously-selected session).
   const selectSession = (sessionId: string) => {
     const socket = socketRef.current;
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'select_session', sessionId }));
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return;
     }
+    socket.send(JSON.stringify({ type: 'select_session', sessionId }));
     setProjectConfirmed(true);
-    void checkDesignMd();
   };
 
   // Render a tree in the sandbox and await the result (UI-initiated, not a bridge call).
