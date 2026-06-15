@@ -123,7 +123,7 @@ function App(): JSX.Element {
   const lastServerMessageAt = useRef<number>(0);
   const [lastHeartbeatAt, setLastHeartbeatAt] = useState<number | null>(null);
   // Force a teardown + immediate reconnect; populated by the bridge effect so the
-  // "Reconnect" button can re-handshake without toggling Disable→Enable.
+  // "Reconnect" button can re-handshake without toggling Stop→Start.
   const forceReconnect = useRef<(() => void) | null>(null);
   type Resolver = (msg: { ok: boolean; result?: unknown; error?: string }) => void;
   const serverPending = useRef<Map<string, Resolver>>(new Map());
@@ -408,7 +408,7 @@ function App(): JSX.Element {
 
     // Tear down the current socket (if any) and reconnect immediately. Used by
     // the watchdog (silent peer) and the "Reconnect" button. Distinct from
-    // Disable→Enable, which unmounts the whole effect.
+    // Stop→Start, which unmounts the whole effect.
     const reconnectNow = () => {
       if (cancelled) {
         return;
