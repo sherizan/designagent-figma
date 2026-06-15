@@ -401,21 +401,19 @@ await waitOpen(plugin);
 plugin.send(JSON.stringify({ type: 'hello', role: 'figma-plugin' }));
 
 // Fake server A (root /a) then B (root /b); B registers last → newest.
+// IMPORTANT: send `register` ONLY on open (the real server.ts does the same).
+// Re-sending on register_ack would loop register→ack→register forever.
 function fakeServer(sessionId, root, label, onRequest) {
-  const ws = open((m, sock) => {
-    if (m.type === 'register_ack') {
-      sock.send(JSON.stringify({ type: 'register', role: 'mcp-server', sessionId, root, label, version: 2 }));
-    }
+  const ws = open((m) => {
     if (m.type === 'server_request') onRequest(m);
   });
-  // send register immediately on open too (broker accepts either ordering)
   ws.on('open', () => ws.send(JSON.stringify({ type: 'register', role: 'mcp-server', sessionId, root, label, version: 2 })));
   return ws;
 }
 const aGot = []; const bGot = [];
 fakeServer('sess-a', '/a', 'proj-a', (m) => aGot.push(m));
 await sleep(200);
-fakeServer('sess-b', '/b', 'proj-b', (m) => bGot.push(m));
+const wsB = fakeServer('sess-b', '/b', 'proj-b', (m) => bGot.push(m));
 await sleep(400);
 
 // 1. sessions broadcast lists both, newest (B) marked selected.
@@ -439,6 +437,12 @@ plugin.send(JSON.stringify({ type: 'server_request', id: 'r2', command: 'list_ht
 await sleep(250);
 if (aGot.length !== 1) fail(`after select, route should hit A (a=${aGot.length})`);
 console.log('PASS: select_session pins reverse route to chosen session');
+
+// 4. reconnect dedupe: B re-registers with the same sessionId → no duplicate row.
+wsB.send(JSON.stringify({ type: 'register', role: 'mcp-server', sessionId: 'sess-b', root: '/b', label: 'proj-b', version: 2 }));
+await sleep(250);
+if (lastSessions.filter((s) => s.id === 'sess-b').length !== 1) fail(`dedupe failed: ${JSON.stringify(lastSessions)}`);
+console.log('PASS: re-register same sessionId does not duplicate the row');
 
 console.log('ALL PICKER TESTS PASSED');
 broker.kill();
