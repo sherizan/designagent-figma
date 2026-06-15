@@ -55,12 +55,16 @@ function blog(...args: unknown[]): void {
 interface ServerClient {
   socket: WebSocket;
   sessionId: string;
+  root: string;
+  label: string;
 }
 
 export function runBroker(): void {
   const alive = new WeakSet<WebSocket>();
   let plugin: WebSocket | null = null;
   const servers: ServerClient[] = []; // registration order; newest = active
+  // sessionId the plugin explicitly picked for filesystem ops; null = follow newest.
+  let selectedSessionId: string | null = null;
   // Which server originated a given tool-call id, so the plugin's response goes back
   // to the right session.
   const requestOrigin = new Map<string, WebSocket>();
@@ -69,6 +73,19 @@ export function runBroker(): void {
 
   function activeServer(): ServerClient | null {
     return servers.length > 0 ? servers[servers.length - 1]! : null;
+  }
+
+  // The session that should receive reverse-channel (filesystem) ops: the one the
+  // plugin selected if it's still connected, else the newest. Clears a stale pick.
+  function routeTarget(): ServerClient | null {
+    if (selectedSessionId) {
+      const picked = servers.find((s) => s.sessionId === selectedSessionId);
+      if (picked) {
+        return picked;
+      }
+      selectedSessionId = null;
+    }
+    return activeServer();
   }
 
   function send(socket: WebSocket | null, payload: unknown): void {
@@ -146,6 +163,8 @@ export function runBroker(): void {
         result?: unknown;
         error?: string;
         buildMtime?: number;
+        root?: string;
+        label?: string;
       };
       try {
         msg = JSON.parse(data.toString());
@@ -190,8 +209,10 @@ export function runBroker(): void {
           return;
         }
         const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : 'unknown';
+        const root = typeof msg.root === 'string' ? msg.root : '';
+        const label = typeof msg.label === 'string' && msg.label ? msg.label : sessionId.slice(0, 8);
         // Newest registration becomes active.
-        servers.push({ socket, sessionId });
+        servers.push({ socket, sessionId, root, label });
         blog(`session ${sessionId} registered (active). ${servers.length} session(s).`);
         if (idleTimer) {
           clearTimeout(idleTimer);
@@ -213,10 +234,10 @@ export function runBroker(): void {
           send(origin ?? null, msg);
           return;
         }
-        // Reverse channel (filesystem) — route to the ACTIVE session's project.
+        // Reverse channel (filesystem) — route to the selected or newest session's project.
         if (msg.type === 'server_request' && typeof msg.id === 'string') {
-          const active = activeServer();
-          if (!active) {
+          const target = routeTarget();
+          if (!target) {
             send(plugin, {
               type: 'server_response',
               id: msg.id,
@@ -225,7 +246,7 @@ export function runBroker(): void {
             });
             return;
           }
-          send(active.socket, msg);
+          send(target.socket, msg);
           return;
         }
         return;

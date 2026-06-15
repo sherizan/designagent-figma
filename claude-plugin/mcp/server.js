@@ -24824,11 +24824,22 @@ function runBroker() {
   const alive = /* @__PURE__ */ new WeakSet();
   let plugin = null;
   const servers = [];
+  let selectedSessionId = null;
   const requestOrigin = /* @__PURE__ */ new Map();
   const wssList = [];
   let idleTimer = null;
   function activeServer() {
     return servers.length > 0 ? servers[servers.length - 1] : null;
+  }
+  function routeTarget() {
+    if (selectedSessionId) {
+      const picked = servers.find((s) => s.sessionId === selectedSessionId);
+      if (picked) {
+        return picked;
+      }
+      selectedSessionId = null;
+    }
+    return activeServer();
   }
   function send(socket, payload) {
     if (socket && socket.readyState === import_websocket.default.OPEN) {
@@ -24915,7 +24926,9 @@ function runBroker() {
           return;
         }
         const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "unknown";
-        servers.push({ socket, sessionId });
+        const root = typeof msg.root === "string" ? msg.root : "";
+        const label = typeof msg.label === "string" && msg.label ? msg.label : sessionId.slice(0, 8);
+        servers.push({ socket, sessionId, root, label });
         blog(`session ${sessionId} registered (active). ${servers.length} session(s).`);
         if (idleTimer) {
           clearTimeout(idleTimer);
@@ -24935,8 +24948,8 @@ function runBroker() {
           return;
         }
         if (msg.type === "server_request" && typeof msg.id === "string") {
-          const active = activeServer();
-          if (!active) {
+          const target = routeTarget();
+          if (!target) {
             send(plugin, {
               type: "server_response",
               id: msg.id,
@@ -24945,7 +24958,7 @@ function runBroker() {
             });
             return;
           }
-          send(active.socket, msg);
+          send(target.socket, msg);
           return;
         }
         return;
