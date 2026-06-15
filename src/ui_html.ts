@@ -214,8 +214,11 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
     node.counterAxisAlign = lay.counter;
   }
   // For a vertical Auto Layout, a child as wide as the content box should fill width.
-  const contentWidth =
-    lay && lay.layout === 'VERTICAL' ? rect.width - lay.padding.l - lay.padding.r : 0;
+  const isVertical = lay?.layout === 'VERTICAL';
+  const contentWidth = isVertical ? rect.width - lay!.padding.l - lay!.padding.r : 0;
+  // Left/right edges of the container's content box, in viewport coords.
+  const contentLeft = rect.left + (lay ? lay.padding.l : 0);
+  const contentRight = rect.right - (lay ? lay.padding.r : 0);
 
   for (const child of Array.from(el.childNodes)) {
     if (child.nodeType === 1) {
@@ -227,6 +230,15 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
       const childNode = buildNode(childEl, win, rect);
       if (contentWidth > 0 && cr.width >= contentWidth - 2) {
         childNode.stretch = true;
+      } else if (lay) {
+        // Auto Layout ignores child margins, so a child inset on BOTH sides
+        // (e.g. a CTA with `margin: 0 28px`) would snap to the container edge.
+        // Pin it absolutely to keep its measured position.
+        const leftInset = cr.left - contentLeft;
+        const rightInset = contentRight - cr.right;
+        if (leftInset > 1.5 && rightInset > 1.5) {
+          childNode.absolute = true;
+        }
       }
       node.children.push(childNode);
     } else if (child.nodeType === 3) {
