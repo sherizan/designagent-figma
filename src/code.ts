@@ -780,6 +780,12 @@ async function buildDesignNode(
     if (fill) {
       text.fills = [fill];
     }
+    if (node.letterSpacing) {
+      text.letterSpacing = { value: node.letterSpacing, unit: 'PIXELS' };
+    }
+    if (node.lineHeight && node.lineHeight > 0) {
+      text.lineHeight = { value: node.lineHeight, unit: 'PIXELS' };
+    }
     const align = normalizeTextAlign(node.textAlign);
     if (align) {
       text.textAlignHorizontal = align;
