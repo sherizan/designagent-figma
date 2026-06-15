@@ -13,7 +13,8 @@ import {
   HtmlBrowser,
   LoadingPanel,
   type MainTab,
-  MainTabs
+  MainTabs,
+  ProjectPicker
 } from './ui_components';
 import type { DesignTreeNode } from './shared/designtree';
 import { UI_STYLES } from './ui_theme';
@@ -697,47 +698,57 @@ function App(): JSX.Element {
           onReconnect={() => forceReconnect.current?.()}
         />
 
-        <MainTabs active={mainTab} onChange={setMainTab} />
-
-        {error ? (
-          <div className="error">
-            <span>{error}</span>
-            {errorHelpLink ? (
-              <a href={errorHelpLink} target="_blank" rel="noreferrer">
-                What's this?
-              </a>
-            ) : null}
-          </div>
-        ) : null}
-
-        {mainTab === 'design-to-code' ? (
-          analyzing ? (
-            <LoadingPanel nodeName={analyzing.nodeName} nodeType={analyzing.nodeType} />
-          ) : analysis.hasSelection ? (
-            <ExportPanel
-              intentLabel={toIntentLabel(analysis.intent)}
-              selectedNodeName={analysis.selectedNode.name}
-              status={status}
-              bridgeConnected={bridgeStatus === 'connected'}
-              designChecked={designMd.checked}
-              designExists={designMd.exists}
-              designRoot={designMd.root}
-              onSyncDesignMd={syncDesignMd}
-              onApplyToFigma={applyToFigma}
-              onExportDesignMd={onExportDesignMd}
-              onExportHtml={onExportHtml}
-            />
-          ) : (
-            <EmptyState message={analysis.message} />
-          )
+        {bridgeStatus === 'connected' && sessions.length >= 2 && !projectConfirmed ? (
+          <ProjectPicker variant="gate" sessions={sessions} onSelect={selectSession} />
         ) : (
           <>
-            <CapabilityView />
-            <HtmlBrowser
-              connected={bridgeStatus === 'connected'}
-              listFiles={listHtmlFiles}
-              renderFile={renderHtmlFile}
-            />
+            <MainTabs active={mainTab} onChange={setMainTab} />
+            {sessions.length >= 2 ? (
+              <ProjectPicker variant="compact" sessions={sessions} onSelect={selectSession} />
+            ) : null}
+
+            {error ? (
+              <div className="error">
+                <span>{error}</span>
+                {errorHelpLink ? (
+                  <a href={errorHelpLink} target="_blank" rel="noreferrer">
+                    What's this?
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
+
+            {mainTab === 'design-to-code' ? (
+              analyzing ? (
+                <LoadingPanel nodeName={analyzing.nodeName} nodeType={analyzing.nodeType} />
+              ) : analysis.hasSelection ? (
+                <ExportPanel
+                  intentLabel={toIntentLabel(analysis.intent)}
+                  selectedNodeName={analysis.selectedNode.name}
+                  status={status}
+                  bridgeConnected={bridgeStatus === 'connected'}
+                  designChecked={designMd.checked}
+                  designExists={designMd.exists}
+                  designRoot={designMd.root}
+                  onSyncDesignMd={syncDesignMd}
+                  onApplyToFigma={applyToFigma}
+                  onExportDesignMd={onExportDesignMd}
+                  onExportHtml={onExportHtml}
+                />
+              ) : (
+                <EmptyState message={analysis.message} />
+              )
+            ) : (
+              <>
+                <CapabilityView />
+                <HtmlBrowser
+                  connected={bridgeStatus === 'connected'}
+                  listFiles={listHtmlFiles}
+                  renderFile={renderHtmlFile}
+                  projectKey={sessions.find((s) => s.selected)?.id}
+                />
+              </>
+            )}
           </>
         )}
       </div>

@@ -699,4 +699,14 @@ export const UI_STYLES = `
     text-decoration: underline;
     text-underline-offset: 2px;
   }
+
+  .project-gate-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .project-gate-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: transparent; cursor: pointer; text-align: left; }
+  .project-gate-item:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+  .project-gate-item.selected { border-color: var(--accent); }
+  .project-gate-name { font-weight: 600; color: var(--text); }
+  .project-gate-path { font-size: 11px; color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .project-switch { display: flex; align-items: center; gap: 6px; padding: 4px 12px 0; font-size: 11px; }
+  .project-switch-label { opacity: 0.6; color: var(--text-muted); }
+  .project-switch-select { font: inherit; font-size: 11px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 2px 4px; }
 `;

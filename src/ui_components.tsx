@@ -142,6 +142,65 @@ export function MainTabs({ active, onChange }: MainTabsProps): JSX.Element {
   );
 }
 
+export interface SessionInfo {
+  id: string;
+  label: string;
+  root: string;
+  selected: boolean;
+}
+
+interface ProjectPickerProps {
+  sessions: SessionInfo[];
+  onSelect: (id: string) => void;
+  variant: 'gate' | 'compact';
+}
+
+export function ProjectPicker({ sessions, onSelect, variant }: ProjectPickerProps): JSX.Element {
+  if (variant === 'compact') {
+    const current = sessions.find((s) => s.selected) ?? sessions[0];
+    return (
+      <div className="project-switch">
+        <span className="project-switch-label">Project</span>
+        <select
+          className="project-switch-select"
+          value={current?.id ?? ''}
+          onChange={(e) => onSelect(e.target.value)}
+          aria-label="Active project"
+        >
+          {sessions.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  }
+  return (
+    <div className="panel project-gate">
+      <div className="section-subtitle" style={{ marginTop: 0 }}>
+        Choose a project
+      </div>
+      <p className="bridge-explainer" style={{ marginTop: 6 }}>
+        Several Claude sessions are connected. Pick which project DesignAgent reads &amp; writes.
+      </p>
+      <div className="project-gate-list">
+        {sessions.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            className={`project-gate-item ${s.selected ? 'selected' : ''}`}
+            onClick={() => onSelect(s.id)}
+          >
+            <span className="project-gate-name">{s.label}</span>
+            <span className="project-gate-path">{s.root}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 interface ExportPanelProps {
   intentLabel: string;
   selectedNodeName: string;
@@ -298,9 +357,10 @@ interface HtmlBrowserProps {
   connected: boolean;
   listFiles: () => Promise<{ root: string; files: HtmlFileEntry[] }>;
   renderFile: (path: string) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+  projectKey?: string;
 }
 
-export function HtmlBrowser({ connected, listFiles, renderFile }: HtmlBrowserProps): JSX.Element {
+export function HtmlBrowser({ connected, listFiles, renderFile, projectKey }: HtmlBrowserProps): JSX.Element {
   const [files, setFiles] = React.useState<HtmlFileEntry[]>([]);
   const [root, setRoot] = React.useState('');
   const [loading, setLoading] = React.useState(false);
@@ -320,7 +380,7 @@ export function HtmlBrowser({ connected, listFiles, renderFile }: HtmlBrowserPro
     } finally {
       setLoading(false);
     }
-  }, [connected, listFiles]);
+  }, [connected, listFiles, projectKey]);
 
   React.useEffect(() => {
     void refresh();
