@@ -446,32 +446,35 @@ export const UI_STYLES = `
     color: var(--text-muted);
   }
 
-  .bridge-caps {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
+  .how-list {
+    margin: 0;
+    padding-left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-muted);
   }
 
-  .bridge-cap {
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    background: var(--surface-soft);
-    padding: 9px 11px;
-  }
-
-  .bridge-cap-label {
-    display: block;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text);
-  }
-
-  .bridge-cap-detail {
-    display: block;
-    margin-top: 2px;
-    font-size: 11px;
-    line-height: 1.4;
+  .how-list li::marker {
     color: var(--text-dim);
+    font-weight: 600;
+  }
+
+  .how-list strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .how-list code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    background: var(--surface-soft);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+    color: var(--text);
   }
 
   .bridge-setup {

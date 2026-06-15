@@ -87,8 +87,8 @@ interface MainTabsProps {
 
 export function MainTabs({ active, onChange }: MainTabsProps): JSX.Element {
   const tabs: Array<{ id: MainTab; label: string }> = [
-    { id: 'design-to-code', label: 'Design → Code' },
-    { id: 'code-to-design', label: 'Code → Design' }
+    { id: 'code-to-design', label: 'Code → Design' },
+    { id: 'design-to-code', label: 'Design → Code' }
   ];
   return (
     <div className="main-tabs" role="tablist" aria-label="DesignAgent mode">
@@ -175,32 +175,19 @@ export function ExportPanel(props: ExportPanelProps): JSX.Element {
   );
 }
 
-const BRIDGE_CAPABILITIES: Array<{ label: string; detail: string }> = [
-  { label: 'Read', detail: 'spec · DESIGN.md · HTML · issues' },
-  { label: 'Build', detail: 'frames · text · shapes · images' },
-  { label: 'Style', detail: 'fills · strokes · radius · shadow · type' },
-  { label: 'Layout', detail: 'move · resize · group · clone · delete' }
-];
-
-// Code → Design tab content. The HTML → Design paste box is added here in Part B.
+// Code → Design tab content: a short two-step instruction. The HTML file
+// browser (port Claude's artifacts) renders below it in ui.tsx.
 export function CapabilityView(): JSX.Element {
   return (
     <div className="panel">
-      <p className="bridge-explainer">
-        With the bridge connected, Claude Code can act on this Figma file directly:
-      </p>
-      <div className="bridge-caps">
-        {BRIDGE_CAPABILITIES.map((cap) => (
-          <div key={cap.label} className="bridge-cap">
-            <span className="bridge-cap-label">{cap.label}</span>
-            <span className="bridge-cap-detail">{cap.detail}</span>
-          </div>
-        ))}
-      </div>
-      <p className="prompt-hint">
-        Claude can also render HTML into Figma over the bridge (e.g. “render index.html into
-        Figma”), or browse this project’s HTML files below.
-      </p>
+      <ol className="how-list">
+        <li>
+          In your terminal, open your project and run <code>claude</code>.
+        </li>
+        <li>
+          Ask for what you want — <strong>“design a button”</strong> — and it shows up here.
+        </li>
+      </ol>
     </div>
   );
 }
@@ -247,8 +234,11 @@ export function HtmlBrowser({ connected, listFiles, renderFile }: HtmlBrowserPro
   if (!connected) {
     return (
       <div className="panel">
-        <p className="bridge-explainer">
-          Enable the Claude bridge above to browse and render this project’s HTML files.
+        <div className="section-subtitle" style={{ marginTop: 0 }}>
+          Port Claude’s HTML artifacts
+        </div>
+        <p className="bridge-explainer" style={{ marginTop: 6 }}>
+          Turn on the bridge above to render Claude’s HTML files here.
         </p>
       </div>
     );
@@ -271,7 +261,9 @@ export function HtmlBrowser({ connected, listFiles, renderFile }: HtmlBrowserPro
   return (
     <div className="panel">
       <div className="meta-row">
-        <div className="section-subtitle">Project HTML → Design</div>
+        <div className="section-subtitle" style={{ marginTop: 0 }}>
+          Port Claude’s HTML artifacts
+        </div>
         <button type="button" className="btn" onClick={() => void refresh()} disabled={loading}>
           {loading ? '…' : 'Refresh'}
         </button>
@@ -286,7 +278,7 @@ export function HtmlBrowser({ connected, listFiles, renderFile }: HtmlBrowserPro
         <p className="bridge-explainer">
           {loading
             ? 'Scanning project…'
-            : 'No .html files here. This scans where Claude Code is running — save Claude’s HTML into that folder (or set DESIGNAGENT_PROJECT_DIR), then Refresh. Or ask Claude to “render HTML into Figma” directly.'}
+            : 'No .html files in this folder yet. Save Claude’s HTML here, then Refresh.'}
         </p>
       ) : (
         <div className="html-file-list">
