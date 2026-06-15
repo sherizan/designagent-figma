@@ -849,10 +849,6 @@ async function buildDesignNode(
 
   const frame = figma.createFrame();
   parent.appendChild(frame);
-  frame.resize(Math.max(1, node.width), Math.max(1, node.height));
-  frame.x = node.x;
-  frame.y = node.y;
-  frame.layoutMode = 'NONE';
   frame.clipsContent = false;
   const fill = cssSolidPaint(node.fill);
   frame.fills = fill ? [fill] : [];
@@ -890,8 +886,31 @@ async function buildDesignNode(
       ];
     }
   }
+
+  // Auto Layout when the source element was flex/stack; absolute otherwise.
+  if (node.layout) {
+    frame.layoutMode = node.layout;
+    frame.itemSpacing = node.itemSpacing ?? 0;
+    frame.paddingTop = node.paddingTop ?? 0;
+    frame.paddingRight = node.paddingRight ?? 0;
+    frame.paddingBottom = node.paddingBottom ?? 0;
+    frame.paddingLeft = node.paddingLeft ?? 0;
+    frame.primaryAxisAlignItems = node.primaryAxisAlign ?? 'MIN';
+    frame.counterAxisAlignItems = node.counterAxisAlign ?? 'MIN';
+    frame.primaryAxisSizingMode = 'FIXED';
+    frame.counterAxisSizingMode = 'FIXED';
+  } else {
+    frame.layoutMode = 'NONE';
+  }
+  frame.resize(Math.max(1, node.width), Math.max(1, node.height));
+  frame.x = node.x;
+  frame.y = node.y;
+
   for (const child of node.children) {
-    await buildDesignNode(child, frame);
+    const created = await buildDesignNode(child, frame);
+    if (node.layout && child.stretch && 'layoutAlign' in created) {
+      (created as SceneNode & { layoutAlign: 'STRETCH' }).layoutAlign = 'STRETCH';
+    }
   }
   return frame;
 }
