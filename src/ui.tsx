@@ -123,7 +123,7 @@ function getErrorHelpLink(error: string): string | undefined {
 }
 
 function App(): JSX.Element {
-  const [mainTab, setMainTab] = useState<MainTab>('design-to-code');
+  const [mainTab, setMainTab] = useState<MainTab>('code-to-design');
   const [analysis, setAnalysis] = useState<AnalysisResult>(INITIAL_ANALYSIS);
   const [error, setError] = useState<string>('');
   const [status, setStatus] = useState<string>('');
@@ -485,7 +485,7 @@ function App(): JSX.Element {
     <div className="app-shell">
       <style>{UI_STYLES}</style>
       <div className="app-body">
-        <AppHeader version="v1.9.0" />
+        <AppHeader version="v1.9.1" />
 
         <BridgeBar
           status={bridgeStatus}
