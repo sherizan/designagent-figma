@@ -8,7 +8,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { WebSocket } from 'ws';
-import { runBroker, BROKER_PROTOCOL_VERSION } from './broker';
+import { runBroker, BROKER_PROTOCOL_VERSION, BUILD_MTIME } from './broker';
 
 // DesignAgent MCP server.
 //
@@ -99,7 +99,8 @@ function connectToBroker(): void {
           type: 'register',
           role: 'mcp-server',
           sessionId: SERVER_INSTANCE_ID,
-          version: BROKER_PROTOCOL_VERSION
+          version: BROKER_PROTOCOL_VERSION,
+          buildMtime: BUILD_MTIME
         })
       );
     } catch {
@@ -117,6 +118,7 @@ function connectToBroker(): void {
       result?: unknown;
       error?: string;
       brokerVersion?: number;
+      brokerBuildMtime?: number;
     };
     try {
       msg = JSON.parse(data.toString());
@@ -129,10 +131,21 @@ function connectToBroker(): void {
 
     if (msg.type === 'register_ack') {
       const brokerVersion = typeof msg.brokerVersion === 'number' ? msg.brokerVersion : 0;
-      if (brokerVersion < BROKER_PROTOCOL_VERSION) {
-        // An older broker bundle is still running. Ask it to step down, then
-        // respawn a current one.
-        log(`Broker v${brokerVersion} is older than v${BROKER_PROTOCOL_VERSION}; replacing it.`);
+      const brokerBuildMtime =
+        typeof msg.brokerBuildMtime === 'number' ? msg.brokerBuildMtime : 0;
+      // Replace the broker if it speaks an older protocol, OR (same protocol) was
+      // built from an older bundle than ours. The build-mtime check is what makes a
+      // rebuild self-heal: a stale broker that didn't bump BROKER_PROTOCOL_VERSION
+      // still reports an older build and gets stepped down. A broker NEWER than us
+      // (a more recent session's build) reports an equal/higher mtime, so we adopt
+      // it rather than fighting it.
+      const olderProtocol = brokerVersion < BROKER_PROTOCOL_VERSION;
+      const olderBuild = brokerVersion === BROKER_PROTOCOL_VERSION && brokerBuildMtime < BUILD_MTIME;
+      if (olderProtocol || olderBuild) {
+        const why = olderProtocol
+          ? `protocol v${brokerVersion} < v${BROKER_PROTOCOL_VERSION}`
+          : `build ${brokerBuildMtime} < ${BUILD_MTIME}`;
+        log(`Broker is stale (${why}); replacing it.`);
         try {
           socket.send(JSON.stringify({ type: 'broker_shutdown' }));
         } catch {
@@ -147,7 +160,7 @@ function connectToBroker(): void {
         return;
       }
       brokerReady = true;
-      log(`Bridge broker ready (v${brokerVersion}).`);
+      log(`Bridge broker ready (v${brokerVersion}, build ${brokerBuildMtime}).`);
       return;
     }
 

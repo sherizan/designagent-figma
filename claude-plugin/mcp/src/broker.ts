@@ -13,7 +13,7 @@
 // connected for IDLE_MS, so it never orphans. Logs to a temp file (its stdio is
 // ignored by the detached spawn).
 
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -21,6 +21,22 @@ import { WebSocketServer, WebSocket } from 'ws';
 // Bump when the broker<->server wire protocol changes incompatibly. A newer MCP
 // server that finds an older broker asks it to shut down and respawns a current one.
 export const BROKER_PROTOCOL_VERSION = 2;
+
+// Build identity of this running bundle: the mtime of the compiled server.js
+// (this CJS bundle, broker + server in one file) captured ONCE at process start.
+// A server launched from a freshly built bundle has a newer mtime than a broker
+// that's been running since an older build, so it can replace a stale broker even
+// when BROKER_PROTOCOL_VERSION didn't change — which is the common case (the wire
+// protocol rarely changes, but broker *logic* does). Reading the file instead of
+// baking a constant means any rebuild bumps this automatically; a peer that
+// predates this field reports 0 (oldest), so it's safely replaced.
+export const BUILD_MTIME: number = (() => {
+  try {
+    return statSync(__filename).mtimeMs;
+  } catch {
+    return 0;
+  }
+})();
 
 const PORT = Number(process.env.DESIGNAGENT_BRIDGE_PORT ?? 3790);
 const BIND_HOSTS = ['127.0.0.1', '::1'];
@@ -129,6 +145,7 @@ export function runBroker(): void {
         ok?: boolean;
         result?: unknown;
         error?: string;
+        buildMtime?: number;
       };
       try {
         msg = JSON.parse(data.toString());
@@ -156,10 +173,20 @@ export function runBroker(): void {
       // ---- per-session MCP server registers ----
       if (msg.type === 'register' && msg.role === 'mcp-server') {
         const version = typeof msg.version === 'number' ? msg.version : 0;
-        send(socket, { type: 'register_ack', brokerVersion: BROKER_PROTOCOL_VERSION });
-        if (version > BROKER_PROTOCOL_VERSION) {
-          // The server is newer than us; it will send broker_shutdown. Don't adopt it.
-          blog(`server version ${version} > broker ${BROKER_PROTOCOL_VERSION}; awaiting shutdown.`);
+        const buildMtime = typeof msg.buildMtime === 'number' ? msg.buildMtime : 0;
+        send(socket, {
+          type: 'register_ack',
+          brokerVersion: BROKER_PROTOCOL_VERSION,
+          brokerBuildMtime: BUILD_MTIME
+        });
+        // The server is newer than us — either a higher wire protocol, or the same
+        // protocol built from a newer bundle. Either way it will send broker_shutdown;
+        // don't adopt it as a session (we're about to exit).
+        if (version > BROKER_PROTOCOL_VERSION || buildMtime > BUILD_MTIME) {
+          blog(
+            `server (v${version}, build ${buildMtime}) newer than broker ` +
+              `(v${BROKER_PROTOCOL_VERSION}, build ${BUILD_MTIME}); awaiting shutdown.`
+          );
           return;
         }
         const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : 'unknown';

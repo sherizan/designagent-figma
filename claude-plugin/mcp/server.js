@@ -24801,6 +24801,13 @@ var import_node_fs = require("node:fs");
 var import_node_os = require("node:os");
 var import_node_path = require("node:path");
 var BROKER_PROTOCOL_VERSION = 2;
+var BUILD_MTIME = (() => {
+  try {
+    return (0, import_node_fs.statSync)(__filename).mtimeMs;
+  } catch {
+    return 0;
+  }
+})();
 var PORT = Number(process.env.DESIGNAGENT_BRIDGE_PORT ?? 3790);
 var BIND_HOSTS = ["127.0.0.1", "::1"];
 var HEARTBEAT_MS = 2e4;
@@ -24895,9 +24902,16 @@ function runBroker() {
       }
       if (msg.type === "register" && msg.role === "mcp-server") {
         const version2 = typeof msg.version === "number" ? msg.version : 0;
-        send(socket, { type: "register_ack", brokerVersion: BROKER_PROTOCOL_VERSION });
-        if (version2 > BROKER_PROTOCOL_VERSION) {
-          blog(`server version ${version2} > broker ${BROKER_PROTOCOL_VERSION}; awaiting shutdown.`);
+        const buildMtime = typeof msg.buildMtime === "number" ? msg.buildMtime : 0;
+        send(socket, {
+          type: "register_ack",
+          brokerVersion: BROKER_PROTOCOL_VERSION,
+          brokerBuildMtime: BUILD_MTIME
+        });
+        if (version2 > BROKER_PROTOCOL_VERSION || buildMtime > BUILD_MTIME) {
+          blog(
+            `server (v${version2}, build ${buildMtime}) newer than broker (v${BROKER_PROTOCOL_VERSION}, build ${BUILD_MTIME}); awaiting shutdown.`
+          );
           return;
         }
         const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "unknown";
@@ -25082,7 +25096,8 @@ function connectToBroker() {
           type: "register",
           role: "mcp-server",
           sessionId: SERVER_INSTANCE_ID,
-          version: BROKER_PROTOCOL_VERSION
+          version: BROKER_PROTOCOL_VERSION,
+          buildMtime: BUILD_MTIME
         })
       );
     } catch {
@@ -25100,8 +25115,12 @@ function connectToBroker() {
     }
     if (msg.type === "register_ack") {
       const brokerVersion = typeof msg.brokerVersion === "number" ? msg.brokerVersion : 0;
-      if (brokerVersion < BROKER_PROTOCOL_VERSION) {
-        log(`Broker v${brokerVersion} is older than v${BROKER_PROTOCOL_VERSION}; replacing it.`);
+      const brokerBuildMtime = typeof msg.brokerBuildMtime === "number" ? msg.brokerBuildMtime : 0;
+      const olderProtocol = brokerVersion < BROKER_PROTOCOL_VERSION;
+      const olderBuild = brokerVersion === BROKER_PROTOCOL_VERSION && brokerBuildMtime < BUILD_MTIME;
+      if (olderProtocol || olderBuild) {
+        const why = olderProtocol ? `protocol v${brokerVersion} < v${BROKER_PROTOCOL_VERSION}` : `build ${brokerBuildMtime} < ${BUILD_MTIME}`;
+        log(`Broker is stale (${why}); replacing it.`);
         try {
           socket.send(JSON.stringify({ type: "broker_shutdown" }));
         } catch {
@@ -25114,7 +25133,7 @@ function connectToBroker() {
         return;
       }
       brokerReady = true;
-      log(`Bridge broker ready (v${brokerVersion}).`);
+      log(`Bridge broker ready (v${brokerVersion}, build ${brokerBuildMtime}).`);
       return;
     }
     if (msg.type === "ping") {
