@@ -35,5 +35,15 @@ export interface DesignTreeNode {
   // image / svg
   dataUrl?: string;
   svg?: string;
+  // auto layout (when set, children flow instead of being absolutely placed)
+  layout?: 'HORIZONTAL' | 'VERTICAL';
+  itemSpacing?: number;
+  paddingTop?: number;
+  paddingRight?: number;
+  paddingBottom?: number;
+  paddingLeft?: number;
+  primaryAxisAlign?: 'MIN' | 'CENTER' | 'MAX' | 'SPACE_BETWEEN';
+  counterAxisAlign?: 'MIN' | 'CENTER' | 'MAX';
+  stretch?: boolean; // fill the parent's counter axis (e.g. full-width in a column)
   children: DesignTreeNode[];
 }

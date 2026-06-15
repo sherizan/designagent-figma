@@ -58,6 +58,88 @@ function isHidden(cs: CSSStyleDeclaration): boolean {
   return cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0;
 }
 
+function median(nums: number[]): number {
+  if (nums.length === 0) return 0;
+  const s = [...nums].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] ?? 0 : ((s[m - 1] ?? 0) + (s[m] ?? 0)) / 2;
+}
+
+function primaryFromJustify(j: string): 'MIN' | 'CENTER' | 'MAX' | 'SPACE_BETWEEN' {
+  if (j.includes('center')) return 'CENTER';
+  if (j.includes('space-')) return 'SPACE_BETWEEN';
+  if (j.includes('end')) return 'MAX';
+  return 'MIN';
+}
+
+function counterFromItems(a: string): 'MIN' | 'CENTER' | 'MAX' {
+  if (a.includes('center')) return 'CENTER';
+  if (a.includes('end')) return 'MAX';
+  return 'MIN';
+}
+
+interface LayoutInfo {
+  layout: 'HORIZONTAL' | 'VERTICAL';
+  itemSpacing: number;
+  padding: { t: number; r: number; b: number; l: number };
+  primary: 'MIN' | 'CENTER' | 'MAX' | 'SPACE_BETWEEN';
+  counter: 'MIN' | 'CENTER' | 'MAX';
+}
+
+// Map an element's CSS layout to Figma Auto Layout, or null for absolute fallback.
+function computeLayout(el: Element, cs: CSSStyleDeclaration, win: Window): LayoutInfo | null {
+  const padding = {
+    t: px(cs.paddingTop),
+    r: px(cs.paddingRight),
+    b: px(cs.paddingBottom),
+    l: px(cs.paddingLeft)
+  };
+  const display = cs.display;
+
+  if (display === 'flex' || display === 'inline-flex') {
+    const layout = cs.flexDirection.indexOf('column') === 0 ? 'VERTICAL' : 'HORIZONTAL';
+    const gapProp = layout === 'VERTICAL' ? cs.rowGap : cs.columnGap;
+    const gap = px(
+      gapProp && gapProp !== 'normal' ? gapProp : cs.gap && cs.gap !== 'normal' ? cs.gap : '0'
+    );
+    return {
+      layout,
+      itemSpacing: gap,
+      padding,
+      primary: primaryFromJustify(cs.justifyContent),
+      counter: counterFromItems(cs.alignItems)
+    };
+  }
+
+  if (display === 'block' || display === 'list-item' || display === 'flow-root') {
+    const kids = Array.from(el.children).filter((c) => {
+      const ccs = win.getComputedStyle(c);
+      if (ccs.display === 'none' || ccs.visibility === 'hidden') return false;
+      const r = c.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+    if (kids.length < 2) return null;
+    const rects = kids.map((c) => c.getBoundingClientRect());
+    const gaps: number[] = [];
+    for (let i = 0; i < rects.length - 1; i += 1) {
+      const a = rects[i];
+      const b = rects[i + 1];
+      if (!a || !b) continue;
+      if (b.top < a.bottom - 2) return null; // not a clean vertical stack
+      gaps.push(Math.max(0, b.top - a.bottom));
+    }
+    return {
+      layout: 'VERTICAL',
+      itemSpacing: Math.round(median(gaps)),
+      padding,
+      primary: 'MIN',
+      counter: 'MIN'
+    };
+  }
+
+  return null;
+}
+
 function applyBoxStyles(node: DesignTreeNode, cs: CSSStyleDeclaration): void {
   if (isVisibleColor(cs.backgroundColor)) {
     node.fill = cs.backgroundColor;
@@ -120,6 +202,21 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
     }
   }
 
+  const lay = computeLayout(el, cs, win);
+  if (lay) {
+    node.layout = lay.layout;
+    node.itemSpacing = lay.itemSpacing;
+    node.paddingTop = lay.padding.t;
+    node.paddingRight = lay.padding.r;
+    node.paddingBottom = lay.padding.b;
+    node.paddingLeft = lay.padding.l;
+    node.primaryAxisAlign = lay.primary;
+    node.counterAxisAlign = lay.counter;
+  }
+  // For a vertical Auto Layout, a child as wide as the content box should fill width.
+  const contentWidth =
+    lay && lay.layout === 'VERTICAL' ? rect.width - lay.padding.l - lay.padding.r : 0;
+
   for (const child of Array.from(el.childNodes)) {
     if (child.nodeType === 1) {
       const childEl = child as Element;
@@ -127,7 +224,11 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
       if (isHidden(childCs)) continue;
       const cr = childEl.getBoundingClientRect();
       if (cr.width <= 0 || cr.height <= 0) continue;
-      node.children.push(buildNode(childEl, win, rect));
+      const childNode = buildNode(childEl, win, rect);
+      if (contentWidth > 0 && cr.width >= contentWidth - 2) {
+        childNode.stretch = true;
+      }
+      node.children.push(childNode);
     } else if (child.nodeType === 3) {
       const raw = (child.textContent ?? '').replace(/\s+/g, ' ').trim();
       if (!raw) continue;
