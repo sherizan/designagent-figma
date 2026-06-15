@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -175,6 +176,42 @@ async function loadImageBase64(args: {
     );
   }
   return buf.toString('base64');
+}
+
+const PROJECT_ROOT = process.cwd();
+
+// Read an .html file from inside the project (the dir Claude Code launched in).
+async function readHtmlFile(path: string): Promise<string> {
+  const abs = resolve(PROJECT_ROOT, path);
+  const rel = relative(PROJECT_ROOT, abs);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error('Path is outside the project directory.');
+  }
+  return readFile(abs, 'utf8');
+}
+
+// Inline external <img src="http(s)://…"> as data URLs so the plugin can embed
+// them (the plugin UI can't fetch arbitrary domains). Best-effort, budgeted.
+async function inlineExternalImages(html: string): Promise<string> {
+  const matches = Array.from(html.matchAll(/<img\b[^>]*\bsrc=["'](https?:\/\/[^"']+)["']/gi));
+  let result = html;
+  let budget = 10;
+  for (const match of matches) {
+    if (budget <= 0) break;
+    const url = match[1];
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > MAX_IMAGE_BYTES) continue;
+      const contentType = res.headers.get('content-type') || 'image/png';
+      result = result.split(url).join(`data:${contentType};base64,${buf.toString('base64')}`);
+      budget -= 1;
+    } catch {
+      // skip unreachable images
+    }
+  }
+  return result;
 }
 
 const IMAGE_SOURCE_SCHEMA = {
@@ -660,6 +697,43 @@ server.registerTool(
         operations.push({ command: op.command, params });
       }
       return run('batch', { operations });
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.registerTool(
+  'html_to_design',
+  {
+    description:
+      'Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project (e.g. one you just generated). Structural fidelity — fonts must exist in the Figma file; external images are inlined. The DesignAgent plugin must be open with the bridge enabled.',
+    inputSchema: {
+      html: z.string().optional().describe('Raw HTML to render.'),
+      path: z.string().optional().describe('Path to an .html file in the project.'),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      parentId: z.string().optional(),
+      width: z.number().optional().describe('Render viewport width in px (default 1280).')
+    }
+  },
+  async (args) => {
+    try {
+      let html = args.html;
+      if (!html && args.path) {
+        html = await readHtmlFile(args.path);
+      }
+      if (!html) {
+        return fail(new Error('Provide "html" or "path".'));
+      }
+      html = await inlineExternalImages(html);
+      return run('html_to_design', {
+        html,
+        x: args.x,
+        y: args.y,
+        parentId: args.parentId,
+        width: args.width
+      });
     } catch (error) {
       return fail(error);
     }

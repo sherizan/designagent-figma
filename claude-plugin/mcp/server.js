@@ -2981,7 +2981,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve.call(this, root, ref);
+      let _sch = resolve2.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3008,7 +3008,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve(root, ref) {
+    function resolve2(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3639,55 +3639,55 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve(baseURI, relativeURI, options) {
+    function resolve2(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
       return serialize(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative, options, skipNormalization) {
+    function resolveComponent(base, relative2, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse3(serialize(base, options), options);
-        relative = parse3(serialize(relative, options), options);
+        relative2 = parse3(serialize(relative2, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative.scheme) {
-        target.scheme = relative.scheme;
-        target.userinfo = relative.userinfo;
-        target.host = relative.host;
-        target.port = relative.port;
-        target.path = removeDotSegments(relative.path || "");
-        target.query = relative.query;
+      if (!options.tolerant && relative2.scheme) {
+        target.scheme = relative2.scheme;
+        target.userinfo = relative2.userinfo;
+        target.host = relative2.host;
+        target.port = relative2.port;
+        target.path = removeDotSegments(relative2.path || "");
+        target.query = relative2.query;
       } else {
-        if (relative.userinfo !== void 0 || relative.host !== void 0 || relative.port !== void 0) {
-          target.userinfo = relative.userinfo;
-          target.host = relative.host;
-          target.port = relative.port;
-          target.path = removeDotSegments(relative.path || "");
-          target.query = relative.query;
+        if (relative2.userinfo !== void 0 || relative2.host !== void 0 || relative2.port !== void 0) {
+          target.userinfo = relative2.userinfo;
+          target.host = relative2.host;
+          target.port = relative2.port;
+          target.path = removeDotSegments(relative2.path || "");
+          target.query = relative2.query;
         } else {
-          if (!relative.path) {
+          if (!relative2.path) {
             target.path = base.path;
-            if (relative.query !== void 0) {
-              target.query = relative.query;
+            if (relative2.query !== void 0) {
+              target.query = relative2.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative.path[0] === "/") {
-              target.path = removeDotSegments(relative.path);
+            if (relative2.path[0] === "/") {
+              target.path = removeDotSegments(relative2.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative.path;
+                target.path = "/" + relative2.path;
               } else if (!base.path) {
-                target.path = relative.path;
+                target.path = relative2.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative2.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative.query;
+            target.query = relative2.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3695,7 +3695,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative.fragment;
+      target.fragment = relative2.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -3897,7 +3897,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve,
+      resolve: resolve2,
       resolveComponent,
       equal,
       serialize,
@@ -10568,6 +10568,7 @@ var require_websocket_server = __commonJS({
 // src/server.ts
 var import_node_crypto = require("node:crypto");
 var import_promises = require("node:fs/promises");
+var import_node_path = require("node:path");
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -22661,7 +22662,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -22678,7 +22679,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -22756,7 +22757,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve(parseResult.data);
+            resolve2(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -23017,12 +23018,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve, interval);
+      const timeoutId = setTimeout(resolve2, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -24122,7 +24123,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -24771,12 +24772,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve();
+        resolve2();
       } else {
-        this._stdout.once("drain", resolve);
+        this._stdout.once("drain", resolve2);
       }
     });
   }
@@ -24854,7 +24855,7 @@ setInterval(() => {
   }
 }, 2e4);
 function callPlugin(command, params = {}) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve2, reject) => {
     if (!pluginSocket || pluginSocket.readyState !== import_websocket.default.OPEN) {
       reject(
         new Error(
@@ -24868,7 +24869,7 @@ function callPlugin(command, params = {}) {
       pending.delete(id);
       reject(new Error(`DesignAgent plugin did not respond within ${REQUEST_TIMEOUT_MS / 1e3}s.`));
     }, REQUEST_TIMEOUT_MS);
-    pending.set(id, { resolve, reject, timer });
+    pending.set(id, { resolve: resolve2, reject, timer });
     try {
       pluginSocket.send(JSON.stringify({ type: "request", id, command, params }));
     } catch (error2) {
@@ -24917,6 +24918,35 @@ async function loadImageBase64(args) {
     );
   }
   return buf.toString("base64");
+}
+var PROJECT_ROOT = process.cwd();
+async function readHtmlFile(path) {
+  const abs = (0, import_node_path.resolve)(PROJECT_ROOT, path);
+  const rel = (0, import_node_path.relative)(PROJECT_ROOT, abs);
+  if (rel.startsWith("..") || (0, import_node_path.isAbsolute)(rel)) {
+    throw new Error("Path is outside the project directory.");
+  }
+  return (0, import_promises.readFile)(abs, "utf8");
+}
+async function inlineExternalImages(html) {
+  const matches = Array.from(html.matchAll(/<img\b[^>]*\bsrc=["'](https?:\/\/[^"']+)["']/gi));
+  let result = html;
+  let budget = 10;
+  for (const match of matches) {
+    if (budget <= 0) break;
+    const url = match[1];
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > MAX_IMAGE_BYTES) continue;
+      const contentType = res.headers.get("content-type") || "image/png";
+      result = result.split(url).join(`data:${contentType};base64,${buf.toString("base64")}`);
+      budget -= 1;
+    } catch {
+    }
+  }
+  return result;
 }
 var IMAGE_SOURCE_SCHEMA = {
   url: external_exports.string().optional().describe("Image URL (fetched by the server)."),
@@ -25332,6 +25362,41 @@ server.registerTool(
         operations.push({ command: op.command, params });
       }
       return run("batch", { operations });
+    } catch (error2) {
+      return fail(error2);
+    }
+  }
+);
+server.registerTool(
+  "html_to_design",
+  {
+    description: "Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project (e.g. one you just generated). Structural fidelity \u2014 fonts must exist in the Figma file; external images are inlined. The DesignAgent plugin must be open with the bridge enabled.",
+    inputSchema: {
+      html: external_exports.string().optional().describe("Raw HTML to render."),
+      path: external_exports.string().optional().describe("Path to an .html file in the project."),
+      x: external_exports.number().optional(),
+      y: external_exports.number().optional(),
+      parentId: external_exports.string().optional(),
+      width: external_exports.number().optional().describe("Render viewport width in px (default 1280).")
+    }
+  },
+  async (args) => {
+    try {
+      let html = args.html;
+      if (!html && args.path) {
+        html = await readHtmlFile(args.path);
+      }
+      if (!html) {
+        return fail(new Error('Provide "html" or "path".'));
+      }
+      html = await inlineExternalImages(html);
+      return run("html_to_design", {
+        html,
+        x: args.x,
+        y: args.y,
+        parentId: args.parentId,
+        width: args.width
+      });
     } catch (error2) {
       return fail(error2);
     }

@@ -25,6 +25,8 @@ to build production UI from it the design-system-faithful way.
   - layout: `move`, `resize`, `reparent`, `delete`
   - advanced: `clone`, `group`, `ungroup`, `set_opacity`, `set_rotation`,
     `instantiate_component`, `batch` (run many ops in one call)
+  - html → design: `html_to_design` — render HTML (a string or a project `.html` file
+    path) into real Figma layers ("render index.html into Figma")
 
   Tools appear as `mcp__plugin_designagent_designagent__<tool>`.
 
