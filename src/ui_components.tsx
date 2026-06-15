@@ -209,12 +209,13 @@ export interface HtmlFileEntry {
 
 interface HtmlBrowserProps {
   connected: boolean;
-  listFiles: () => Promise<HtmlFileEntry[]>;
+  listFiles: () => Promise<{ root: string; files: HtmlFileEntry[] }>;
   renderFile: (path: string) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
 }
 
 export function HtmlBrowser({ connected, listFiles, renderFile }: HtmlBrowserProps): JSX.Element {
   const [files, setFiles] = React.useState<HtmlFileEntry[]>([]);
+  const [root, setRoot] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [rendering, setRendering] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState('');
@@ -224,7 +225,9 @@ export function HtmlBrowser({ connected, listFiles, renderFile }: HtmlBrowserPro
     setLoading(true);
     setStatus('');
     try {
-      setFiles(await listFiles());
+      const result = await listFiles();
+      setRoot(result.root);
+      setFiles(result.files);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Failed to list files');
     } finally {
@@ -268,10 +271,17 @@ export function HtmlBrowser({ connected, listFiles, renderFile }: HtmlBrowserPro
           {loading ? '…' : 'Refresh'}
         </button>
       </div>
+      {root ? (
+        <p className="html-file-dir" style={{ marginTop: 2 }}>
+          Scanning: {root}
+        </p>
+      ) : null}
       {status ? <p className="prompt-hint">{status}</p> : null}
       {files.length === 0 ? (
         <p className="bridge-explainer">
-          {loading ? 'Scanning project…' : 'No .html files found in this project.'}
+          {loading
+            ? 'Scanning project…'
+            : 'No .html files here. This scans where Claude Code is running — save Claude’s HTML into that folder (or set DESIGNAGENT_PROJECT_DIR), then Refresh. Or ask Claude to “render HTML into Figma” directly.'}
         </p>
       ) : (
         <div className="html-file-list">

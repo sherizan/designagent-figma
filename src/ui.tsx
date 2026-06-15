@@ -431,9 +431,15 @@ function App(): JSX.Element {
     });
   };
 
-  const listHtmlFiles = async (): Promise<HtmlFileEntry[]> => {
-    const result = (await callServer('list_html_files')) as { files?: HtmlFileEntry[] };
-    return result && Array.isArray(result.files) ? result.files : [];
+  const listHtmlFiles = async (): Promise<{ root: string; files: HtmlFileEntry[] }> => {
+    const result = (await callServer('list_html_files')) as {
+      root?: string;
+      files?: HtmlFileEntry[];
+    };
+    return {
+      root: typeof result?.root === 'string' ? result.root : '',
+      files: result && Array.isArray(result.files) ? result.files : []
+    };
   };
 
   const renderHtmlFile = async (path: string) => {
