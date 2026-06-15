@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-15
 **Status:** Approved (brainstorming) → ready for implementation plan
-**Touches:** `claude-plugin/mcp/src/broker.ts`, `claude-plugin/mcp/src/server.ts`, `src/ui.tsx`, `src/ui_components.tsx`. (`src/shared/messages.ts` only if a new plugin↔UI message proves necessary — see §5.)
+**Touches:** `claude-plugin/mcp/src/broker.ts`, `claude-plugin/mcp/src/server.ts`, `src/ui.tsx`, `src/ui_components.tsx`, `src/code.ts` (panel height). (`src/shared/messages.ts` only if a new plugin↔UI message proves necessary — see §5.)
 
 ## Problem
 
@@ -32,10 +32,15 @@ The user regularly has several sessions connected, so a smarter default alone is
 
 ## Goal
 
-Let the user **pick which connected project** the plugin scans, from a dropdown in the panel. Each
-connected session already knows its own correct root (via `CLAUDE_PROJECT_DIR`), so no path typing
-is required — the user selects a project and the broker pins reverse-channel routing to that
-session.
+Let the user **pick which connected project** is active, then have **every** reverse-channel
+filesystem op use it — both the "Port HTML artifacts" scan (code→design) and DESIGN.md create/
+update/sync (design→code), including the path shown on the DESIGN.md card. Each connected session
+already knows its own correct root (via `CLAUDE_PROJECT_DIR`), so no path typing is required — the
+user selects a project and the broker pins reverse-channel routing to that session.
+
+The picker is a **gate step after the bridge connects**: connect → pick project → then the tabs and
+content render. When exactly one project is connected it auto-selects and the gate is skipped;
+with several, an explicit pick is required. The picker stays reachable afterwards to switch.
 
 ## Non-goals
 
@@ -97,18 +102,37 @@ New wire messages (additive; both peers ignore unknown types):
 `BROKER_PROTOCOL_VERSION` is **not** bumped — the additions are backward-compatible optional
 fields/messages (consistent with the build-stamp change in 0.14.1).
 
-### 5. UI (`ui.tsx` + `ui_components.tsx` + `src/shared/messages.ts`)
+### 5. UI (`ui.tsx` + `ui_components.tsx`)
 
-- `ui.tsx` (owns the WS): handle inbound `sessions` → store `{ id, label, root, selected }[]` in
-  state. Add a `selectSession(id)` that sends `select_session` and then re-issues `list_html_files`
-  so root + file list refresh.
-- `ui_components.tsx`: in the "Port Claude's HTML artifacts" panel, render a **Project** dropdown
-  above "Scanning: {root}" listing the connected projects by `label`, the selected one marked. With
-  a single connected session, render it as a static label (no dropdown). The selected session's
-  `root` drives the "Scanning:" line.
-- `src/shared/messages.ts`: **likely untouched.** The `sessions` / `select_session` wire messages are
-  a UI↔broker concern handled directly in `ui.tsx` and do not cross the UI↔sandbox boundary (the
-  sandbox/`code.ts` is not involved in reverse-channel fs ops). Only touch `messages.ts` if a new
+Current structure: the panel is gated on `bridgeStatus === 'connected'`; once connected it renders
+the two main tabs (`MainTabs`: `design-to-code`, `code-to-design`) and their content. The picker
+inserts a gate **between** the connected state and the tabs.
+
+- **`ui.tsx`** (owns the WS): handle inbound `sessions` → store `{ id, label, root, selected }[]`
+  and the effective selection in state. Add `selectSession(id)` that sends `select_session`, then
+  re-issues the reverse-channel reads (`list_html_files`, and the DESIGN.md existence check) so the
+  root, file list, and DESIGN.md card path refresh to the new project.
+  - **Gate logic:** once `connected`, before rendering `MainTabs`:
+    - 0 sessions → existing "not connected"/empty messaging.
+    - exactly 1 session → auto-select it; render tabs immediately (gate skipped).
+    - ≥2 sessions and nothing selected yet → render the **project-selection step** (the list of
+      connected projects) instead of the tabs; once the user picks, render the tabs.
+  - The selected project is the single source of truth for the displayed root in **both** tabs.
+- **`ui_components.tsx`:**
+  - A `ProjectPicker` component used in two places: (a) the full-width gate step (project list with
+    `label` + dimmed `root`, click to select), and (b) a compact "Project: {label} ▾" control shown
+    near the tabs once selected, to re-open the picker and switch.
+  - The code→design panel's "Scanning: {root}" uses the selected session's `root`.
+  - The design→code DESIGN.md card (currently shows `${designRoot}/DESIGN.md`) uses the selected
+    session's `root` for `designRoot`, so create/update writes land in the picked project. (This is
+    already enforced server-side because all reverse-channel ops route to the selected session per
+    §3; the UI just needs to *display* the selected root consistently.)
+- **Panel height:** reduce the plugin window from `height: 720` to `height: 560` in
+  `src/code.ts` (`figma.showUI`, width stays 400). Verify the gate step and both tabs still fit /
+  scroll cleanly at the shorter height.
+- **`src/shared/messages.ts`:** **likely untouched.** The `sessions` / `select_session` wire
+  messages are a UI↔broker concern handled directly in `ui.tsx` and do not cross the UI↔sandbox
+  boundary (the sandbox/`code.ts` is not involved in reverse-channel fs ops). Only touch it if a new
   plugin↔UI message turns out to be needed.
 
 ### 6. Edge cases
@@ -117,7 +141,8 @@ fields/messages (consistent with the build-stamp change in 0.14.1).
   `sessions`; UI shows the new effective selection.
 - **No sessions connected** → existing "bridge not connected" messaging; dropdown shows nothing /
   disabled.
-- **Single session** → static label, no dropdown.
+- **Single session** → gate auto-skips (auto-selected); a compact "Project: {label}" control still
+  shows near the tabs (becomes a switcher if a second session later connects).
 - **Selection not persisted** → after a broker restart (incl. the 0.14.1 self-heal), routing starts
   at "newest" until the user picks again. Acceptable per non-goals.
 - **Duplicate labels** (two projects with the same basename) → label uses up to 2 path segments;
@@ -135,8 +160,11 @@ fields/messages (consistent with the build-stamp change in 0.14.1).
     confirm reverse-channel routing targets newest by default; send `select_session` for the older
     one; confirm a subsequent `server_request` is relayed to the selected session, not newest;
     disconnect the selected session and confirm fallback to newest + a fresh `sessions` broadcast.
-  - Manual: with two sessions connected, confirm the dropdown lists both, selecting one updates
-    "Scanning:" and the HTML file list to that project.
+  - Manual (multi-session): with two sessions connected, confirm the gate step lists both; selecting
+    one updates "Scanning:" + the HTML file list, **and** the DESIGN.md card path; a DESIGN.md
+    create/update writes into the *selected* project's folder (not the newest session's).
+  - Manual (single session): confirm the gate auto-skips straight to the tabs.
+  - Manual (layout): confirm the gate step and both tabs fit/scroll cleanly at the 560px height.
 
 ## Open questions
 
