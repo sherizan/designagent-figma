@@ -1102,6 +1102,8 @@ function buildFrameShell(
       ];
     }
   }
+  let resizeW = node.width;
+  let resizeH = node.height;
   if (node.layout) {
     frame.layoutMode = node.layout;
     frame.itemSpacing = node.itemSpacing ?? 0;
@@ -1111,12 +1113,41 @@ function buildFrameShell(
     frame.paddingLeft = node.paddingLeft ?? 0;
     frame.primaryAxisAlignItems = node.primaryAxisAlign ?? 'MIN';
     frame.counterAxisAlignItems = node.counterAxisAlign ?? 'MIN';
-    frame.primaryAxisSizingMode = 'FIXED';
+
+    const horizontal = node.layout === 'HORIZONTAL';
+    const kids = node.children ?? [];
+    const flowKids = kids.filter((c) => !c.absolute);
+    const gaps = Math.max(0, flowKids.length - 1) * (node.itemSpacing ?? 0);
+    const padMain = horizontal
+      ? (node.paddingLeft ?? 0) + (node.paddingRight ?? 0)
+      : (node.paddingTop ?? 0) + (node.paddingBottom ?? 0);
+    // Main-axis size needed to hold the in-flow, non-grow children.
+    const contentMain =
+      flowKids.reduce((s, c) => s + (c.grow ? 0 : horizontal ? c.width : c.height), 0) + gaps + padMain;
+    const measuredMain = horizontal ? node.width : node.height;
+
+    // Hug ONLY a genuinely content-packed row (children fill the measured size).
+    // Stay FIXED when children must distribute into a width (grow / SPACE_BETWEEN)
+    // or when there is slack (a full-width row whose content doesn't fill it) — that
+    // keeps full-width rows full-width. The clamp then prevents any exact-fit drop.
+    const mustFill = kids.some((c) => c.grow) || node.primaryAxisAlign === 'SPACE_BETWEEN';
+    const contentFills = contentMain >= measuredMain - 1;
+    const hug = !mustFill && contentFills;
+    frame.primaryAxisSizingMode = hug ? 'AUTO' : 'FIXED';
     frame.counterAxisSizingMode = 'FIXED';
+    if (!hug) {
+      // Clamp: grow the frame to fit its in-flow children rather than dropping one
+      // (no-op when the measured size already fits, e.g. a full-width row with slack).
+      if (horizontal) {
+        resizeW = Math.max(resizeW, contentMain);
+      } else {
+        resizeH = Math.max(resizeH, contentMain);
+      }
+    }
   } else {
     frame.layoutMode = 'NONE';
   }
-  frame.resize(Math.max(1, node.width), Math.max(1, node.height));
+  frame.resize(Math.max(1, resizeW), Math.max(1, resizeH));
   frame.x = node.x;
   frame.y = node.y;
   return frame;
@@ -1126,11 +1157,19 @@ function buildFrameShell(
 async function appendDesignChildren(frame: FrameNode, node: DesignTreeNode): Promise<void> {
   for (const child of node.children ?? []) {
     const created = await buildDesignNode(child, frame);
-    if (node.layout && child.absolute && 'layoutPositioning' in created) {
+    if (!node.layout) {
+      continue;
+    }
+    if (child.absolute && 'layoutPositioning' in created) {
       (created as SceneNode & { layoutPositioning: 'ABSOLUTE' }).layoutPositioning = 'ABSOLUTE';
       (created as SceneNode & LayoutMixin).x = child.x;
       (created as SceneNode & LayoutMixin).y = child.y;
-    } else if (node.layout && child.stretch && 'layoutAlign' in created) {
+      continue;
+    }
+    if (child.grow && 'layoutGrow' in created) {
+      (created as SceneNode & { layoutGrow: number }).layoutGrow = 1;
+    }
+    if (child.stretch && 'layoutAlign' in created) {
       (created as SceneNode & { layoutAlign: 'STRETCH' }).layoutAlign = 'STRETCH';
     }
   }

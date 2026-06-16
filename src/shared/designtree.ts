@@ -47,5 +47,6 @@ export interface DesignTreeNode {
   counterAxisAlign?: 'MIN' | 'CENTER' | 'MAX';
   stretch?: boolean; // fill the parent's counter axis (e.g. full-width in a column)
   absolute?: boolean; // pin at x/y inside an auto-layout parent (margin-inset children)
+  grow?: boolean; // flex-grow > 0 on the main axis → Figma layoutGrow=1
   children: DesignTreeNode[];
 }
