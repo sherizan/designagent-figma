@@ -1102,6 +1102,8 @@ function buildFrameShell(
       ];
     }
   }
+  let resizeW = node.width;
+  let resizeH = node.height;
   if (node.layout) {
     frame.layoutMode = node.layout;
     frame.itemSpacing = node.itemSpacing ?? 0;
@@ -1111,12 +1113,33 @@ function buildFrameShell(
     frame.paddingLeft = node.paddingLeft ?? 0;
     frame.primaryAxisAlignItems = node.primaryAxisAlign ?? 'MIN';
     frame.counterAxisAlignItems = node.counterAxisAlign ?? 'MIN';
-    frame.primaryAxisSizingMode = 'FIXED';
+    // Hug the main axis for content-packed rows so an exact-fit row has no fixed
+    // width to overflow → no silently-dropped child. Stay FIXED only when children
+    // must distribute into a width: a grow child (flex:1) or SPACE_BETWEEN.
+    const kids = node.children ?? [];
+    const needsFixedMain = kids.some((c) => c.grow) || node.primaryAxisAlign === 'SPACE_BETWEEN';
+    frame.primaryAxisSizingMode = needsFixedMain ? 'FIXED' : 'AUTO';
     frame.counterAxisSizingMode = 'FIXED';
+    if (needsFixedMain) {
+      // Clamp: grow the frame to fit its non-grow children rather than mis-flowing /
+      // dropping one. (No-op when the measured size already fits.)
+      const gaps = Math.max(0, kids.length - 1) * (node.itemSpacing ?? 0);
+      if (node.layout === 'HORIZONTAL') {
+        const need =
+          kids.reduce((s, c) => s + (c.grow ? 0 : c.width), 0) +
+          gaps + (node.paddingLeft ?? 0) + (node.paddingRight ?? 0);
+        resizeW = Math.max(resizeW, need);
+      } else {
+        const need =
+          kids.reduce((s, c) => s + (c.grow ? 0 : c.height), 0) +
+          gaps + (node.paddingTop ?? 0) + (node.paddingBottom ?? 0);
+        resizeH = Math.max(resizeH, need);
+      }
+    }
   } else {
     frame.layoutMode = 'NONE';
   }
-  frame.resize(Math.max(1, node.width), Math.max(1, node.height));
+  frame.resize(Math.max(1, resizeW), Math.max(1, resizeH));
   frame.x = node.x;
   frame.y = node.y;
   return frame;
@@ -1126,11 +1149,19 @@ function buildFrameShell(
 async function appendDesignChildren(frame: FrameNode, node: DesignTreeNode): Promise<void> {
   for (const child of node.children ?? []) {
     const created = await buildDesignNode(child, frame);
-    if (node.layout && child.absolute && 'layoutPositioning' in created) {
+    if (!node.layout) {
+      continue;
+    }
+    if (child.absolute && 'layoutPositioning' in created) {
       (created as SceneNode & { layoutPositioning: 'ABSOLUTE' }).layoutPositioning = 'ABSOLUTE';
       (created as SceneNode & LayoutMixin).x = child.x;
       (created as SceneNode & LayoutMixin).y = child.y;
-    } else if (node.layout && child.stretch && 'layoutAlign' in created) {
+      continue;
+    }
+    if (child.grow && 'layoutGrow' in created) {
+      (created as SceneNode & { layoutGrow: number }).layoutGrow = 1;
+    }
+    if (child.stretch && 'layoutAlign' in created) {
       (created as SceneNode & { layoutAlign: 'STRETCH' }).layoutAlign = 'STRETCH';
     }
   }
