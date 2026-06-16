@@ -1,7 +1,7 @@
 {
   "name": "designagent",
-  "version": "0.14.2",
-  "description": "DesignAgent's Claude Code companion — build production UI from a DESIGN.md spec exported from Figma, plus a live two-way bridge to read, fix, and create on the Figma canvas from Claude Code.",
+  "version": "0.14.3",
+  "description": "DesignAgent gives Claude Code hands and eyes inside Figma — a live two-way bridge to read, build, and edit the canvas in real time, plus a design-system-faithful DESIGN.md spec you build production UI from.",
   "mcpServers": "./.mcp.json",
   "author": {
     "name": "Sherizan",

@@ -2,13 +2,6 @@ export type Intent = 'screen' | 'component' | 'section';
 
 export type Mode = 'system-first' | 'fidelity-first';
 
-export type ScoreCategory =
-  | 'Component Coverage'
-  | 'Tokenization Coverage'
-  | 'Layout Semantics'
-  | 'Naming + Semantics'
-  | 'Variant Completeness';
-
 export interface LayoutSummary {
   layoutMode?: string;
   primaryAxisAlignItems?: string;
@@ -112,41 +105,6 @@ export interface UiSpec {
   tokenization: TokenizationSummary;
 }
 
-export interface ScoreBreakdown {
-  componentCoverage: number;
-  tokenizationCoverage: number;
-  layoutSemantics: number;
-  namingSemantics: number;
-  variantCompleteness: number;
-}
-
-export interface ScoreDetails {
-  interactiveCandidates: number;
-  interactiveInstances: number;
-  tokenRefs: number;
-  rawTokenCandidates: number;
-  autoLayoutRatio: number;
-  absoluteRatio: number;
-  semanticNameRatio: number;
-  variantRatio: number;
-}
-
-export interface ScoreResult {
-  total: number;
-  applicableMax: number;
-  applicable: Record<ScoreCategory, boolean>;
-  breakdown: ScoreBreakdown;
-  details: ScoreDetails;
-}
-
-export interface ChecklistItem {
-  category: ScoreCategory;
-  nodeId: string;
-  nodeName: string;
-  reason: string;
-  suggestion: string;
-}
-
 export interface SelectedNodeInfo {
   id: string;
   name: string;
@@ -163,7 +121,6 @@ export interface AnalysisPayload {
   intent: Intent;
   flowCapable: boolean;
   uiSpec: UiSpec;
-  coverageWarnings: string[];
 }
 
 export interface EmptyAnalysis {
@@ -174,19 +131,3 @@ export interface EmptyAnalysis {
 }
 
 export type AnalysisResult = AnalysisPayload | EmptyAnalysis;
-
-export const SCORE_WEIGHTS = {
-  componentCoverage: 30,
-  tokenizationCoverage: 25,
-  layoutSemantics: 20,
-  namingSemantics: 15,
-  variantCompleteness: 10
-} as const;
-
-export const SCORE_CATEGORIES: ScoreCategory[] = [
-  'Component Coverage',
-  'Tokenization Coverage',
-  'Layout Semantics',
-  'Naming + Semantics',
-  'Variant Completeness'
-];

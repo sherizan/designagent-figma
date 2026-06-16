@@ -1,16 +1,6 @@
 import { enrichUiSpec, extractUiSpec, loadAnnotationCategories } from './extract';
 import { classifyIntent } from './intent';
-import { scoreUiSpec } from './score';
-import type {
-  AnalysisPayload,
-  ChecklistItem,
-  Intent,
-  Mode,
-  ScoreCategory,
-  ScoreResult,
-  SelectedNodeInfo,
-  UiSpec
-} from './types';
+import type { AnalysisPayload, Intent, Mode, SelectedNodeInfo, UiSpec } from './types';
 
 interface AnalyzeOptions {
   linkBase?: string;
@@ -21,10 +11,6 @@ export interface AnalysisCore {
   selectedNode: SelectedNodeInfo;
   intent: Intent;
   uiSpec: UiSpec;
-  score: ScoreResult;
-  checklist: ChecklistItem[];
-  checklistByCategory: Record<ScoreCategory, ChecklistItem[]>;
-  coverageWarnings: string[];
 }
 
 function toNodeIdParam(nodeId: string): string {
@@ -75,16 +61,10 @@ export function analyzeNodeCore(node: SceneNode, options?: AnalyzeOptions): Anal
   const intent = classifyIntent(node);
   const uiSpec = extractUiSpec(node);
 
-  const scoring = scoreUiSpec(uiSpec);
-
   return {
     selectedNode,
     intent,
-    uiSpec,
-    score: scoring.score,
-    checklist: scoring.checklist,
-    checklistByCategory: scoring.checklistByCategory,
-    coverageWarnings: scoring.coverageWarnings
+    uiSpec
   };
 }
 
@@ -109,8 +89,7 @@ export function composeAnalysisPayload(
     selectedNode: core.selectedNode,
     intent: core.intent,
     flowCapable,
-    uiSpec: core.uiSpec,
-    coverageWarnings: core.coverageWarnings
+    uiSpec: core.uiSpec
   };
 }
 

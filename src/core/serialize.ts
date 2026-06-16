@@ -1,9 +1,7 @@
 import type { ResolvedVariable, UiNodeSpec, UiSpec } from './types';
 
-// Shared UiSpec → Markdown serializers. Used by both the code-gen prompt
-// (src/core/prompt.ts) and the DESIGN.md export (src/core/designdoc.ts) so the
-// two stay consistent. The per-UiSpec wrappers below preserve the exact output
-// prompt.ts produced before this module was extracted.
+// Shared UiSpec → Markdown serializers backing the DESIGN.md export
+// (src/core/designdoc.ts).
 
 export function flattenNodes(root: UiNodeSpec): UiNodeSpec[] {
   const queue: UiNodeSpec[] = [root];

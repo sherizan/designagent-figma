@@ -558,24 +558,6 @@ server.registerTool(
 );
 
 server.registerTool(
-  'get_score',
-  {
-    description:
-      "Get DesignAgent's AI-readiness score and per-category breakdown for the current Figma selection."
-  },
-  async () => run('get_score')
-);
-
-server.registerTool(
-  'list_issues',
-  {
-    description:
-      'List the design-readiness issues DesignAgent found on the current Figma selection (node id, category, reason, suggestion).'
-  },
-  async () => run('list_issues')
-);
-
-server.registerTool(
   'focus',
   {
     description: 'Select a node by id in Figma and scroll/zoom it into view.',

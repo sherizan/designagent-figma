@@ -1,9 +1,11 @@
 # DesignAgent — Figma plugin
 
-DesignAgent analyzes the current Figma selection (screen / component / section), scores its
-design quality, and generates platform-specific, code-gen-ready prompts for SwiftUI (iOS),
-Jetpack Compose (Android), React Native + Expo + NativeWind, Next.js + Tailwind + shadcn/ui,
-and plain web HTML/CSS.
+DesignAgent is the **live bridge that gives Claude Code hands and eyes inside Figma**. Over a
+local WebSocket, Claude can read the current selection, build and edit the design in place (~30
+create/edit tools), and exchange a design-system-faithful `DESIGN.md` spec — so a designer in
+Figma and a developer in Claude Code work from one shared, always-current source of truth. The
+plugin panel surfaces the bridge (connect, project picker) and the `DESIGN.md` / HTML round-trip;
+Claude drives the rest through the MCP tools.
 
 Published: https://www.figma.com/community/plugin/1604428052675393154/designagent
 
@@ -23,25 +25,29 @@ Figma plugins run in two isolated contexts that talk over typed `postMessage`:
 
 - **`src/code.ts`** — the **plugin sandbox**. Has the Figma API (`figma.*`), handles selection/
   focus events, annotations, and auto-layout fixes. No DOM. Entry → `dist/code.js`.
-- **`src/ui.tsx`** — the **React 18 UI panel** (560×760). Has the DOM, no Figma API. Renders
-  analysis results and sends user actions back to the sandbox. Entry → `dist/ui.html`
-  (build inlines `dist/ui.js` into the HTML template `src/ui.html`).
+- **`src/ui.tsx`** — the **React 18 UI panel** (400×560). Has the DOM, no Figma API. Owns the
+  WebSocket to the bridge broker, renders the connected state / project picker / DESIGN.md + HTML
+  flows, and relays bridge commands to the sandbox. Entry → `dist/ui.html` (build inlines
+  `dist/ui.js` into the HTML template `src/ui.html`).
 - **`src/shared/messages.ts`** — the message contract between the two. Add/extend message types
-  here first, then handle them on both sides. UI→Plugin: `SET_PRESET`, `SET_MODE`,
-  `SET_FIGMA_LINK_BASE`, `FOCUS_NODE`, `ADD_ANNOTATION`, `REFRESH_REQUEST`. Plugin→UI:
-  `ANALYSIS_STARTED`, `ANALYSIS_RESULT`, `ISSUE_FIX_RESULT`, `ERROR`.
+  here first, then handle them on both sides. UI→Plugin includes `SET_MODE`, `SET_FIGMA_LINK_BASE`,
+  `FOCUS_NODE`, `ADD_ANNOTATION`, `EXPORT_DESIGN_MD`, `EXPORT_HTML`, `APPLY_DESIGN_MD`,
+  `BRIDGE_COMMAND`, `CREATE_DESIGN_TREE`, `REFRESH_REQUEST`. Plugin→UI includes `ANALYSIS_RESULT`,
+  `DESIGN_MD_RESULT`, `HTML_RESULT`, `BRIDGE_RESULT`, `APPLY_DESIGN_MD_RESULT`, `ERROR`.
 
-### Analysis engine — `src/core/`
+### Core engine — `src/core/`
 
-Orchestrated by `analyze.ts` (`analyzeNodeCoreAsync`, caching, link building). Pipeline:
+Turns the live Figma selection into a portable spec. Orchestrated by `analyze.ts`
+(`analyzeNodeCoreAsync`):
 
-1. **`extract.ts`** — Figma node tree → UI spec (fills, strokes, layout, text, tokens, annotations).
+1. **`extract.ts`** — Figma node tree → `UiSpec` (fills, strokes, layout, text, tokens, annotations).
 2. **`intent.ts`** — classify selection as screen / component / section (size + name heuristics).
-3. **`score.ts`** — design quality score across 5 weighted dimensions (component coverage 30,
-   tokenization 25, layout semantics 20, naming 15, variant completeness 10) + checklist/issues.
-4. **`prompt.ts`** — compose the platform-specific code-gen prompt for the active preset.
+3. **`designdoc.ts`** + **`serialize.ts`** — synthesize the `DESIGN.md` export (token frontmatter +
+   prose + designer notes). This is the primary artifact Claude builds from (via the design-to-code skill).
+4. **`parsedesignmd.ts`** — parse a project's `DESIGN.md` back into tokens for the "Apply to Figma" flow.
 
-Shared types live in `src/core/types.ts`. Presets are defined there too (default: `swiftui-ios`).
+Shared types live in `src/core/types.ts`. The bridge tool surface (read + ~30 create/edit tools)
+lives in the sandbox (`src/code.ts`) and is exposed to Claude by the MCP server (`claude-plugin/mcp/`).
 
 ### UI layer
 `src/ui.tsx` (root) + `src/ui_components.tsx` (component library) + `src/ui_theme.ts`

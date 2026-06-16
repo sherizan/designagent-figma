@@ -1431,22 +1431,6 @@ async function runBridgeCommand(
       const core = await analyzePrimaryForBridge();
       return { selectedNode: core.selectedNode, intent: core.intent, uiSpec: core.uiSpec };
     }
-    case 'get_score': {
-      const core = await analyzePrimaryForBridge();
-      const percent =
-        core.score.applicableMax > 0
-          ? Math.round((core.score.total / core.score.applicableMax) * 100)
-          : 0;
-      return {
-        node: core.selectedNode,
-        score: core.score,
-        readiness: { total: core.score.total, max: core.score.applicableMax, percent }
-      };
-    }
-    case 'list_issues': {
-      const core = await analyzePrimaryForBridge();
-      return { node: core.selectedNode, issues: core.checklist };
-    }
     case 'focus': {
       const nodeId = String(params.nodeId ?? '');
       const node = await figma.getNodeByIdAsync(nodeId);
