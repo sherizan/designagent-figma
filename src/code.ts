@@ -1035,6 +1035,14 @@ async function buildDesignNode(
     return rect;
   }
 
+  return buildFrameNode(node, parent);
+}
+
+// Create a frame node + its own visual/layout props, WITHOUT children. Sync.
+function buildFrameShell(
+  node: DesignTreeNode,
+  parent: BaseNode & ChildrenMixin
+): FrameNode {
   const frame = figma.createFrame();
   parent.appendChild(frame);
   frame.clipsContent = false;
@@ -1074,8 +1082,6 @@ async function buildDesignNode(
       ];
     }
   }
-
-  // Auto Layout when the source element was flex/stack; absolute otherwise.
   if (node.layout) {
     frame.layoutMode = node.layout;
     frame.itemSpacing = node.itemSpacing ?? 0;
@@ -1093,11 +1099,14 @@ async function buildDesignNode(
   frame.resize(Math.max(1, node.width), Math.max(1, node.height));
   frame.x = node.x;
   frame.y = node.y;
+  return frame;
+}
 
-  for (const child of node.children) {
+// Build and append a frame's children (recurses into buildDesignNode per child).
+async function appendDesignChildren(frame: FrameNode, node: DesignTreeNode): Promise<void> {
+  for (const child of node.children ?? []) {
     const created = await buildDesignNode(child, frame);
     if (node.layout && child.absolute && 'layoutPositioning' in created) {
-      // Margin-inset child: keep its measured x/y instead of flowing it.
       (created as SceneNode & { layoutPositioning: 'ABSOLUTE' }).layoutPositioning = 'ABSOLUTE';
       (created as SceneNode & LayoutMixin).x = child.x;
       (created as SceneNode & LayoutMixin).y = child.y;
@@ -1105,6 +1114,15 @@ async function buildDesignNode(
       (created as SceneNode & { layoutAlign: 'STRETCH' }).layoutAlign = 'STRETCH';
     }
   }
+}
+
+// Full frame build (shell + children) — used for nested frames.
+async function buildFrameNode(
+  node: DesignTreeNode,
+  parent: BaseNode & ChildrenMixin
+): Promise<SceneNode> {
+  const frame = buildFrameShell(node, parent);
+  await appendDesignChildren(frame, node);
   return frame;
 }
 
@@ -1144,11 +1162,73 @@ async function createDesignTree(message: {
   x?: number;
   y?: number;
   parentId?: string;
+  replaceId?: string;
 }): Promise<void> {
   try {
-    const parent = await resolveParentContainer(message.parentId);
-    const root = await buildDesignNode(message.tree, parent);
-    if (parent.type === 'PAGE' && 'x' in root) {
+    // If replacing a prior/orphan node, render into its slot (same parent + position).
+    let replaceSlot: { x: number; y: number } | null = null;
+    let replaceParent: (BaseNode & ChildrenMixin) | null = null;
+    let replaceIndex = -1;
+    if (message.replaceId) {
+      const old = await figma.getNodeByIdAsync(message.replaceId);
+      if (isSceneNode(old) && old.parent) {
+        replaceParent = old.parent as BaseNode & ChildrenMixin;
+        replaceIndex = replaceParent.children.indexOf(old);
+        replaceSlot = {
+          x: 'x' in old ? (old as SceneNode & LayoutMixin).x : 0,
+          y: 'y' in old ? (old as SceneNode & LayoutMixin).y : 0
+        };
+        old.remove();
+      } else {
+        console.warn('html_to_design: replaceId not found; rendering fresh:', message.replaceId);
+      }
+    }
+    const parent = replaceParent ?? (await resolveParentContainer(message.parentId));
+    const tree = message.tree;
+
+    if (tree.kind === 'frame') {
+      // Create the root frame shell first so its id is available immediately.
+      const frame = buildFrameShell(tree, parent);
+      if (replaceSlot) {
+        frame.x = replaceSlot.x;
+        frame.y = replaceSlot.y;
+        if (replaceIndex >= 0 && replaceIndex < parent.children.length) {
+          parent.insertChild(replaceIndex, frame);
+        }
+      } else if (parent.type === 'PAGE') {
+        placeOnPage(frame, message.x, message.y);
+      }
+      figma.currentPage.selection = [frame];
+      figma.viewport.scrollAndZoomIntoView([frame]);
+      // Respond NOW — the caller gets a usable id even if painting is slow.
+      postToUI({
+        type: 'DESIGN_TREE_RESULT',
+        id: message.id,
+        ok: true,
+        result: { id: frame.id, name: frame.name, rendering: true }
+      });
+      // Paint children in the background; a failure here leaves a partial but
+      // targetable frame (the caller already has its id) — surface via console.
+      try {
+        await appendDesignChildren(frame, tree);
+      } catch (error) {
+        console.error(
+          'html_to_design: background paint failed:',
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+      return;
+    }
+
+    // Non-frame root (rare): nothing to defer — build fully, then respond.
+    const root = await buildDesignNode(tree, parent);
+    if (replaceSlot && 'x' in root) {
+      (root as SceneNode & LayoutMixin).x = replaceSlot.x;
+      (root as SceneNode & LayoutMixin).y = replaceSlot.y;
+      if (replaceIndex >= 0 && replaceIndex < parent.children.length) {
+        parent.insertChild(replaceIndex, root);
+      }
+    } else if (parent.type === 'PAGE' && 'x' in root) {
       placeOnPage(root as SceneNode & LayoutMixin, message.x, message.y);
     }
     figma.currentPage.selection = [root];
@@ -1430,6 +1510,18 @@ async function runBridgeCommand(
     case 'get_spec': {
       const core = await analyzePrimaryForBridge();
       return { selectedNode: core.selectedNode, intent: core.intent, uiSpec: core.uiSpec };
+    }
+    case 'list_page_nodes': {
+      const nodes = figma.currentPage.children.map((child) => ({
+        id: child.id,
+        name: child.name,
+        type: child.type,
+        x: 'x' in child ? Math.round((child as SceneNode & LayoutMixin).x) : 0,
+        y: 'y' in child ? Math.round((child as SceneNode & LayoutMixin).y) : 0,
+        width: 'width' in child ? Math.round((child as SceneNode & LayoutMixin).width) : 0,
+        height: 'height' in child ? Math.round((child as SceneNode & LayoutMixin).height) : 0
+      }));
+      return { page: figma.currentPage.name, count: nodes.length, nodes };
     }
     case 'focus': {
       const nodeId = String(params.nodeId ?? '');
