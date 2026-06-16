@@ -20,7 +20,13 @@ export type ToUIMessage =
   | { type: 'DESIGN_MD_RESULT'; markdown: string; filename: string; frameCount: number }
   | { type: 'HTML_RESULT'; html: string; filename: string }
   | { type: 'BRIDGE_RESULT'; id: string; ok: boolean; result?: unknown; error?: string }
-  | { type: 'DESIGN_TREE_RESULT'; id: string; ok: boolean; result?: unknown; error?: string }
+  | {
+      type: 'DESIGN_TREE_RESULT';
+      id: string;
+      ok: boolean;
+      result?: { id: string; name: string; rendering?: boolean };
+      error?: string;
+    }
   | { type: 'APPLY_DESIGN_MD_RESULT'; ok: boolean; result?: unknown; error?: string }
   | { type: 'ERROR'; message: string };
 

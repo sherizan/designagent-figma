@@ -1104,7 +1104,7 @@ function buildFrameShell(
 
 // Build and append a frame's children (recurses into buildDesignNode per child).
 async function appendDesignChildren(frame: FrameNode, node: DesignTreeNode): Promise<void> {
-  for (const child of node.children) {
+  for (const child of node.children ?? []) {
     const created = await buildDesignNode(child, frame);
     if (node.layout && child.absolute && 'layoutPositioning' in created) {
       (created as SceneNode & { layoutPositioning: 'ABSOLUTE' }).layoutPositioning = 'ABSOLUTE';
