@@ -20,7 +20,9 @@ export interface LayoutSummary {
 
 export interface VisualSummary {
   fills: 'none' | 'solid' | 'gradient' | 'image' | 'mixed' | 'unknown';
+  fillColors?: string[];
   strokes: 'none' | 'solid' | 'mixed' | 'unknown';
+  strokeColor?: string;
   cornerRadius: number | 'mixed' | 'undefined';
   effects: 'none' | 'shadow' | 'blur' | 'mixed';
 }

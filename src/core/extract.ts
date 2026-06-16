@@ -79,6 +79,41 @@ function summarizeStrokes(
   return 'mixed';
 }
 
+// Plain #rrggbb (no alpha suffix) — DESIGN.md / parseColor consume clean hex.
+function solidHex(color: RGB | RGBA): string {
+  const toHex = (value: number): string =>
+    Math.max(0, Math.min(255, Math.round(value * 255))).toString(16).padStart(2, '0');
+  return `#${toHex(color.r)}${toHex(color.g)}${toHex(color.b)}`;
+}
+
+// Concrete hex colors from a paint array: solid fills + gradient stops (visible,
+// non-transparent). Image fills have no color. Never throws.
+function paintHexes(paints: ReadonlyArray<Paint> | PluginAPI['mixed'] | undefined): string[] {
+  if (!paints || isMixed(paints)) {
+    return [];
+  }
+  const out: string[] = [];
+  for (const paint of paints) {
+    if (paint.visible === false) {
+      continue;
+    }
+    if (paint.type === 'SOLID') {
+      if ((paint.opacity ?? 1) === 0) {
+        continue;
+      }
+      out.push(solidHex(paint.color));
+    } else if (paint.type.startsWith('GRADIENT')) {
+      for (const stop of (paint as GradientPaint).gradientStops) {
+        if (stop.color.a === 0) {
+          continue;
+        }
+        out.push(solidHex(stop.color));
+      }
+    }
+  }
+  return out;
+}
+
 function summarizeEffects(
   effects: ReadonlyArray<Effect> | PluginAPI['mixed'] | undefined
 ): VisualSummary['effects'] {
@@ -379,12 +414,25 @@ function extractVisualSummary(node: SceneNode): VisualSummary | undefined {
     return undefined;
   }
 
-  return {
+  const summary: VisualSummary = {
     fills: 'fills' in node ? summarizeFills(node.fills) : 'unknown',
     strokes: 'strokes' in node ? summarizeStrokes(node.strokes) : 'unknown',
     cornerRadius: summarizeCornerRadius(node),
     effects: 'effects' in node ? summarizeEffects(node.effects) : 'none'
   };
+  if ('fills' in node) {
+    const hexes = paintHexes(node.fills);
+    if (hexes.length > 0) {
+      summary.fillColors = hexes;
+    }
+  }
+  if ('strokes' in node) {
+    const strokeHexes = paintHexes(node.strokes);
+    if (strokeHexes.length > 0) {
+      summary.strokeColor = strokeHexes[0];
+    }
+  }
+  return summary;
 }
 
 function updateGlobalStats(node: SceneNode, stats: MutableStats, tokenHints: TokenHints): void {
