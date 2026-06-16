@@ -131,8 +131,9 @@ function gatherColorHits(nodes: UiNodeSpec[]): { hits: ColorHit[]; hasGradient: 
     // Paint colors from extraction — captures vector/'mixed' fills the CSS path misses.
     const visual = node.visual;
     if (visual) {
+      const fillRole: ColorRole = node.type === 'TEXT' ? 'text' : 'bg';
       for (const hex of visual.fillColors ?? []) {
-        add(parseColor(hex), 'bg');
+        add(parseColor(hex), fillRole);
       }
       if (visual.strokeColor) {
         add(parseColor(visual.strokeColor), 'border');
