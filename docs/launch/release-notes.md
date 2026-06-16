@@ -4,11 +4,11 @@
 
 Paste this (short, user-facing) into the release-notes field when publishing.
 
-> **DesignAgent is now a live bridge to Claude Code.** Connect the bridge and Claude can see your
-> current selection, build and edit your design right on the canvas, and exchange a `DESIGN.md` spec
-> with your codebase — so design and code stay in sync. Working across several projects? Pick which
-> one Claude acts on. Everything runs over a local connection on your own machine; no design data
-> leaves your computer.
+> **DesignAgent is now a live bridge to Claude Code.** Connect the bridge, pick which project to work
+> in, and from your terminal Claude can read your current selection and build or edit the design right
+> on the canvas — and turn it into a `DESIGN.md` spec your codebase builds from. The plugin panel
+> stays simple (connect + pick project); you drive everything by asking Claude. It all runs over a
+> local connection on your own machine — no design data leaves your computer.
 >
 > Get the companion for Claude Code, run `claude` in your project, then click **Start** on the
 > bridge bar in this plugin.
@@ -22,8 +22,9 @@ User-facing highlights of what shipped leading into launch:
 - **Project picker.** With multiple Claude sessions/projects connected, choose which one the plugin
   reads and writes — no more guessing which project is active.
 - **Reliable connection.** The bridge self-heals across plugin/CLI restarts and reconnects on its own.
-- **Focused panel.** The plugin is now the bridge + project picker; Claude drives the rest from your
-  terminal. (The older export tabs are temporarily hidden while we redesign that surface.)
+- **Focused panel.** The plugin is just **connect the bridge + pick your project** — Claude drives
+  everything else from your terminal. (The earlier in-panel export tabs are hidden for now while we
+  redesign that surface.)
 - **Privacy.** The plugin makes no network requests beyond the local bridge on your machine.
 
 ### Engineering notes (not for the listing)
@@ -34,4 +35,4 @@ User-facing highlights of what shipped leading into launch:
 - `0.14.4` **production network access** — moved the localhost bridge into `manifest.json`
   `allowedDomains` so the *published* plugin can reach the bridge (was dev-only).
 - `0.14.5` **hid the main tabs** behind `SHOW_MAIN_TABS` — launch UI = bridge + picker + connected hint.
-- `0.14.6` shortened the panel window to suit the reduced UI.
+- `0.14.6`–`0.14.7` shortened the panel window (→ 320px) to suit the reduced UI.
