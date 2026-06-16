@@ -12,7 +12,7 @@ to build production UI from it the design-system-faithful way.
   `@DESIGN.md` into your `CLAUDE.md` so the spec stays loaded each session.
 - **`designagent` MCP server** — a live two-way bridge so Claude Code can read,
   fix, and create on the open Figma file:
-  - read: `status`, `get_design_md`, `get_spec`, `get_score`, `list_issues`
+  - read: `status`, `get_design_md`, `get_spec`
   - act: `focus`, `select`, `annotate`, `apply_fix`
   - create: `create_frame`, `create_text`, `create_rectangle`, `create_ellipse`,
     `place_image`
@@ -29,6 +29,20 @@ to build production UI from it the design-system-faithful way.
     path) into real Figma layers ("render index.html into Figma")
 
   Tools appear as `mcp__plugin_designagent_designagent__<tool>`.
+
+## `html_to_design` — supported CSS subset (current fidelity)
+
+`html_to_design` is powerful but has a known fidelity envelope. Staying inside it avoids silent
+re-renders (these are being addressed — see `docs/DESIGNAGENT-EVALUATION.md`):
+
+- **Reliable:** vertical flex columns; solid fills, `border`, `border-radius`, `box-shadow`;
+  fixed-width rows with a few px of trailing slack; Google fonts.
+- **Avoid for now:** exact-fit flex rows (`flex:1` / `width:fit-content` / `space-between` whose
+  children fill the row — can silently drop or overlap a child); CSS gradients (render near-white —
+  use solid fills); inline styled `<span>` inside wrapping text (overlaps — use separate text blocks);
+  negative margins (scramble — use positive `gap`).
+- **Large pages:** render section-by-section — a very large single render can exceed the response
+  timeout while the plugin keeps painting.
 
 ## Install
 
@@ -49,8 +63,9 @@ or you ask to build UI from a Figma design — or invoke it explicitly with
 
 ## Workflow (spec hand-off)
 
-1. In Figma, select frames/sections in **DesignAgent** → **Export DESIGN.md**.
-2. Drop `DESIGN.md` into your project root.
+1. Connect the bridge (see below) and select the frames/sections in Figma.
+2. Ask Claude to export them — it reads the selection (`get_design_md`) and writes `DESIGN.md`
+   into your project.
 3. Ask Claude Code to build it — the skill maps tokens/components and writes the UI.
 
 ## Two-way bridge (live Figma access)
@@ -62,8 +77,8 @@ DesignAgent plugin's UI connects to it.
 1. Open the **DesignAgent** plugin in Figma and click **Enable** on the "Claude bridge"
    bar — the dot turns green when connected.
 2. In Claude Code, the bridge tools are available immediately (`status`,
-   `get_design_md`, `get_score`, `focus`, `annotate`, `apply_fix`, …). Try: *"Use
-   DesignAgent to check the readiness of my current Figma selection."*
+   `get_design_md`, `get_spec`, `focus`, `annotate`, `apply_fix`, …). Try: *"Use
+   DesignAgent to read my current Figma selection and build it."*
 
 Notes:
 - Node must be installed (the server runs via `node`). The bundled `server.js` has no
