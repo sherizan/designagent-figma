@@ -1511,6 +1511,18 @@ async function runBridgeCommand(
       const core = await analyzePrimaryForBridge();
       return { selectedNode: core.selectedNode, intent: core.intent, uiSpec: core.uiSpec };
     }
+    case 'list_page_nodes': {
+      const nodes = figma.currentPage.children.map((child) => ({
+        id: child.id,
+        name: child.name,
+        type: child.type,
+        x: 'x' in child ? Math.round((child as SceneNode & LayoutMixin).x) : 0,
+        y: 'y' in child ? Math.round((child as SceneNode & LayoutMixin).y) : 0,
+        width: 'width' in child ? Math.round((child as SceneNode & LayoutMixin).width) : 0,
+        height: 'height' in child ? Math.round((child as SceneNode & LayoutMixin).height) : 0
+      }));
+      return { page: figma.currentPage.name, count: nodes.length, nodes };
+    }
     case 'focus': {
       const nodeId = String(params.nodeId ?? '');
       const node = await figma.getNodeByIdAsync(nodeId);

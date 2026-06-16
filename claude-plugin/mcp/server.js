@@ -25543,6 +25543,13 @@ server.registerTool(
   async () => run("get_spec")
 );
 server.registerTool(
+  "list_page_nodes",
+  {
+    description: "List the current Figma page's top-level nodes (id, name, type, x, y, width, height). Use to find a frame by name/position \u2014 e.g. to recover and `delete`/`replaceId` an html_to_design frame whose earlier render is an orphan."
+  },
+  async () => run("list_page_nodes")
+);
+server.registerTool(
   "focus",
   {
     description: "Select a node by id in Figma and scroll/zoom it into view.",
