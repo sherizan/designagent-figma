@@ -1038,6 +1038,27 @@ async function buildDesignNode(
   return buildFrameNode(node, parent);
 }
 
+// Resolve a frame's paint: a real gradient when possible, else a flattened gradient
+// color (never white), else the solid background color.
+// Resolve a frame's paint(s). CSS paints background-image OVER background-color, so a
+// visible solid base sits beneath the gradient. Falls back: flatten (never white) → solid → [].
+function resolveFrameFill(node: DesignTreeNode): Paint[] {
+  const base = cssSolidPaint(node.fill); // visible background-color, if any (else null)
+  if (node.gradient) {
+    const gradient = cssGradientPaint(node.gradient);
+    if (gradient) {
+      return base ? [base, gradient] : [gradient];
+    }
+    const flat = cssSolidPaint(firstGradientStopColor(node.gradient));
+    if (flat) {
+      console.warn('html_to_design: gradient flattened (unsupported/unparseable):', node.gradient);
+      return base ? [base, flat] : [flat];
+    }
+    console.warn('html_to_design: gradient could not be parsed or flattened:', node.gradient);
+  }
+  return base ? [base] : [];
+}
+
 // Create a frame node + its own visual/layout props, WITHOUT children. Sync.
 function buildFrameShell(
   node: DesignTreeNode,
@@ -1046,8 +1067,7 @@ function buildFrameShell(
   const frame = figma.createFrame();
   parent.appendChild(frame);
   frame.clipsContent = false;
-  const fill = cssSolidPaint(node.fill);
-  frame.fills = fill ? [fill] : [];
+  frame.fills = resolveFrameFill(node);
   const stroke = cssSolidPaint(node.stroke);
   if (stroke) {
     frame.strokes = [stroke];
@@ -1321,6 +1341,108 @@ function parseCssColor(input: unknown): { color: RGB; opacity: number } | null {
 function cssSolidPaint(input: unknown): SolidPaint | null {
   const parsed = parseCssColor(input);
   return parsed ? { type: 'SOLID', color: parsed.color, opacity: parsed.opacity } : null;
+}
+
+// CSS linear-gradient angle (0deg = up, clockwise) → Figma gradientTransform.
+// Figma's default gradient runs along local +x (left→right), which equals CSS 90deg,
+// so we rotate by (angle - 90) about the box center (0.5, 0.5). Verified against
+// 0/90/135/180deg. Screen y is down, so [[cos,sin],[-sin,cos]] rotates clockwise.
+function linearGradientTransform(angleDeg: number): Transform {
+  const rad = ((angleDeg - 90) * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return [
+    [cos, sin, 0.5 - 0.5 * cos - 0.5 * sin],
+    [-sin, cos, 0.5 + 0.5 * sin - 0.5 * cos]
+  ];
+}
+
+// "to top|right|bottom|left|<corner>" → CSS angle in degrees.
+function sideToAngle(side: string): number {
+  const s = side.replace(/^to\s+/, '').trim().toLowerCase();
+  const set = new Set(s.split(/\s+/));
+  if (set.has('top') && set.has('right')) return 45;
+  if (set.has('bottom') && set.has('right')) return 135;
+  if (set.has('bottom') && set.has('left')) return 225;
+  if (set.has('top') && set.has('left')) return 315;
+  if (set.has('top')) return 0;
+  if (set.has('right')) return 90;
+  if (set.has('bottom')) return 180;
+  if (set.has('left')) return 270;
+  return 180; // default: to bottom
+}
+
+// Split a gradient's argument list on top-level commas (ignoring commas inside rgb()/rgba()).
+function splitTopLevelCommas(input: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of input) {
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    if (ch === ',' && depth === 0) {
+      out.push(cur.trim());
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+// Parse "color [pos%]" stop segments into Figma ColorStops (positions evenly spread when absent).
+function parseGradientStops(segments: string[]): ColorStop[] {
+  const parsed = segments.map((seg) => {
+    const m = /\s+(-?[\d.]+)%\s*$/.exec(seg);
+    const pos = m ? Number(m[1]) / 100 : null;
+    const colorStr = seg.replace(/(\s+-?[\d.]+%)+\s*$/, '').trim();
+    const c = parseCssColor(colorStr);
+    return c ? { pos, color: { r: c.color.r, g: c.color.g, b: c.color.b, a: c.opacity } } : null;
+  });
+  const valid = parsed.filter((s): s is { pos: number | null; color: RGBA } => s !== null);
+  if (valid.length === 0) return [];
+  return valid.map((s, i) => ({
+    position: s.pos ?? (valid.length === 1 ? 0 : i / (valid.length - 1)),
+    color: s.color
+  }));
+}
+
+// Parse a CSS linear-gradient into a Figma GRADIENT_LINEAR paint. Returns null for
+// radial/conic/repeating/unparseable (caller flattens).
+function cssGradientPaint(input: string): GradientPaint | null {
+  const m = /^\s*linear-gradient\(([\s\S]*)\)\s*$/i.exec(input.trim());
+  if (!m || !m[1]) return null;
+  const parts = splitTopLevelCommas(m[1]);
+  if (parts.length < 2) return null;
+  let angle = 180; // default: to bottom
+  let stopParts = parts;
+  const first = parts[0]!;
+  const degMatch = /^\s*(-?[\d.]+)\s*deg\s*$/i.exec(first);
+  if (/^to\s+/i.test(first)) {
+    angle = sideToAngle(first);
+    stopParts = parts.slice(1);
+  } else if (degMatch) {
+    angle = Number(degMatch[1]);
+    stopParts = parts.slice(1);
+  }
+  const stops = parseGradientStops(stopParts);
+  if (stops.length < 2) return null;
+  return { type: 'GRADIENT_LINEAR', gradientTransform: linearGradientTransform(angle), gradientStops: stops };
+}
+
+// First parseable color in any gradient string — for the flatten fallback (radial/conic/etc.).
+function firstGradientStopColor(input: string): string | null {
+  const m = /gradient\(([\s\S]*)\)\s*$/i.exec(input.trim());
+  if (!m || !m[1]) return null;
+  for (const seg of splitTopLevelCommas(m[1])) {
+    if (/^to\s+/i.test(seg) || /(deg|rad|turn|grad)\s*$/i.test(seg) || /^(circle|ellipse|closest|farthest|at\b)/i.test(seg)) {
+      continue; // skip direction / radial-shape tokens
+    }
+    const colorStr = seg.replace(/(\s+-?[\d.]+%)+\s*$/, '').trim();
+    if (parseCssColor(colorStr)) return colorStr;
+  }
+  return null;
 }
 
 function applyStroke(node: SceneNode, params: Record<string, unknown>): void {

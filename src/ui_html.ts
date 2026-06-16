@@ -144,6 +144,10 @@ function applyBoxStyles(node: DesignTreeNode, cs: CSSStyleDeclaration): void {
   if (isVisibleColor(cs.backgroundColor)) {
     node.fill = cs.backgroundColor;
   }
+  const bgImage = cs.backgroundImage;
+  if (bgImage && /gradient\(/i.test(bgImage)) {
+    node.gradient = bgImage;
+  }
   const borderWidth = px(cs.borderTopWidth);
   if (borderWidth > 0 && cs.borderTopStyle !== 'none' && isVisibleColor(cs.borderTopColor)) {
     node.stroke = cs.borderTopColor;
