@@ -119,14 +119,25 @@ function gatherColorHits(nodes: UiNodeSpec[]): { hits: ColorHit[]; hasGradient: 
   };
   for (const node of nodes) {
     const css = node.css;
-    if (!css) continue;
-    if (css['color']) add(parseColor(css['color']), 'text');
-    const bg = css['background-color'] ?? css['background'];
-    if (bg) {
-      if (/gradient/i.test(bg)) hasGradient = true;
-      add(extractColor(bg), 'bg');
+    if (css) {
+      if (css['color']) add(parseColor(css['color']), 'text');
+      const bg = css['background-color'] ?? css['background'];
+      if (bg) {
+        if (/gradient/i.test(bg)) hasGradient = true;
+        add(extractColor(bg), 'bg');
+      }
+      if (css['border']) add(extractColor(css['border']), 'border');
     }
-    if (css['border']) add(extractColor(css['border']), 'border');
+    // Paint colors from extraction — captures vector/'mixed' fills the CSS path misses.
+    const visual = node.visual;
+    if (visual) {
+      for (const hex of visual.fillColors ?? []) {
+        add(parseColor(hex), 'bg');
+      }
+      if (visual.strokeColor) {
+        add(parseColor(visual.strokeColor), 'border');
+      }
+    }
   }
   const hits = [...map.values()].sort((a, b) => b.count - a.count);
   return { hits, hasGradient };
@@ -318,15 +329,19 @@ function buildScale(values: number[], names: string[]): Array<{ key: string; val
 }
 
 function collectSpacing(nodes: UiNodeSpec[]): number[] {
-  const values: number[] = [];
+  const counts = new Map<number, number>();
   for (const node of nodes) {
     const l = node.layout;
     if (!l) continue;
     for (const v of [l.itemSpacing, l.paddingTop, l.paddingRight, l.paddingBottom, l.paddingLeft]) {
-      if (typeof v === 'number') values.push(v);
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+        const key = Math.round(v);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
     }
   }
-  return values;
+  // Only recurring values are a real spacing scale; one-off layout values are dropped.
+  return [...counts.entries()].filter(([, c]) => c >= 2).map(([value]) => value);
 }
 
 function collectRadii(nodes: UiNodeSpec[]): number[] {
