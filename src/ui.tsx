@@ -23,6 +23,10 @@ import { renderHtmlToTree } from './ui_html';
 
 const BRIDGE_URL = 'ws://localhost:3790';
 
+// Tabs hidden for launch — the panel ships as the bridge + project-picker MVP.
+// WS2 reworks the connected UI; flip this to bring the tabs back.
+const SHOW_MAIN_TABS: boolean = false;
+
 // Forward this iframe's console into the sandbox's log buffer so the console_logs
 // bridge tool sees UI logs alongside sandbox logs. Installed before anything else.
 (function captureUiConsole(): void {
@@ -703,7 +707,6 @@ function App(): JSX.Element {
           <ProjectPicker variant="gate" sessions={sessions} onSelect={selectSession} />
         ) : (
           <>
-            <MainTabs active={mainTab} onChange={setMainTab} />
             {bridgeStatus === 'connected' && sessions.length >= 2 ? (
               <ProjectPicker variant="compact" sessions={sessions} onSelect={selectSession} />
             ) : null}
@@ -719,37 +722,48 @@ function App(): JSX.Element {
               </div>
             ) : null}
 
-            {mainTab === 'design-to-code' ? (
-              analyzing ? (
-                <LoadingPanel nodeName={analyzing.nodeName} nodeType={analyzing.nodeType} />
-              ) : analysis.hasSelection ? (
-                <ExportPanel
-                  intentLabel={toIntentLabel(analysis.intent)}
-                  selectedNodeName={analysis.selectedNode.name}
-                  status={status}
-                  bridgeConnected={bridgeStatus === 'connected'}
-                  designChecked={designMd.checked}
-                  designExists={designMd.exists}
-                  designRoot={designMd.root}
-                  onSyncDesignMd={syncDesignMd}
-                  onApplyToFigma={applyToFigma}
-                  onExportDesignMd={onExportDesignMd}
-                  onExportHtml={onExportHtml}
-                />
-              ) : (
-                <EmptyState message={analysis.message} />
-              )
-            ) : (
+            {bridgeStatus === 'connected' ? (
+              <p className="bridge-explainer" style={{ marginTop: 6 }}>
+                Connected — ask Claude in your terminal to read or build in this file.
+              </p>
+            ) : null}
+
+            {SHOW_MAIN_TABS ? (
               <>
-                <CapabilityView />
-                <HtmlBrowser
-                  connected={bridgeStatus === 'connected'}
-                  listFiles={listHtmlFiles}
-                  renderFile={renderHtmlFile}
-                  projectKey={sessions.find((s) => s.selected)?.id}
-                />
+                <MainTabs active={mainTab} onChange={setMainTab} />
+                {mainTab === 'design-to-code' ? (
+                  analyzing ? (
+                    <LoadingPanel nodeName={analyzing.nodeName} nodeType={analyzing.nodeType} />
+                  ) : analysis.hasSelection ? (
+                    <ExportPanel
+                      intentLabel={toIntentLabel(analysis.intent)}
+                      selectedNodeName={analysis.selectedNode.name}
+                      status={status}
+                      bridgeConnected={bridgeStatus === 'connected'}
+                      designChecked={designMd.checked}
+                      designExists={designMd.exists}
+                      designRoot={designMd.root}
+                      onSyncDesignMd={syncDesignMd}
+                      onApplyToFigma={applyToFigma}
+                      onExportDesignMd={onExportDesignMd}
+                      onExportHtml={onExportHtml}
+                    />
+                  ) : (
+                    <EmptyState message={analysis.message} />
+                  )
+                ) : (
+                  <>
+                    <CapabilityView />
+                    <HtmlBrowser
+                      connected={bridgeStatus === 'connected'}
+                      listFiles={listHtmlFiles}
+                      renderFile={renderHtmlFile}
+                      projectKey={sessions.find((s) => s.selected)?.id}
+                    />
+                  </>
+                )}
               </>
-            )}
+            ) : null}
           </>
         )}
       </div>
