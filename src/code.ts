@@ -1040,20 +1040,23 @@ async function buildDesignNode(
 
 // Resolve a frame's paint: a real gradient when possible, else a flattened gradient
 // color (never white), else the solid background color.
+// Resolve a frame's paint(s). CSS paints background-image OVER background-color, so a
+// visible solid base sits beneath the gradient. Falls back: flatten (never white) → solid → [].
 function resolveFrameFill(node: DesignTreeNode): Paint[] {
+  const base = cssSolidPaint(node.fill); // visible background-color, if any (else null)
   if (node.gradient) {
     const gradient = cssGradientPaint(node.gradient);
     if (gradient) {
-      return [gradient];
+      return base ? [base, gradient] : [gradient];
     }
     const flat = cssSolidPaint(firstGradientStopColor(node.gradient));
     if (flat) {
       console.warn('html_to_design: gradient flattened (unsupported/unparseable):', node.gradient);
-      return [flat];
+      return base ? [base, flat] : [flat];
     }
+    console.warn('html_to_design: gradient could not be parsed or flattened:', node.gradient);
   }
-  const solid = cssSolidPaint(node.fill);
-  return solid ? [solid] : [];
+  return base ? [base] : [];
 }
 
 // Create a frame node + its own visual/layout props, WITHOUT children. Sync.
@@ -1376,7 +1379,7 @@ function splitTopLevelCommas(input: string): string[] {
   let cur = '';
   for (const ch of input) {
     if (ch === '(') depth++;
-    else if (ch === ')') depth--;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
     if (ch === ',' && depth === 0) {
       out.push(cur.trim());
       cur = '';
@@ -1415,7 +1418,7 @@ function cssGradientPaint(input: string): GradientPaint | null {
   let angle = 180; // default: to bottom
   let stopParts = parts;
   const first = parts[0]!;
-  const degMatch = /(-?[\d.]+)\s*deg\s*$/i.exec(first);
+  const degMatch = /^\s*(-?[\d.]+)\s*deg\s*$/i.exec(first);
   if (/^to\s+/i.test(first)) {
     angle = sideToAngle(first);
     stopParts = parts.slice(1);
