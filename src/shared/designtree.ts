@@ -18,6 +18,7 @@ export interface DesignTreeNode {
   width: number;
   height: number;
   fill?: string;
+  gradient?: string; // raw CSS background-image gradient string, parsed sandbox-side
   stroke?: string;
   strokeWidth?: number;
   cornerRadius?: number;
