@@ -15,7 +15,7 @@ import type { ToPluginMessage, ToUIMessage } from './shared/messages';
 const DEFAULT_MODE: Mode = 'system-first';
 const PANEL_SIZE = {
   width: 400,
-  height: 420
+  height: 320
 };
 
 // ---- Console capture (backs the console_logs bridge tool) ----
