@@ -44,18 +44,25 @@ Four changes; the renderer reads `flex-grow`, the sandbox uses Figma's native fl
   `parseFloat(childCs.flexGrow) > 0`. (`flex-grow` is the main-axis grow factor — orientation-agnostic;
   it's `0` for non-flex children, so this is safe to read unconditionally.)
 
-### 2. Parent primary-axis sizing — hug unless it needs a fixed width (`buildFrameShell`)
-Today: `frame.primaryAxisSizingMode = 'FIXED'` for every auto-layout frame. Change to:
+### 2. Parent primary-axis sizing — hug only when content fills (`buildFrameShell`)
+Today: `frame.primaryAxisSizingMode = 'FIXED'` for every auto-layout frame. Change so a row hugs
+**only when its content genuinely fills the measured size** — otherwise it stays `FIXED`:
 ```
-const needsFixedMain = node.children.some((c) => c.grow) || node.primaryAxisAlign === 'SPACE_BETWEEN';
-frame.primaryAxisSizingMode = needsFixedMain ? 'FIXED' : 'AUTO';
+const contentMain = Σ(in-flow, non-grow child main sizes) + gaps + main-axis padding;
+const mustFill = children.some(c => c.grow) || primaryAxisAlign === 'SPACE_BETWEEN';
+const hug = !mustFill && contentMain >= measuredMain - 1;   // content actually fills the row
+frame.primaryAxisSizingMode = hug ? 'AUTO' : 'FIXED';
 frame.counterAxisSizingMode = 'FIXED';
 ```
-- **Hug (`AUTO`)** for content-packed rows (MIN/CENTER/MAX, no grow): the frame sizes to exactly
-  `children + gaps + padding` — there is no FIXED width to overflow, so the exact-fit drop is
-  structurally impossible.
-- **`FIXED`** when a child grows (grow children need the parent width to distribute into) or when
-  `SPACE_BETWEEN` (needs full width to distribute). The clamp (below) keeps these from dropping.
+- **Hug (`AUTO`)** for genuinely content-packed rows (children fill the measured size, no grow,
+  not space-between): the frame sizes to exactly `children + gaps + padding` — no FIXED width to
+  overflow, so the exact-fit drop is structurally impossible, and the row stays editable as content
+  auto-layout.
+- **`FIXED`** when a child grows / `SPACE_BETWEEN` (need the width to distribute into) **or when there
+  is slack** (a full-width row whose content doesn't fill it — e.g. a left-packed navbar). Keeping
+  these FIXED preserves the row's full width; the clamp (below) prevents the exact-fit drop. *(Refined
+  during review: always-hug wrongly shrank full-width-with-slack rows; hugging is now gated on
+  content actually filling.)*
 - Counter-axis stays `FIXED` (measured height). This applies to both orientations; the existing
   vertical-stretch (counter-axis fill) logic in `buildNode` is unchanged.
 
