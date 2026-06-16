@@ -12,8 +12,8 @@
     {
       "name": "designagent",
       "source": "./claude-plugin",
-      "description": "Build production UI from a DesignAgent DESIGN.md spec the design-system-faithful way, plus a live two-way bridge to read, fix, and create on the Figma canvas from Claude Code. Includes the design-to-code skill and the designagent MCP server.",
-      "version": "0.14.2",
+      "description": "Claude Code's live bridge to Figma: read, build, and edit the canvas in real time, and exchange a design-system-faithful DESIGN.md spec to build production UI from. Includes the design-to-code skill and the designagent MCP server.",
+      "version": "0.14.3",
       "keywords": ["figma", "design-to-code", "design-system", "ui", "codegen"]
     }
   ]
