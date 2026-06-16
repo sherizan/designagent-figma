@@ -13,7 +13,9 @@ import {
   HtmlBrowser,
   LoadingPanel,
   type MainTab,
-  MainTabs
+  MainTabs,
+  ProjectPicker,
+  type SessionInfo
 } from './ui_components';
 import type { DesignTreeNode } from './shared/designtree';
 import { UI_STYLES } from './ui_theme';
@@ -140,6 +142,8 @@ function App(): JSX.Element {
   >(null);
   const [bridgeEnabled, setBridgeEnabled] = useState<boolean>(false);
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>('off');
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [projectConfirmed, setProjectConfirmed] = useState<boolean>(false);
   const [designMd, setDesignMd] = useState<{
     checked: boolean;
     exists: boolean;
@@ -340,6 +344,8 @@ function App(): JSX.Element {
           command?: string;
           params?: unknown;
           serverInstanceId?: string;
+          sessions?: unknown;
+          sessionId?: string;
         };
         try {
           msg = JSON.parse(messageEvent.data);
@@ -366,6 +372,19 @@ function App(): JSX.Element {
           reconnectAttempt.current = 0;
           setBridgeStatus('connected');
           setLastHeartbeatAt(lastServerMessageAt.current);
+          return;
+        }
+        if (msg.type === 'sessions' && Array.isArray(msg.sessions)) {
+          const list = (msg.sessions as unknown[])
+            .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
+            .map((s) => ({
+              id: String(s.id ?? ''),
+              label: String(s.label ?? ''),
+              root: String(s.root ?? ''),
+              selected: Boolean(s.selected)
+            }))
+            .filter((s) => s.id);
+          setSessions(list);
           return;
         }
         if (msg.type === 'ping') {
@@ -536,6 +555,19 @@ function App(): JSX.Element {
     });
   };
 
+  // Pick which connected project the plugin reads/writes. The broker re-broadcasts
+  // `sessions` with the new selection, which re-runs the DESIGN.md check via the
+  // selected-session effect — so we don't (and must not) call checkDesignMd() here
+  // (it would race ahead of the broker and read the previously-selected session).
+  const selectSession = (sessionId: string) => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    socket.send(JSON.stringify({ type: 'select_session', sessionId }));
+    setProjectConfirmed(true);
+  };
+
   // Render a tree in the sandbox and await the result (UI-initiated, not a bridge call).
   const renderTreeLocally = (
     tree: DesignTreeNode
@@ -588,6 +620,16 @@ function App(): JSX.Element {
     }
   }
 
+  // Auto-skip the picker gate when there's exactly one project; reset when the
+  // bridge drops or all sessions leave.
+  useEffect(() => {
+    if (bridgeStatus !== 'connected' || sessions.length === 0) {
+      setProjectConfirmed(false);
+    } else if (sessions.length === 1) {
+      setProjectConfirmed(true);
+    }
+  }, [bridgeStatus, sessions.length]);
+
   // Re-check whenever the bridge connects; clear when it drops.
   useEffect(() => {
     if (bridgeStatus === 'connected') {
@@ -596,7 +638,7 @@ function App(): JSX.Element {
       setDesignMd({ checked: false, exists: false, root: '' });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridgeStatus]);
+  }, [bridgeStatus, sessions.find((s) => s.selected)?.id]);
 
   const onExportDesignMd = () => {
     if (!analysis.hasSelection) {
@@ -657,47 +699,57 @@ function App(): JSX.Element {
           onReconnect={() => forceReconnect.current?.()}
         />
 
-        <MainTabs active={mainTab} onChange={setMainTab} />
-
-        {error ? (
-          <div className="error">
-            <span>{error}</span>
-            {errorHelpLink ? (
-              <a href={errorHelpLink} target="_blank" rel="noreferrer">
-                What's this?
-              </a>
-            ) : null}
-          </div>
-        ) : null}
-
-        {mainTab === 'design-to-code' ? (
-          analyzing ? (
-            <LoadingPanel nodeName={analyzing.nodeName} nodeType={analyzing.nodeType} />
-          ) : analysis.hasSelection ? (
-            <ExportPanel
-              intentLabel={toIntentLabel(analysis.intent)}
-              selectedNodeName={analysis.selectedNode.name}
-              status={status}
-              bridgeConnected={bridgeStatus === 'connected'}
-              designChecked={designMd.checked}
-              designExists={designMd.exists}
-              designRoot={designMd.root}
-              onSyncDesignMd={syncDesignMd}
-              onApplyToFigma={applyToFigma}
-              onExportDesignMd={onExportDesignMd}
-              onExportHtml={onExportHtml}
-            />
-          ) : (
-            <EmptyState message={analysis.message} />
-          )
+        {bridgeStatus === 'connected' && sessions.length >= 2 && !projectConfirmed ? (
+          <ProjectPicker variant="gate" sessions={sessions} onSelect={selectSession} />
         ) : (
           <>
-            <CapabilityView />
-            <HtmlBrowser
-              connected={bridgeStatus === 'connected'}
-              listFiles={listHtmlFiles}
-              renderFile={renderHtmlFile}
-            />
+            <MainTabs active={mainTab} onChange={setMainTab} />
+            {bridgeStatus === 'connected' && sessions.length >= 2 ? (
+              <ProjectPicker variant="compact" sessions={sessions} onSelect={selectSession} />
+            ) : null}
+
+            {error ? (
+              <div className="error">
+                <span>{error}</span>
+                {errorHelpLink ? (
+                  <a href={errorHelpLink} target="_blank" rel="noreferrer">
+                    What's this?
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
+
+            {mainTab === 'design-to-code' ? (
+              analyzing ? (
+                <LoadingPanel nodeName={analyzing.nodeName} nodeType={analyzing.nodeType} />
+              ) : analysis.hasSelection ? (
+                <ExportPanel
+                  intentLabel={toIntentLabel(analysis.intent)}
+                  selectedNodeName={analysis.selectedNode.name}
+                  status={status}
+                  bridgeConnected={bridgeStatus === 'connected'}
+                  designChecked={designMd.checked}
+                  designExists={designMd.exists}
+                  designRoot={designMd.root}
+                  onSyncDesignMd={syncDesignMd}
+                  onApplyToFigma={applyToFigma}
+                  onExportDesignMd={onExportDesignMd}
+                  onExportHtml={onExportHtml}
+                />
+              ) : (
+                <EmptyState message={analysis.message} />
+              )
+            ) : (
+              <>
+                <CapabilityView />
+                <HtmlBrowser
+                  connected={bridgeStatus === 'connected'}
+                  listFiles={listHtmlFiles}
+                  renderFile={renderHtmlFile}
+                  projectKey={sessions.find((s) => s.selected)?.id}
+                />
+              </>
+            )}
           </>
         )}
       </div>

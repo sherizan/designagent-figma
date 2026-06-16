@@ -55,12 +55,16 @@ function blog(...args: unknown[]): void {
 interface ServerClient {
   socket: WebSocket;
   sessionId: string;
+  root: string;
+  label: string;
 }
 
 export function runBroker(): void {
   const alive = new WeakSet<WebSocket>();
   let plugin: WebSocket | null = null;
   const servers: ServerClient[] = []; // registration order; newest = active
+  // sessionId the plugin explicitly picked for filesystem ops; null = follow newest.
+  let selectedSessionId: string | null = null;
   // Which server originated a given tool-call id, so the plugin's response goes back
   // to the right session.
   const requestOrigin = new Map<string, WebSocket>();
@@ -69,6 +73,18 @@ export function runBroker(): void {
 
   function activeServer(): ServerClient | null {
     return servers.length > 0 ? servers[servers.length - 1]! : null;
+  }
+
+  // The session that should receive reverse-channel (filesystem) ops: the one the
+  // plugin selected if it's still connected, else the newest. Pure read — no mutation.
+  function routeTarget(): ServerClient | null {
+    if (selectedSessionId) {
+      const picked = servers.find((s) => s.sessionId === selectedSessionId);
+      if (picked) {
+        return picked;
+      }
+    }
+    return activeServer();
   }
 
   function send(socket: WebSocket | null, payload: unknown): void {
@@ -93,6 +109,23 @@ export function runBroker(): void {
     send(plugin, { type: 'hello_ack', serverInstanceId: active.sessionId, pid: process.pid });
   }
 
+  // Tell the plugin which projects are connected and which is the effective target.
+  function broadcastSessions(): void {
+    if (!plugin) {
+      return;
+    }
+    const target = routeTarget();
+    send(plugin, {
+      type: 'sessions',
+      sessions: servers.map((s) => ({
+        id: s.sessionId,
+        label: s.label,
+        root: s.root,
+        selected: target ? s.sessionId === target.sessionId : false
+      }))
+    });
+  }
+
   function armIdleTimer(): void {
     if (idleTimer) {
       clearTimeout(idleTimer);
@@ -114,7 +147,11 @@ export function runBroker(): void {
       return;
     }
     const wasActive = idx === servers.length - 1;
+    const removed = servers[idx];
     servers.splice(idx, 1);
+    if (removed && selectedSessionId === removed.sessionId) {
+      selectedSessionId = null;
+    }
     // Fail any in-flight tool calls that originated from this server.
     for (const [id, origin] of requestOrigin) {
       if (origin === socket) {
@@ -125,6 +162,7 @@ export function runBroker(): void {
       // Promote the next-newest session and re-pair the plugin to it.
       ackPlugin();
     }
+    broadcastSessions();
     armIdleTimer();
   }
 
@@ -146,6 +184,8 @@ export function runBroker(): void {
         result?: unknown;
         error?: string;
         buildMtime?: number;
+        root?: string;
+        label?: string;
       };
       try {
         msg = JSON.parse(data.toString());
@@ -167,6 +207,7 @@ export function runBroker(): void {
         plugin = socket;
         blog('plugin connected.');
         ackPlugin(); // no-op until a session is active; then the plugin pairs
+        broadcastSessions();
         return;
       }
 
@@ -190,14 +231,29 @@ export function runBroker(): void {
           return;
         }
         const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : 'unknown';
+        const root = typeof msg.root === 'string' ? msg.root : '';
+        const label = typeof msg.label === 'string' && msg.label ? msg.label : sessionId.slice(0, 8); // 8-char UUID prefix fallback
+        // Replace any prior entry for this session (a reconnect reuses SERVER_INSTANCE_ID),
+        // and purge the old socket's in-flight tool calls so they don't dangle.
+        const existingIdx = servers.findIndex((s) => s.sessionId === sessionId);
+        if (existingIdx !== -1) {
+          const prevSocket = servers[existingIdx]!.socket;
+          servers.splice(existingIdx, 1);
+          for (const [id, origin] of requestOrigin) {
+            if (origin === prevSocket) {
+              requestOrigin.delete(id);
+            }
+          }
+        }
         // Newest registration becomes active.
-        servers.push({ socket, sessionId });
-        blog(`session ${sessionId} registered (active). ${servers.length} session(s).`);
+        servers.push({ socket, sessionId, root, label });
+        blog(`session ${sessionId} (label: ${label}, root: ${root || '?'}) registered (active). ${servers.length} session(s).`);
         if (idleTimer) {
           clearTimeout(idleTimer);
           idleTimer = null;
         }
         ackPlugin();
+        broadcastSessions();
         return;
       }
 
@@ -213,10 +269,10 @@ export function runBroker(): void {
           send(origin ?? null, msg);
           return;
         }
-        // Reverse channel (filesystem) — route to the ACTIVE session's project.
+        // Reverse channel (filesystem) — route to the selected or newest session's project.
         if (msg.type === 'server_request' && typeof msg.id === 'string') {
-          const active = activeServer();
-          if (!active) {
+          const target = routeTarget();
+          if (!target) {
             send(plugin, {
               type: 'server_response',
               id: msg.id,
@@ -225,7 +281,16 @@ export function runBroker(): void {
             });
             return;
           }
-          send(active.socket, msg);
+          send(target.socket, msg);
+          return;
+        }
+        // The plugin picks which connected project to use for filesystem ops.
+        if (msg.type === 'select_session' && typeof msg.sessionId === 'string') {
+          if (servers.some((s) => s.sessionId === msg.sessionId)) {
+            selectedSessionId = msg.sessionId;
+            blog(`plugin selected session ${msg.sessionId}.`);
+          }
+          broadcastSessions();
           return;
         }
         return;

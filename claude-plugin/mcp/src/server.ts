@@ -9,6 +9,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { WebSocket } from 'ws';
 import { runBroker, BROKER_PROTOCOL_VERSION, BUILD_MTIME } from './broker';
+import { resolveProjectRoot, deriveProjectLabel } from './project-root';
 
 // DesignAgent MCP server.
 //
@@ -100,7 +101,9 @@ function connectToBroker(): void {
           role: 'mcp-server',
           sessionId: SERVER_INSTANCE_ID,
           version: BROKER_PROTOCOL_VERSION,
-          buildMtime: BUILD_MTIME
+          buildMtime: BUILD_MTIME,
+          root: PROJECT_ROOT,
+          label: PROJECT_LABEL
         })
       );
     } catch {
@@ -325,11 +328,14 @@ async function loadImageBase64(args: {
   return buf.toString('base64');
 }
 
-// The directory the file browser scans. Defaults to where Claude Code launched
-// the server; override with DESIGNAGENT_PROJECT_DIR if your HTML lives elsewhere.
-const PROJECT_ROOT = process.env.DESIGNAGENT_PROJECT_DIR
-  ? resolve(process.env.DESIGNAGENT_PROJECT_DIR)
-  : process.cwd();
+// The directory all reverse-channel filesystem ops act on. Priority:
+// DESIGNAGENT_PROJECT_DIR → CLAUDE_PROJECT_DIR (harness workspace) → git root → cwd.
+const PROJECT_ROOT = resolveProjectRoot({
+  projectDirEnv: process.env.DESIGNAGENT_PROJECT_DIR,
+  claudeProjectDir: process.env.CLAUDE_PROJECT_DIR,
+  cwd: process.cwd()
+});
+const PROJECT_LABEL = deriveProjectLabel(PROJECT_ROOT);
 
 // Resolve a path inside the project (the dir Claude Code launched in), rejecting
 // anything that escapes it. Shared by every filesystem read/write below.
