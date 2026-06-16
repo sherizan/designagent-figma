@@ -1168,10 +1168,12 @@ async function createDesignTree(message: {
     // If replacing a prior/orphan node, render into its slot (same parent + position).
     let replaceSlot: { x: number; y: number } | null = null;
     let replaceParent: (BaseNode & ChildrenMixin) | null = null;
+    let replaceIndex = -1;
     if (message.replaceId) {
       const old = await figma.getNodeByIdAsync(message.replaceId);
       if (isSceneNode(old) && old.parent) {
         replaceParent = old.parent as BaseNode & ChildrenMixin;
+        replaceIndex = replaceParent.children.indexOf(old);
         replaceSlot = {
           x: 'x' in old ? (old as SceneNode & LayoutMixin).x : 0,
           y: 'y' in old ? (old as SceneNode & LayoutMixin).y : 0
@@ -1190,6 +1192,9 @@ async function createDesignTree(message: {
       if (replaceSlot) {
         frame.x = replaceSlot.x;
         frame.y = replaceSlot.y;
+        if (replaceIndex >= 0 && replaceIndex < parent.children.length) {
+          parent.insertChild(replaceIndex, frame);
+        }
       } else if (parent.type === 'PAGE') {
         placeOnPage(frame, message.x, message.y);
       }
@@ -1220,6 +1225,9 @@ async function createDesignTree(message: {
     if (replaceSlot && 'x' in root) {
       (root as SceneNode & LayoutMixin).x = replaceSlot.x;
       (root as SceneNode & LayoutMixin).y = replaceSlot.y;
+      if (replaceIndex >= 0 && replaceIndex < parent.children.length) {
+        parent.insertChild(replaceIndex, root);
+      }
     } else if (parent.type === 'PAGE' && 'x' in root) {
       placeOnPage(root as SceneNode & LayoutMixin, message.x, message.y);
     }
