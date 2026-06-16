@@ -1113,28 +1113,35 @@ function buildFrameShell(
     frame.paddingLeft = node.paddingLeft ?? 0;
     frame.primaryAxisAlignItems = node.primaryAxisAlign ?? 'MIN';
     frame.counterAxisAlignItems = node.counterAxisAlign ?? 'MIN';
-    // Hug the main axis for content-packed rows so an exact-fit row has no fixed
-    // width to overflow → no silently-dropped child. Stay FIXED only when children
-    // must distribute into a width: a grow child (flex:1) or SPACE_BETWEEN.
+
+    const horizontal = node.layout === 'HORIZONTAL';
     const kids = node.children ?? [];
-    const needsFixedMain = kids.some((c) => c.grow) || node.primaryAxisAlign === 'SPACE_BETWEEN';
-    frame.primaryAxisSizingMode = needsFixedMain ? 'FIXED' : 'AUTO';
+    const flowKids = kids.filter((c) => !c.absolute);
+    const gaps = Math.max(0, flowKids.length - 1) * (node.itemSpacing ?? 0);
+    const padMain = horizontal
+      ? (node.paddingLeft ?? 0) + (node.paddingRight ?? 0)
+      : (node.paddingTop ?? 0) + (node.paddingBottom ?? 0);
+    // Main-axis size needed to hold the in-flow, non-grow children.
+    const contentMain =
+      flowKids.reduce((s, c) => s + (c.grow ? 0 : horizontal ? c.width : c.height), 0) + gaps + padMain;
+    const measuredMain = horizontal ? node.width : node.height;
+
+    // Hug ONLY a genuinely content-packed row (children fill the measured size).
+    // Stay FIXED when children must distribute into a width (grow / SPACE_BETWEEN)
+    // or when there is slack (a full-width row whose content doesn't fill it) — that
+    // keeps full-width rows full-width. The clamp then prevents any exact-fit drop.
+    const mustFill = kids.some((c) => c.grow) || node.primaryAxisAlign === 'SPACE_BETWEEN';
+    const contentFills = contentMain >= measuredMain - 1;
+    const hug = !mustFill && contentFills;
+    frame.primaryAxisSizingMode = hug ? 'AUTO' : 'FIXED';
     frame.counterAxisSizingMode = 'FIXED';
-    if (needsFixedMain) {
-      // Clamp: grow the frame to fit its non-grow children rather than mis-flowing /
-      // dropping one. (No-op when the measured size already fits.)
-      const flowKids = kids.filter((c) => !c.absolute);
-      const gaps = Math.max(0, flowKids.length - 1) * (node.itemSpacing ?? 0);
-      if (node.layout === 'HORIZONTAL') {
-        const need =
-          flowKids.reduce((s, c) => s + (c.grow ? 0 : c.width), 0) +
-          gaps + (node.paddingLeft ?? 0) + (node.paddingRight ?? 0);
-        resizeW = Math.max(resizeW, need);
+    if (!hug) {
+      // Clamp: grow the frame to fit its in-flow children rather than dropping one
+      // (no-op when the measured size already fits, e.g. a full-width row with slack).
+      if (horizontal) {
+        resizeW = Math.max(resizeW, contentMain);
       } else {
-        const need =
-          flowKids.reduce((s, c) => s + (c.grow ? 0 : c.height), 0) +
-          gaps + (node.paddingTop ?? 0) + (node.paddingBottom ?? 0);
-        resizeH = Math.max(resizeH, need);
+        resizeH = Math.max(resizeH, contentMain);
       }
     }
   } else {
