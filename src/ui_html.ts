@@ -244,6 +244,9 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
           childNode.absolute = true;
         }
       }
+      if (parseFloat(childCs.flexGrow) > 0) {
+        childNode.grow = true;
+      }
       node.children.push(childNode);
     } else if (child.nodeType === 3) {
       const raw = (child.textContent ?? '').replace(/\s+/g, ' ').trim();
