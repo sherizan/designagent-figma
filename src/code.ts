@@ -1393,7 +1393,7 @@ function parseGradientStops(segments: string[]): ColorStop[] {
   const parsed = segments.map((seg) => {
     const m = /\s+(-?[\d.]+)%\s*$/.exec(seg);
     const pos = m ? Number(m[1]) / 100 : null;
-    const colorStr = m ? seg.slice(0, m.index).trim() : seg;
+    const colorStr = seg.replace(/(\s+-?[\d.]+%)+\s*$/, '').trim();
     const c = parseCssColor(colorStr);
     return c ? { pos, color: { r: c.color.r, g: c.color.g, b: c.color.b, a: c.opacity } } : null;
   });
@@ -1415,11 +1415,12 @@ function cssGradientPaint(input: string): GradientPaint | null {
   let angle = 180; // default: to bottom
   let stopParts = parts;
   const first = parts[0]!;
+  const degMatch = /(-?[\d.]+)\s*deg\s*$/i.exec(first);
   if (/^to\s+/i.test(first)) {
     angle = sideToAngle(first);
     stopParts = parts.slice(1);
-  } else if (/(-?[\d.]+)\s*deg\s*$/i.test(first)) {
-    angle = Number(/(-?[\d.]+)\s*deg\s*$/i.exec(first)![1]);
+  } else if (degMatch) {
+    angle = Number(degMatch[1]);
     stopParts = parts.slice(1);
   }
   const stops = parseGradientStops(stopParts);
@@ -1435,7 +1436,7 @@ function firstGradientStopColor(input: string): string | null {
     if (/^to\s+/i.test(seg) || /(deg|rad|turn|grad)\s*$/i.test(seg) || /^(circle|ellipse|closest|farthest|at\b)/i.test(seg)) {
       continue; // skip direction / radial-shape tokens
     }
-    const colorStr = seg.replace(/\s+-?[\d.]+%\s*$/, '').trim();
+    const colorStr = seg.replace(/(\s+-?[\d.]+%)+\s*$/, '').trim();
     if (parseCssColor(colorStr)) return colorStr;
   }
   return null;
