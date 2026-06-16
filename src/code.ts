@@ -1123,15 +1123,16 @@ function buildFrameShell(
     if (needsFixedMain) {
       // Clamp: grow the frame to fit its non-grow children rather than mis-flowing /
       // dropping one. (No-op when the measured size already fits.)
-      const gaps = Math.max(0, kids.length - 1) * (node.itemSpacing ?? 0);
+      const flowKids = kids.filter((c) => !c.absolute);
+      const gaps = Math.max(0, flowKids.length - 1) * (node.itemSpacing ?? 0);
       if (node.layout === 'HORIZONTAL') {
         const need =
-          kids.reduce((s, c) => s + (c.grow ? 0 : c.width), 0) +
+          flowKids.reduce((s, c) => s + (c.grow ? 0 : c.width), 0) +
           gaps + (node.paddingLeft ?? 0) + (node.paddingRight ?? 0);
         resizeW = Math.max(resizeW, need);
       } else {
         const need =
-          kids.reduce((s, c) => s + (c.grow ? 0 : c.height), 0) +
+          flowKids.reduce((s, c) => s + (c.grow ? 0 : c.height), 0) +
           gaps + (node.paddingTop ?? 0) + (node.paddingBottom ?? 0);
         resizeH = Math.max(resizeH, need);
       }
