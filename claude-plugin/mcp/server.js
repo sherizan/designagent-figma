@@ -25916,14 +25916,17 @@ server.registerTool(
 server.registerTool(
   "html_to_design",
   {
-    description: "Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project (e.g. one you just generated). Fonts must exist in the Figma file; external images are inlined. The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset \u2014 staying inside it avoids silent re-renders):\n- Reliable: vertical flex columns; solid fills, border, border-radius, box-shadow; fixed-width rows with a few px of trailing slack; Google fonts.\n- Avoid for now: exact-fit flex rows (`flex:1`, `width:fit-content`, or `space-between` whose children fill the row can silently drop/overlap a child \u2014 give items fixed widths with slack); CSS gradients (currently render near-white \u2014 use solid fills); inline styled `<span>` inside wrapping text (overlaps \u2014 split into separate text blocks); negative margins (scramble \u2014 use positive `gap`).\n- Large pages: render section-by-section; a very large single render can exceed the response timeout while it keeps painting.",
+    description: "Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project (e.g. one you just generated). Fonts must exist in the Figma file; external images are inlined. The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset \u2014 staying inside it avoids silent re-renders):\n- Reliable: vertical flex columns; solid fills, border, border-radius, box-shadow; fixed-width rows with a few px of trailing slack; Google fonts.\n- Avoid for now: exact-fit flex rows (`flex:1`, `width:fit-content`, or `space-between` whose children fill the row can silently drop/overlap a child \u2014 give items fixed widths with slack); CSS gradients (currently render near-white \u2014 use solid fills); inline styled `<span>` inside wrapping text (overlaps \u2014 split into separate text blocks); negative margins (scramble \u2014 use positive `gap`).\n- Returns the new frame's id immediately and finishes painting in the background \u2014 take a screenshot to verify completion. Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.",
     inputSchema: {
       html: external_exports.string().optional().describe("Raw HTML to render."),
       path: external_exports.string().optional().describe("Path to an .html file in the project."),
       x: external_exports.number().optional(),
       y: external_exports.number().optional(),
       parentId: external_exports.string().optional(),
-      width: external_exports.number().optional().describe("Render viewport width in px (default 1280).")
+      width: external_exports.number().optional().describe("Render viewport width in px (default 1280)."),
+      replaceId: external_exports.string().optional().describe(
+        "Replace an existing node (e.g. a prior or orphaned render) in place instead of adding a new frame \u2014 pass the id returned by an earlier html_to_design call."
+      )
     }
   },
   async (args) => {
@@ -25941,7 +25944,8 @@ server.registerTool(
         x: args.x,
         y: args.y,
         parentId: args.parentId,
-        width: args.width
+        width: args.width,
+        replaceId: args.replaceId
       });
     } catch (error2) {
       return fail(error2);

@@ -1162,16 +1162,35 @@ async function createDesignTree(message: {
   x?: number;
   y?: number;
   parentId?: string;
-  replaceId?: string; // honored in a later task
+  replaceId?: string;
 }): Promise<void> {
   try {
-    const parent = await resolveParentContainer(message.parentId);
+    // If replacing a prior/orphan node, render into its slot (same parent + position).
+    let replaceSlot: { x: number; y: number } | null = null;
+    let replaceParent: (BaseNode & ChildrenMixin) | null = null;
+    if (message.replaceId) {
+      const old = await figma.getNodeByIdAsync(message.replaceId);
+      if (isSceneNode(old) && old.parent) {
+        replaceParent = old.parent as BaseNode & ChildrenMixin;
+        replaceSlot = {
+          x: 'x' in old ? (old as SceneNode & LayoutMixin).x : 0,
+          y: 'y' in old ? (old as SceneNode & LayoutMixin).y : 0
+        };
+        old.remove();
+      } else {
+        console.warn('html_to_design: replaceId not found; rendering fresh:', message.replaceId);
+      }
+    }
+    const parent = replaceParent ?? (await resolveParentContainer(message.parentId));
     const tree = message.tree;
 
     if (tree.kind === 'frame') {
       // Create the root frame shell first so its id is available immediately.
       const frame = buildFrameShell(tree, parent);
-      if (parent.type === 'PAGE') {
+      if (replaceSlot) {
+        frame.x = replaceSlot.x;
+        frame.y = replaceSlot.y;
+      } else if (parent.type === 'PAGE') {
         placeOnPage(frame, message.x, message.y);
       }
       figma.currentPage.selection = [frame];
@@ -1198,7 +1217,10 @@ async function createDesignTree(message: {
 
     // Non-frame root (rare): nothing to defer — build fully, then respond.
     const root = await buildDesignNode(tree, parent);
-    if (parent.type === 'PAGE' && 'x' in root) {
+    if (replaceSlot && 'x' in root) {
+      (root as SceneNode & LayoutMixin).x = replaceSlot.x;
+      (root as SceneNode & LayoutMixin).y = replaceSlot.y;
+    } else if (parent.type === 'PAGE' && 'x' in root) {
       placeOnPage(root as SceneNode & LayoutMixin, message.x, message.y);
     }
     figma.currentPage.selection = [root];

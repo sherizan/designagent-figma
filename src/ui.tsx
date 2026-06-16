@@ -425,7 +425,8 @@ function App(): JSX.Element {
                 tree,
                 x: typeof params.x === 'number' ? params.x : undefined,
                 y: typeof params.y === 'number' ? params.y : undefined,
-                parentId: typeof params.parentId === 'string' ? params.parentId : undefined
+                parentId: typeof params.parentId === 'string' ? params.parentId : undefined,
+                replaceId: typeof params.replaceId === 'string' ? params.replaceId : undefined
               });
             } catch (renderError) {
               try {

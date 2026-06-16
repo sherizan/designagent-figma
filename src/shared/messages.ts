@@ -54,5 +54,6 @@ export type ToPluginMessage =
       x?: number;
       y?: number;
       parentId?: string;
+      replaceId?: string;
     }
   | { type: 'REFRESH_REQUEST' };
