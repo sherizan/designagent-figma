@@ -953,7 +953,7 @@ async function applyRuns(text: TextNode, runs: TextRun[]): Promise<void> {
     const start = Math.max(0, Math.min(Math.floor(run.start), len));
     const end = Math.max(start, Math.min(Math.floor(run.end), len));
     if (end <= start) continue;
-    if (run.fontWeight) {
+    if (run.fontWeight !== undefined) {
       try {
         const fontName = await resolveWeightFontName(text, run.fontWeight);
         text.setRangeFontName(start, end, fontName);
