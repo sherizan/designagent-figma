@@ -7,7 +7,7 @@ import { generateDesignDoc, type DesignDocFrame } from './core/designdoc';
 import { parseDesignMd } from './core/parsedesignmd';
 import { generateHtml, type HtmlNode } from './core/htmldoc';
 import { loadAnnotationCategories } from './core/extract';
-import type { DesignTreeNode } from './shared/designtree';
+import type { DesignTreeNode, TextRun } from './shared/designtree';
 import { isScreenLikeNode } from './core/intent';
 import type { EmptyAnalysis, Mode } from './core/types';
 import type { ToPluginMessage, ToUIMessage } from './shared/messages';
@@ -945,6 +945,35 @@ async function exportHtml(): Promise<void> {
 
 // ---- HTML → Design: build Figma nodes from a rendered HTML tree (from the UI) ----
 
+// Apply per-character style runs (I4) to an already-populated text node. Each run
+// is best-effort: a missing weight or bad range keeps the base style, never throws.
+async function applyRuns(text: TextNode, runs: TextRun[]): Promise<void> {
+  const len = text.characters.length;
+  for (const run of runs) {
+    const start = Math.max(0, Math.min(Math.floor(run.start), len));
+    const end = Math.max(start, Math.min(Math.floor(run.end), len));
+    if (end <= start) continue;
+    if (run.fontWeight) {
+      try {
+        const fontName = await resolveWeightFontName(text, run.fontWeight);
+        text.setRangeFontName(start, end, fontName);
+      } catch {
+        // keep the base weight for this range
+      }
+    }
+    if (run.color) {
+      const paint = cssSolidPaint(run.color);
+      if (paint) {
+        try {
+          text.setRangeFills(start, end, [paint]);
+        } catch {
+          // keep the base fill for this range
+        }
+      }
+    }
+  }
+}
+
 async function buildDesignNode(
   node: DesignTreeNode,
   parent: BaseNode & ChildrenMixin
@@ -989,6 +1018,9 @@ async function buildDesignNode(
       }
     } else {
       text.textAutoResize = 'WIDTH_AND_HEIGHT';
+    }
+    if (node.runs && node.runs.length > 0) {
+      await applyRuns(text, node.runs);
     }
     text.x = node.x;
     text.y = node.y;
@@ -1572,10 +1604,10 @@ const WEIGHT_ALIASES: Record<string, string[]> = {
   '900': ['Black', 'Heavy']
 };
 
-// Apply a font weight to a text node. Weights are family-specific style names in
-// Figma, so resolve the requested weight (a number like 600 or a style name like
-// "Semi Bold") against the styles the node's font family actually ships.
-async function applyTextWeight(node: TextNode, weight: unknown): Promise<void> {
+// Resolve a requested weight (number like 600, or a style name like "Semi Bold")
+// against the styles the node's font family actually ships, load it, and return
+// the FontName. Throws if the family has no matching weight.
+async function resolveWeightFontName(node: TextNode, weight: unknown): Promise<FontName> {
   const base =
     node.fontName === figma.mixed
       ? node.characters.length > 0
@@ -1610,7 +1642,12 @@ async function applyTextWeight(node: TextNode, weight: unknown): Promise<void> {
 
   const fontName = { family, style: match };
   await figma.loadFontAsync(fontName);
-  node.fontName = fontName;
+  return fontName;
+}
+
+// Apply a font weight to a whole text node.
+async function applyTextWeight(node: TextNode, weight: unknown): Promise<void> {
+  node.fontName = await resolveWeightFontName(node, weight);
 }
 
 function normalizeTextAlign(
