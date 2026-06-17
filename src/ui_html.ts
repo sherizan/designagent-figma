@@ -1,4 +1,4 @@
-import type { DesignTreeNode, DesignTreeShadow } from './shared/designtree';
+import type { DesignTreeNode, DesignTreeShadow, TextRun } from './shared/designtree';
 
 // Render HTML in a hidden, SANDBOXED iframe and walk the laid-out DOM into a
 // serializable tree (boxes + computed styles + text + images). Runs in the plugin
@@ -167,6 +167,126 @@ function applyBoxStyles(node: DesignTreeNode, cs: CSSStyleDeclaration): void {
   }
 }
 
+function isInlineLevel(display: string): boolean {
+  return display === 'inline' || display === 'inline-block';
+}
+
+// True when `el`'s content is text interleaved with inline, text-only elements
+// (one level deep) — e.g. a heading with a colored <span>. Such an element must
+// become ONE Figma text node with per-range style runs, not separate frames
+// (which overlap when the line wraps). Any block/flex child, or an inline element
+// that itself contains elements, disqualifies it (→ existing per-child path).
+function isInlineTextContainer(el: Element, win: Window): boolean {
+  let hasText = false;
+  let hasInlineEl = false;
+  for (const c of Array.from(el.childNodes)) {
+    if (c.nodeType === 3) {
+      if ((c.textContent ?? '').trim()) hasText = true;
+    } else if (c.nodeType === 1) {
+      const ce = c as Element;
+      const ccs = win.getComputedStyle(ce);
+      if (isHidden(ccs)) continue;
+      if (!isInlineLevel(ccs.display)) return false;
+      if (ce.children.length > 0) return false; // nested elements — too complex
+      hasInlineEl = true;
+    }
+  }
+  return hasText && hasInlineEl;
+}
+
+// Build a single text node for an inline-text container, with style runs for
+// each inline element child. Whitespace is collapsed across the whole string
+// while run offsets are tracked on the normalized output. Returns null if the
+// combined text is empty (caller falls back to the per-child path).
+function buildInlineTextNode(
+  el: Element,
+  cs: CSSStyleDeclaration,
+  win: Window,
+  rect: DOMRect
+): DesignTreeNode | null {
+  const baseColor = cs.color;
+  const baseWeight = fontWeightToNumber(cs.fontWeight);
+
+  let out = '';
+  let pendingSpace = false;
+  // Append `s` with whitespace collapsed; return the [start,end) range of the
+  // non-space characters it contributed (a leading collapsed space belongs to
+  // the gap, not the run).
+  const appendNormalized = (s: string): { start: number; end: number } => {
+    let start = -1;
+    for (const ch of s) {
+      if (/\s/.test(ch)) {
+        if (out.length > 0) pendingSpace = true;
+      } else {
+        if (pendingSpace) {
+          out += ' ';
+          pendingSpace = false;
+        }
+        if (start === -1) start = out.length;
+        out += ch;
+      }
+    }
+    const end = out.length;
+    return { start: start === -1 ? end : start, end };
+  };
+
+  const runs: TextRun[] = [];
+  for (const c of Array.from(el.childNodes)) {
+    if (c.nodeType === 3) {
+      appendNormalized(c.textContent ?? '');
+    } else if (c.nodeType === 1) {
+      const ce = c as Element;
+      const ccs = win.getComputedStyle(ce);
+      if (isHidden(ccs)) continue;
+      const { start, end } = appendNormalized(ce.textContent ?? '');
+      if (end <= start) continue;
+      const run: TextRun = { start, end };
+      if (isVisibleColor(ccs.color) && ccs.color !== baseColor) run.color = ccs.color;
+      const w = fontWeightToNumber(ccs.fontWeight);
+      if (w !== baseWeight) run.fontWeight = w;
+      if (run.color !== undefined || run.fontWeight !== undefined) runs.push(run);
+    }
+  }
+
+  if (!out) return null;
+
+  const transform = cs.textTransform;
+  const text =
+    transform === 'uppercase'
+      ? out.toUpperCase()
+      : transform === 'lowercase'
+      ? out.toLowerCase()
+      : transform === 'capitalize'
+      ? out.replace(/\b\w/g, (c) => c.toUpperCase())
+      : out;
+
+  // Measure the element's text content precisely (matches the per-text-node path).
+  const range = el.ownerDocument.createRange();
+  range.selectNodeContents(el);
+  const tr = range.getBoundingClientRect();
+  const multiline = range.getClientRects().length > 1;
+  const letterSpacing = cs.letterSpacing && cs.letterSpacing !== 'normal' ? px(cs.letterSpacing) : 0;
+  const lineHeight = cs.lineHeight && cs.lineHeight !== 'normal' ? px(cs.lineHeight) : 0;
+
+  return {
+    kind: 'text',
+    x: tr.left - rect.left,
+    y: tr.top - rect.top,
+    width: tr.width,
+    height: tr.height,
+    text,
+    fontSize: px(cs.fontSize),
+    fontWeight: baseWeight,
+    textColor: cs.color,
+    textAlign: cssAlignToFigma(cs.textAlign),
+    letterSpacing,
+    lineHeight,
+    multiline,
+    runs: runs.length > 0 ? runs : undefined,
+    children: []
+  };
+}
+
 // Walk an element into a node, positioned relative to `parent`. Child elements
 // recurse; text nodes are measured precisely with a Range so they land exactly
 // where the browser drew them (beside icons, inline runs, etc.).
@@ -207,6 +327,13 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
   }
 
   const lay = computeLayout(el, cs, win);
+  if (!lay && isInlineTextContainer(el, win)) {
+    const merged = buildInlineTextNode(el, cs, win, rect);
+    if (merged) {
+      node.children.push(merged);
+      return node;
+    }
+  }
   if (lay) {
     node.layout = lay.layout;
     node.itemSpacing = lay.itemSpacing;
