@@ -45,7 +45,7 @@ export interface TextRun {
 Add `runs?: TextRun[];` to `DesignTreeNode` (alongside the existing text fields).
 
 **Renderer (`src/ui_html.ts`):**
-- `isInlineTextContainer(el, cs, win)` → true when: `computeLayout(el,…)` is null (not a flex/stack
+- `isInlineTextContainer(el, win)` → true when: `computeLayout(el,…)` is null (not a flex/stack
   container), the element has **mixed** content (≥1 text node child **and** ≥1 element child), and
   **every element child is inline-level** (`display` `inline`/`inline-block`) **with only text inside**
   (no grandchild elements). Anything else → false (existing per-child path, unchanged).
