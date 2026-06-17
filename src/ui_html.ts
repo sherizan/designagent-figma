@@ -1,4 +1,4 @@
-import type { DesignTreeNode, DesignTreeShadow } from './shared/designtree';
+import type { DesignTreeNode, DesignTreeShadow, TextRun } from './shared/designtree';
 
 // Render HTML in a hidden, SANDBOXED iframe and walk the laid-out DOM into a
 // serializable tree (boxes + computed styles + text + images). Runs in the plugin
@@ -140,6 +140,39 @@ function computeLayout(el: Element, cs: CSSStyleDeclaration, win: Window): Layou
   return null;
 }
 
+// Detect overlapping children (negative margins) and preserve the overlap:
+// uniform overlap → a single negative itemSpacing (stays an editable Auto Layout
+// row); non-uniform overlap → pin each flow child absolutely at its measured x/y.
+// `flow` are the element children emitted as flow nodes (not absolute/stretch),
+// each paired with the DesignTreeNode pushed for it, in document order.
+function applyOverlap(
+  node: DesignTreeNode,
+  layout: 'HORIZONTAL' | 'VERTICAL',
+  flow: Array<{ rect: DOMRect; child: DesignTreeNode }>
+): void {
+  if (flow.length < 2) return;
+  const horizontal = layout === 'HORIZONTAL';
+  const gaps: number[] = [];
+  for (let i = 0; i < flow.length - 1; i += 1) {
+    const a = flow[i];
+    const b = flow[i + 1];
+    if (!a || !b) return;
+    gaps.push(horizontal ? b.rect.left - a.rect.right : b.rect.top - a.rect.bottom);
+  }
+  if (!gaps.some((g) => g < -1)) return; // act only if at least one pair overlaps
+  const min = Math.min(...gaps);
+  const max = Math.max(...gaps);
+  // Uniform overlap (all gaps within ~1px) → one negative itemSpacing; any spread
+  // (mixed positive/negative gaps included) → pin each child at its measured x/y.
+  if (max - min <= 1) {
+    node.itemSpacing = Math.round((min + max) / 2);
+  } else {
+    for (const f of flow) {
+      f.child.absolute = true;
+    }
+  }
+}
+
 function applyBoxStyles(node: DesignTreeNode, cs: CSSStyleDeclaration): void {
   if (isVisibleColor(cs.backgroundColor)) {
     node.fill = cs.backgroundColor;
@@ -165,6 +198,128 @@ function applyBoxStyles(node: DesignTreeNode, cs: CSSStyleDeclaration): void {
   if (shadow) {
     node.shadow = shadow;
   }
+}
+
+function isInlineLevel(display: string): boolean {
+  return display === 'inline' || display === 'inline-block';
+}
+
+// True when `el`'s content is text interleaved with inline, text-only elements
+// (one level deep) — e.g. a heading with a colored <span>. Such an element must
+// become ONE Figma text node with per-range style runs, not separate frames
+// (which overlap when the line wraps). Any block/flex child, or an inline element
+// that itself contains elements, disqualifies it (→ existing per-child path).
+function isInlineTextContainer(el: Element, win: Window): boolean {
+  let hasText = false;
+  let hasInlineEl = false;
+  for (const c of Array.from(el.childNodes)) {
+    if (c.nodeType === 3) {
+      if ((c.textContent ?? '').trim()) hasText = true;
+    } else if (c.nodeType === 1) {
+      const ce = c as Element;
+      const ccs = win.getComputedStyle(ce);
+      if (isHidden(ccs)) continue;
+      const ceTag = ce.tagName.toLowerCase();
+      if (ceTag === 'img' || ceTag === 'br' || ceTag === 'input' || ceTag === 'hr' || ceTag === 'svg') return false;
+      if (!isInlineLevel(ccs.display)) return false;
+      if (ce.children.length > 0) return false; // nested elements — too complex
+      hasInlineEl = true;
+    }
+  }
+  return hasText && hasInlineEl;
+}
+
+// Build a single text node for an inline-text container, with style runs for
+// each inline element child. Whitespace is collapsed across the whole string
+// while run offsets are tracked on the normalized output. Returns null if the
+// combined text is empty (caller falls back to the per-child path).
+function buildInlineTextNode(
+  el: Element,
+  cs: CSSStyleDeclaration,
+  win: Window,
+  rect: DOMRect
+): DesignTreeNode | null {
+  const baseColor = cs.color;
+  const baseWeight = fontWeightToNumber(cs.fontWeight);
+
+  let out = '';
+  let pendingSpace = false;
+  // Append `s` with whitespace collapsed; return the [start,end) range of the
+  // non-space characters it contributed (a leading collapsed space belongs to
+  // the gap, not the run).
+  const appendNormalized = (s: string): { start: number; end: number } => {
+    let start = -1;
+    for (const ch of s) {
+      if (/\s/.test(ch)) {
+        if (out.length > 0) pendingSpace = true;
+      } else {
+        if (pendingSpace) {
+          out += ' ';
+          pendingSpace = false;
+        }
+        if (start === -1) start = out.length;
+        out += ch;
+      }
+    }
+    const end = out.length;
+    return { start: start === -1 ? end : start, end };
+  };
+
+  const runs: TextRun[] = [];
+  for (const c of Array.from(el.childNodes)) {
+    if (c.nodeType === 3) {
+      appendNormalized(c.textContent ?? '');
+    } else if (c.nodeType === 1) {
+      const ce = c as Element;
+      const ccs = win.getComputedStyle(ce);
+      if (isHidden(ccs)) continue;
+      const { start, end } = appendNormalized(ce.textContent ?? '');
+      if (end <= start) continue;
+      const run: TextRun = { start, end };
+      if (isVisibleColor(ccs.color) && ccs.color !== baseColor) run.color = ccs.color;
+      const w = fontWeightToNumber(ccs.fontWeight);
+      if (w !== baseWeight) run.fontWeight = w;
+      if (run.color !== undefined || run.fontWeight !== undefined) runs.push(run);
+    }
+  }
+
+  if (!out) return null;
+
+  const transform = cs.textTransform;
+  const text =
+    transform === 'uppercase'
+      ? out.toUpperCase()
+      : transform === 'lowercase'
+      ? out.toLowerCase()
+      : transform === 'capitalize'
+      ? out.replace(/\b\w/g, (c) => c.toUpperCase())
+      : out;
+
+  // Measure the element's text content precisely (matches the per-text-node path).
+  const range = el.ownerDocument.createRange();
+  range.selectNodeContents(el);
+  const tr = range.getBoundingClientRect();
+  const multiline = range.getClientRects().length > 1;
+  const letterSpacing = cs.letterSpacing && cs.letterSpacing !== 'normal' ? px(cs.letterSpacing) : 0;
+  const lineHeight = cs.lineHeight && cs.lineHeight !== 'normal' ? px(cs.lineHeight) : 0;
+
+  return {
+    kind: 'text',
+    x: tr.left - rect.left,
+    y: tr.top - rect.top,
+    width: tr.width,
+    height: tr.height,
+    text,
+    fontSize: px(cs.fontSize),
+    fontWeight: baseWeight,
+    textColor: cs.color,
+    textAlign: cssAlignToFigma(cs.textAlign),
+    letterSpacing,
+    lineHeight,
+    multiline,
+    runs: runs.length > 0 ? runs : undefined,
+    children: []
+  };
 }
 
 // Walk an element into a node, positioned relative to `parent`. Child elements
@@ -207,6 +362,13 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
   }
 
   const lay = computeLayout(el, cs, win);
+  if (!lay && isInlineTextContainer(el, win)) {
+    const merged = buildInlineTextNode(el, cs, win, rect);
+    if (merged) {
+      node.children.push(merged);
+      return node;
+    }
+  }
   if (lay) {
     node.layout = lay.layout;
     node.itemSpacing = lay.itemSpacing;
@@ -223,6 +385,8 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
   // Left/right edges of the container's content box, in viewport coords.
   const contentLeft = rect.left + (lay ? lay.padding.l : 0);
   const contentRight = rect.right - (lay ? lay.padding.r : 0);
+
+  const flowChildren: Array<{ rect: DOMRect; child: DesignTreeNode }> = [];
 
   for (const child of Array.from(el.childNodes)) {
     if (child.nodeType === 1) {
@@ -248,6 +412,9 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
         childNode.grow = true;
       }
       node.children.push(childNode);
+      if (!childNode.absolute && !childNode.stretch) {
+        flowChildren.push({ rect: cr, child: childNode });
+      }
     } else if (child.nodeType === 3) {
       const raw = (child.textContent ?? '').replace(/\s+/g, ' ').trim();
       if (!raw) continue;
@@ -286,6 +453,10 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
         children: []
       });
     }
+  }
+
+  if (lay) {
+    applyOverlap(node, lay.layout, flowChildren);
   }
 
   return node;

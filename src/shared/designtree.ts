@@ -11,6 +11,15 @@ export interface DesignTreeShadow {
   spread: number;
 }
 
+// A styled character range inside a merged inline-text node (I4). Offsets index
+// into DesignTreeNode.text (the combined, whitespace-normalized string).
+export interface TextRun {
+  start: number; // inclusive char offset into the combined string
+  end: number; // exclusive
+  color?: string; // CSS color overriding the base text color for this range
+  fontWeight?: number; // numeric weight overriding the base for this range
+}
+
 export interface DesignTreeNode {
   kind: 'frame' | 'text' | 'image' | 'svg';
   x: number;
@@ -33,6 +42,7 @@ export interface DesignTreeNode {
   letterSpacing?: number;
   lineHeight?: number;
   multiline?: boolean;
+  runs?: TextRun[]; // per-character style runs for a merged inline-text node (I4)
   // image / svg
   dataUrl?: string;
   svg?: string;

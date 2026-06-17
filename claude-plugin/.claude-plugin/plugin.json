@@ -1,6 +1,6 @@
 {
   "name": "designagent",
-  "version": "0.14.12",
+  "version": "0.14.13",
   "description": "DesignAgent gives Claude Code hands and eyes inside Figma — a live two-way bridge to read, build, and edit the canvas in real time, plus a design-system-faithful DESIGN.md spec you build production UI from.",
   "mcpServers": "./.mcp.json",
   "author": {
