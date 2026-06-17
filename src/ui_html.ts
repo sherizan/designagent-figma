@@ -186,6 +186,8 @@ function isInlineTextContainer(el: Element, win: Window): boolean {
       const ce = c as Element;
       const ccs = win.getComputedStyle(ce);
       if (isHidden(ccs)) continue;
+      const ceTag = ce.tagName.toLowerCase();
+      if (ceTag === 'img' || ceTag === 'br' || ceTag === 'input' || ceTag === 'hr' || ceTag === 'svg') return false;
       if (!isInlineLevel(ccs.display)) return false;
       if (ce.children.length > 0) return false; // nested elements — too complex
       hasInlineEl = true;
