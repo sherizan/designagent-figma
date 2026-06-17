@@ -140,6 +140,37 @@ function computeLayout(el: Element, cs: CSSStyleDeclaration, win: Window): Layou
   return null;
 }
 
+// Detect overlapping children (negative margins) and preserve the overlap:
+// uniform overlap → a single negative itemSpacing (stays an editable Auto Layout
+// row); non-uniform overlap → pin each flow child absolutely at its measured x/y.
+// `flow` are the element children emitted as flow nodes (not absolute/stretch),
+// each paired with the DesignTreeNode pushed for it, in document order.
+function applyOverlap(
+  node: DesignTreeNode,
+  layout: 'HORIZONTAL' | 'VERTICAL',
+  flow: Array<{ rect: DOMRect; child: DesignTreeNode }>
+): void {
+  if (flow.length < 2) return;
+  const horizontal = layout === 'HORIZONTAL';
+  const gaps: number[] = [];
+  for (let i = 0; i < flow.length - 1; i += 1) {
+    const a = flow[i];
+    const b = flow[i + 1];
+    if (!a || !b) return;
+    gaps.push(horizontal ? b.rect.left - a.rect.right : b.rect.top - a.rect.bottom);
+  }
+  if (!gaps.every((g) => g < -1)) return; // need every consecutive pair to overlap
+  const min = Math.min(...gaps);
+  const max = Math.max(...gaps);
+  if (max - min <= 1) {
+    node.itemSpacing = Math.round((min + max) / 2);
+  } else {
+    for (const f of flow) {
+      f.child.absolute = true;
+    }
+  }
+}
+
 function applyBoxStyles(node: DesignTreeNode, cs: CSSStyleDeclaration): void {
   if (isVisibleColor(cs.backgroundColor)) {
     node.fill = cs.backgroundColor;
@@ -353,6 +384,8 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
   const contentLeft = rect.left + (lay ? lay.padding.l : 0);
   const contentRight = rect.right - (lay ? lay.padding.r : 0);
 
+  const flowChildren: Array<{ rect: DOMRect; child: DesignTreeNode }> = [];
+
   for (const child of Array.from(el.childNodes)) {
     if (child.nodeType === 1) {
       const childEl = child as Element;
@@ -377,6 +410,9 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
         childNode.grow = true;
       }
       node.children.push(childNode);
+      if (!childNode.absolute && !childNode.stretch) {
+        flowChildren.push({ rect: cr, child: childNode });
+      }
     } else if (child.nodeType === 3) {
       const raw = (child.textContent ?? '').replace(/\s+/g, ' ').trim();
       if (!raw) continue;
@@ -415,6 +451,10 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
         children: []
       });
     }
+  }
+
+  if (lay) {
+    applyOverlap(node, lay.layout, flowChildren);
   }
 
   return node;
