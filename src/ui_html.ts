@@ -159,9 +159,11 @@ function applyOverlap(
     if (!a || !b) return;
     gaps.push(horizontal ? b.rect.left - a.rect.right : b.rect.top - a.rect.bottom);
   }
-  if (!gaps.every((g) => g < -1)) return; // need every consecutive pair to overlap
+  if (!gaps.some((g) => g < -1)) return; // act only if at least one pair overlaps
   const min = Math.min(...gaps);
   const max = Math.max(...gaps);
+  // Uniform overlap (all gaps within ~1px) → one negative itemSpacing; any spread
+  // (mixed positive/negative gaps included) → pin each child at its measured x/y.
   if (max - min <= 1) {
     node.itemSpacing = Math.round((min + max) / 2);
   } else {
