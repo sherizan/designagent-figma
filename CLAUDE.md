@@ -7,7 +7,7 @@ Figma and a developer in Claude Code work from one shared, always-current source
 plugin panel surfaces the bridge (connect, project picker) and the `DESIGN.md` / HTML round-trip;
 Claude drives the rest through the MCP tools.
 
-Published: https://www.figma.com/community/plugin/1604428052675393154/designagent
+Published: https://www.figma.com/community/plugin/1604428052675393154/designagent-claude-bridge
 
 ## Commands
 
