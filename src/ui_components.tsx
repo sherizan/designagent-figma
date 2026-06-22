@@ -161,18 +161,24 @@ export function ProjectPicker({ sessions, onSelect, variant }: ProjectPickerProp
     return (
       <div className="project-switch">
         <span className="project-switch-label">Project</span>
-        <select
-          className="project-switch-select"
-          value={current?.id ?? ''}
-          onChange={(e) => onSelect(e.target.value)}
-          aria-label="Active project"
-        >
-          {sessions.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
+        {sessions.length > 1 ? (
+          <select
+            className="project-switch-select"
+            value={current?.id ?? ''}
+            onChange={(e) => onSelect(e.target.value)}
+            aria-label="Active project"
+          >
+            {sessions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="project-switch-current" title={current?.root}>
+            {current?.label}
+          </span>
+        )}
       </div>
     );
   }
@@ -505,7 +511,7 @@ export function EmptyState({ message }: EmptyStateProps): JSX.Element {
 export function Footer(): JSX.Element {
   return (
     <div className="panel-footer">
-      <span className="version-tag">v1.14.13</span> · Built by Sherizan ·{' '}
+      <span className="version-tag">v1.14.14</span> · Built by Sherizan ·{' '}
       <a href="https://www.designagent.dev" target="_blank" rel="noreferrer">
         DesignAgent.dev
       </a>

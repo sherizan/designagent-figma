@@ -709,4 +709,5 @@ export const UI_STYLES = `
   .project-switch { display: flex; align-items: center; gap: 6px; padding: 4px 12px 0; font-size: 11px; }
   .project-switch-label { opacity: 0.6; color: var(--text-muted); }
   .project-switch-select { font: inherit; font-size: 11px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 2px 4px; }
+  .project-switch-current { font-size: 11px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 `;
