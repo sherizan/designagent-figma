@@ -724,9 +724,16 @@ function App(): JSX.Element {
             ) : null}
 
             {bridgeStatus === 'connected' ? (
-              <p className="bridge-explainer" style={{ marginTop: 6 }}>
-                Connected — ask Claude in your terminal to read or build in this file.
-              </p>
+              sessions.length === 0 ? (
+                <p className="bridge-explainer" style={{ marginTop: 6 }}>
+                  Connected, but no project folder is linked yet. Run Claude from inside
+                  your project directory so DesignAgent knows which folder to read &amp; write.
+                </p>
+              ) : (
+                <p className="bridge-explainer" style={{ marginTop: 6 }}>
+                  Connected — ask Claude in your terminal to read or build in this file.
+                </p>
+              )
             ) : null}
 
             {SHOW_MAIN_TABS ? (
