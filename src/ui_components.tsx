@@ -49,12 +49,10 @@ export function BridgeBar({
   onReconnect
 }: BridgeBarProps): JSX.Element {
   const meta = BRIDGE_META[status];
-  // Setup starts open and collapses once the bridge is connected; the user can
-  // still toggle it manually, and it re-opens if the connection drops.
-  const [setupOpen, setSetupOpen] = React.useState(true);
-  React.useEffect(() => {
-    setSetupOpen(status !== 'connected');
-  }, [status]);
+  // Setup is only relevant until the bridge connects — hide the whole card once
+  // connected so the panel stays compact. The disclosure stays open while it's
+  // shown (it re-appears if the connection later drops).
+  const showSetup = status !== 'connected';
   return (
     <div className="bridge-bar">
       <div className="bridge-bar-row">
@@ -92,24 +90,22 @@ export function BridgeBar({
         </div>
       </div>
 
-      <details
-        className="bridge-setup"
-        open={setupOpen}
-        onToggle={(event) => setSetupOpen(event.currentTarget.open)}
-      >
-        <summary>Setup</summary>
-        <ol className="bridge-steps">
-          <li>
-            In Claude Code: <code>/plugin marketplace add sherizan/designagent-figma</code>
-          </li>
-          <li>
-            <code>/plugin install designagent@designagent</code>, then restart Claude Code.
-          </li>
-          <li>
-            Click <strong>Start</strong> above — the dot turns green when connected.
-          </li>
-        </ol>
-      </details>
+      {showSetup ? (
+        <details className="bridge-setup" open>
+          <summary>Setup</summary>
+          <ol className="bridge-steps">
+            <li>
+              In Claude Code: <code>/plugin marketplace add sherizan/designagent-figma</code>
+            </li>
+            <li>
+              <code>/plugin install designagent@designagent</code>, then restart Claude Code.
+            </li>
+            <li>
+              Click <strong>Start</strong> above — the dot turns green when connected.
+            </li>
+          </ol>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -511,7 +507,7 @@ export function EmptyState({ message }: EmptyStateProps): JSX.Element {
 export function Footer(): JSX.Element {
   return (
     <div className="panel-footer">
-      <span className="version-tag">v1.14.15</span> · Built by Sherizan ·{' '}
+      <span className="version-tag">v1.14.16</span> · Built by Sherizan ·{' '}
       <a href="https://www.designagent.dev" target="_blank" rel="noreferrer">
         DesignAgent.dev
       </a>

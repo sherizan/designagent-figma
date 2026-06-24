@@ -68,7 +68,6 @@ export const UI_STYLES = `
   }
 
   .app-shell {
-    min-height: 100vh;
     display: flex;
     flex-direction: column;
     background: var(--bg);

@@ -169,6 +169,29 @@ function App(): JSX.Element {
   type Resolver = (msg: { ok: boolean; result?: unknown; error?: string }) => void;
   const serverPending = useRef<Map<string, Resolver>>(new Map());
   const localRenders = useRef<Map<string, Resolver>>(new Map());
+  const shellRef = useRef<HTMLDivElement | null>(null);
+
+  // Keep the Figma window exactly as tall as the panel's content, so it shrinks
+  // when e.g. the Setup card hides on connect and grows when it returns. The
+  // shell is content-sized (no 100vh floor), so its height is the natural one.
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    let last = 0;
+    const sync = () => {
+      const height = Math.round(shell.getBoundingClientRect().height);
+      if (height > 0 && height !== last) {
+        last = height;
+        postPluginMessage({ type: 'RESIZE', height });
+      }
+    };
+    const observer = new ResizeObserver(sync);
+    observer.observe(shell);
+    sync();
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const listener = (event: MessageEvent<{ pluginMessage?: ToUIMessage }>) => {
@@ -693,7 +716,7 @@ function App(): JSX.Element {
   const errorHelpLink = error ? getErrorHelpLink(error) : undefined;
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" ref={shellRef}>
       <style>{UI_STYLES}</style>
       <div className="app-body">
         <BridgeBar
