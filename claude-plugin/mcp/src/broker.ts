@@ -14,7 +14,7 @@
 // ignored by the detached spawn).
 
 import { appendFileSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -43,6 +43,17 @@ const BIND_HOSTS = ['127.0.0.1', '::1'];
 const HEARTBEAT_MS = 20000;
 const IDLE_MS = Number(process.env.DESIGNAGENT_BROKER_IDLE_MS ?? 60000);
 const LOG_FILE = join(tmpdir(), 'designagent-broker.log');
+const HOME = homedir();
+
+// A "real" project root: non-empty, not the unknown-root sentinel, and not the
+// user's home directory. A bridge whose root resolves to $HOME is almost always
+// a misconfigured/stray MCP server (e.g. one launched from $HOME with no
+// CLAUDE_PROJECT_DIR or git root) rather than a project the designer means to
+// work in. We compute this in the broker so it filters stale OLD-build servers
+// too — they never learn a new wire flag, but the broker can still spot them.
+function isUsableRoot(root: string): boolean {
+  return !!root && root !== '?' && root !== HOME;
+}
 
 function blog(...args: unknown[]): void {
   try {
@@ -76,12 +87,19 @@ export function runBroker(): void {
   }
 
   // The session that should receive reverse-channel (filesystem) ops: the one the
-  // plugin selected if it's still connected, else the newest. Pure read — no mutation.
+  // plugin selected if it's still connected, else the newest with a real project
+  // root, else the newest of anything. Preferring a real root keeps ops (and the
+  // plugin's pairing) off home-dir/rootless stray servers. Pure read — no mutation.
   function routeTarget(): ServerClient | null {
     if (selectedSessionId) {
       const picked = servers.find((s) => s.sessionId === selectedSessionId);
       if (picked) {
         return picked;
+      }
+    }
+    for (let i = servers.length - 1; i >= 0; i--) {
+      if (isUsableRoot(servers[i]!.root)) {
+        return servers[i]!;
       }
     }
     return activeServer();
@@ -102,7 +120,11 @@ export function runBroker(): void {
   // broker. Re-acking on active-session change makes the plugin re-pair and drop
   // stale requests (its existing instance-change logic).
   function ackPlugin(): void {
-    const active = activeServer();
+    // Pair the plugin to the *effective* target (selected → newest real root →
+    // newest), not whichever server happens to be newest. Otherwise a churn of
+    // stray home-dir servers keeps changing serverInstanceId, which makes the
+    // plugin re-pair and drop requests on a loop (the connect/disconnect flap).
+    const active = routeTarget();
     if (!plugin || !active) {
       return;
     }
@@ -110,14 +132,26 @@ export function runBroker(): void {
   }
 
   // Tell the plugin which projects are connected and which is the effective target.
+  // We only surface *real* project roots, collapsed to one entry per root (the
+  // newest registration for that root wins). This hides the home-dir/rootless
+  // stray servers and the duplicates that pile up when an editor respawns a
+  // server (or keeps stale ones alive), so the picker shows the projects a
+  // designer actually means to choose between — not a wall of ghosts.
   function broadcastSessions(): void {
     if (!plugin) {
       return;
     }
     const target = routeTarget();
+    const byRoot = new Map<string, ServerClient>();
+    for (const s of servers) {
+      if (!isUsableRoot(s.root)) {
+        continue;
+      }
+      byRoot.set(s.root, s); // registration order → newer overwrites older
+    }
     send(plugin, {
       type: 'sessions',
-      sessions: servers.map((s) => ({
+      sessions: [...byRoot.values()].map((s) => ({
         id: s.sessionId,
         label: s.label,
         root: s.root,

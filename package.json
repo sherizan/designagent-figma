@@ -1,6 +1,6 @@
 {
   "name": "designagent-figma-plugin",
-  "version": "0.14.13",
+  "version": "0.14.15",
   "private": true,
   "description": "DesignAgent Figma plugin MVP",
   "scripts": {

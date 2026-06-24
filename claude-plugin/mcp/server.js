@@ -24813,6 +24813,10 @@ var BIND_HOSTS = ["127.0.0.1", "::1"];
 var HEARTBEAT_MS = 2e4;
 var IDLE_MS = Number(process.env.DESIGNAGENT_BROKER_IDLE_MS ?? 6e4);
 var LOG_FILE = (0, import_node_path.join)((0, import_node_os.tmpdir)(), "designagent-broker.log");
+var HOME = (0, import_node_os.homedir)();
+function isUsableRoot(root) {
+  return !!root && root !== "?" && root !== HOME;
+}
 function blog(...args) {
   try {
     (0, import_node_fs.appendFileSync)(LOG_FILE, `[broker ${(/* @__PURE__ */ new Date()).toISOString()}] ${args.join(" ")}
@@ -24838,6 +24842,11 @@ function runBroker() {
         return picked;
       }
     }
+    for (let i = servers.length - 1; i >= 0; i--) {
+      if (isUsableRoot(servers[i].root)) {
+        return servers[i];
+      }
+    }
     return activeServer();
   }
   function send(socket, payload) {
@@ -24849,7 +24858,7 @@ function runBroker() {
     }
   }
   function ackPlugin() {
-    const active = activeServer();
+    const active = routeTarget();
     if (!plugin || !active) {
       return;
     }
@@ -24860,9 +24869,16 @@ function runBroker() {
       return;
     }
     const target = routeTarget();
+    const byRoot = /* @__PURE__ */ new Map();
+    for (const s of servers) {
+      if (!isUsableRoot(s.root)) {
+        continue;
+      }
+      byRoot.set(s.root, s);
+    }
     send(plugin, {
       type: "sessions",
-      sessions: servers.map((s) => ({
+      sessions: [...byRoot.values()].map((s) => ({
         id: s.sessionId,
         label: s.label,
         root: s.root,

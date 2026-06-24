@@ -625,13 +625,13 @@ function App(): JSX.Element {
     }
   }
 
-  // Auto-skip the picker gate when there's exactly one project; reset when the
-  // bridge drops or all sessions leave.
+  // Reset the picker gate when the bridge drops or all sessions leave. We do NOT
+  // auto-confirm a single session: the gate already requires 2+ sessions, so a
+  // lone session never triggers it. Auto-confirming on 1 then stuck `true` when a
+  // 2nd session arrives (length 1→2) is what suppressed the gate — so only reset.
   useEffect(() => {
     if (bridgeStatus !== 'connected' || sessions.length === 0) {
       setProjectConfirmed(false);
-    } else if (sessions.length === 1) {
-      setProjectConfirmed(true);
     }
   }, [bridgeStatus, sessions.length]);
 
@@ -708,7 +708,7 @@ function App(): JSX.Element {
           <ProjectPicker variant="gate" sessions={sessions} onSelect={selectSession} />
         ) : (
           <>
-            {bridgeStatus === 'connected' && sessions.length >= 2 ? (
+            {bridgeStatus === 'connected' && sessions.length >= 1 ? (
               <ProjectPicker variant="compact" sessions={sessions} onSelect={selectSession} />
             ) : null}
 
@@ -724,9 +724,16 @@ function App(): JSX.Element {
             ) : null}
 
             {bridgeStatus === 'connected' ? (
-              <p className="bridge-explainer" style={{ marginTop: 6 }}>
-                Connected — ask Claude in your terminal to read or build in this file.
-              </p>
+              sessions.length === 0 ? (
+                <p className="bridge-explainer" style={{ marginTop: 6 }}>
+                  Connected, but no project folder is linked yet. Run Claude from inside
+                  your project directory so DesignAgent knows which folder to read &amp; write.
+                </p>
+              ) : (
+                <p className="bridge-explainer" style={{ marginTop: 6 }}>
+                  Connected — ask Claude in your terminal to read or build in this file.
+                </p>
+              )
             ) : null}
 
             {SHOW_MAIN_TABS ? (
