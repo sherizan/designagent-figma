@@ -2306,6 +2306,13 @@ figma.ui.onmessage = (message: ToPluginMessage) => {
     return;
   }
 
+  if (message.type === 'RESIZE') {
+    // Follow the panel's content height (clamped) so the window stays compact.
+    const height = Math.max(120, Math.min(720, Math.round(message.height)));
+    figma.ui.resize(PANEL_SIZE.width, height);
+    return;
+  }
+
   if (message.type === 'SET_MODE') {
     activeMode = message.mode;
     void computeAndPostAnalysis();
