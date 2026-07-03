@@ -641,6 +641,78 @@ server.registerResource(
   async (uri) => resourceText(uri, 'status')
 );
 
+// --- MCP prompts: reusable design workflows, surfaced as /mcp__designagent__<name>. ---
+// A prompt seeds the conversation with instructions; Claude then drives the bridge tools.
+server.registerPrompt(
+  'analyze_selection',
+  {
+    title: 'Analyze the current Figma selection',
+    description:
+      'Review the current selection against its own design system: token coverage, layout, component reuse, and state completeness.',
+    argsSchema: {
+      aspect: z
+        .enum(['all', 'tokens', 'layout', 'components', 'states'])
+        .optional()
+        .describe("What to focus on (default 'all').")
+    }
+  },
+  ({ aspect }) => {
+    const focus = aspect ?? 'all';
+    const focusLine =
+      focus === 'all'
+        ? 'Cover token coverage, layout, component reuse, and state completeness.'
+        : `Focus specifically on: ${focus}.`;
+    return {
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: [
+              'Analyze the current DesignAgent (Figma) selection for design-system quality.',
+              '1. Read the selection with the `get_spec` tool (and `get_design_md` for the token frontmatter).',
+              '2. Assess against the design’s own system, reporting concrete findings tied to node names/ids:',
+              '   - Tokens: hardcoded/raw values that should reference a resolved variable (see `export_tokens`).',
+              '   - Layout: manual absolute positioning where Auto Layout is intended.',
+              '   - Components: repeated structures that should be a component/instance.',
+              '   - States: for screens, whether empty/loading/error variants are evidenced.',
+              `3. ${focusLine}`,
+              'Report each finding with severity and a specific remediation. Do not invent values — flag gaps as TODOs.'
+            ].join('\n')
+          }
+        }
+      ]
+    };
+  }
+);
+
+server.registerPrompt(
+  'suggest_component',
+  {
+    title: 'Suggest a component for the selection',
+    description:
+      'Given the current selection, suggest a matching component from the design system (or how to compose one).',
+    argsSchema: {}
+  },
+  () => ({
+    messages: [
+      {
+        role: 'user',
+        content: {
+          type: 'text',
+          text: [
+            'Look at the current DesignAgent (Figma) selection and suggest how to make it a reusable component.',
+            '1. Read it with `get_spec`; note its structure, variants implied by the content, and any bound tokens.',
+            '2. If it resembles an existing component, name it and explain how to swap to an instance (`instantiate_component`).',
+            '3. Otherwise, propose a component definition: props/variants, which values should be token-bound, and the Auto Layout structure.',
+            'Keep the suggestion faithful to the design’s existing system; do not introduce new tokens or patterns not evidenced in the selection.'
+          ].join('\n')
+        }
+      }
+    ]
+  })
+);
+
 server.registerTool(
   'list_page_nodes',
   {
