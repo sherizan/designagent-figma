@@ -1,0 +1,13 @@
+{
+  "name": "designreview",
+  "version": "0.1.0",
+  "description": "AI design review for Claude Code — connects PRD, research, Figma, and analytics to review design intent (not pixels) and surface gaps before handoff or launch. Reads and annotates Figma through the DesignAgent bridge. Run /new, /review, /annotate.",
+  "author": {
+    "name": "Sherizan Sheikh",
+    "url": "https://github.com/sherizan"
+  },
+  "homepage": "https://designagent.dev/plugins/designreview",
+  "repository": "https://github.com/sherizan/designagent-figma",
+  "license": "MIT",
+  "keywords": ["design-review", "ux", "critique", "qa", "figma", "prd", "designagent"]
+}

@@ -5,7 +5,7 @@
     "url": "https://github.com/sherizan"
   },
   "metadata": {
-    "description": "DesignAgent — build production UI from Figma DESIGN.md specs with Claude Code.",
+    "description": "DesignAgent — build and review Figma designs with Claude Code.",
     "version": "0.1.0"
   },
   "plugins": [
@@ -15,6 +15,13 @@
       "description": "Claude Code's live bridge to Figma: read, build, and edit the canvas in real time, and exchange a design-system-faithful DESIGN.md spec to build production UI from. Includes the design-to-code skill and the designagent MCP server.",
       "version": "0.14.16",
       "keywords": ["figma", "design-to-code", "design-system", "ui", "codegen"]
+    },
+    {
+      "name": "designreview",
+      "source": "./designreview",
+      "description": "AI design review inside Claude Code — reviews design intent, not pixels. Connects PRD, research, Figma, and analytics to surface gaps before handoff or launch. Reads and annotates Figma through the DesignAgent bridge. Run /new, /review, /annotate.",
+      "version": "0.1.0",
+      "keywords": ["design-review", "ux", "critique", "qa", "figma", "prd"]
     }
   ]
 }
