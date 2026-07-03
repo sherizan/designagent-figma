@@ -33,7 +33,7 @@ to build production UI from it the design-system-faithful way.
 ## `html_to_design` — supported CSS subset (current fidelity)
 
 `html_to_design` is powerful but has a known fidelity envelope. Staying inside it avoids silent
-re-renders (these are being addressed — see `docs/DESIGNAGENT-EVALUATION.md`):
+re-renders:
 
 - **Reliable:** vertical flex columns; solid fills, `border`, `border-radius`, `box-shadow`;
   fixed-width rows with a few px of trailing slack; Google fonts.
