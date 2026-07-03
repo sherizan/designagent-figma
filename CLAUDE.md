@@ -62,16 +62,19 @@ lives in the sandbox (`src/code.ts`) and is exposed to Claude by the MCP server 
 
 ## Versioning
 
-Four version strings, **all bumped together** (keep them identical to avoid the Figma plugin
+Three version strings, **all bumped together** (keep them identical to avoid the Figma plugin
 and the Claude plugin drifting apart):
 - Figma plugin version → `package.json` `version`
 - UI version tag → hardcoded in `src/ui_components.tsx` (the `version-tag` div in the footer)
 - Claude plugin bundle → `claude-plugin/.claude-plugin/plugin.json` `version`
-- Claude marketplace entry → `.claude-plugin/marketplace.json` `plugins[0].version`
-  (the top-level `metadata.version` there is the catalog's own version — leave it)
 
-The UI tag uses a `v1.x.y` form; the three JSON versions use `0.x.y` and should match each
-other. Even when a change only touches one side, bump all four so installed versions stay in sync.
+The UI tag uses a `v1.x.y` form; the two JSON versions use `0.x.y` and should match each
+other. Even when a change only touches one side, bump all three so installed versions stay in sync.
+
+This repo is **not** a marketplace — the canonical marketplace lives in the `sherizan/designagent`
+(website) repo, which pins this plugin to a released tag. After bumping the version here, tag the
+release (`git tag vX.Y.Z && git push origin vX.Y.Z`) and bump the pin in the website repo's
+`.claude-plugin/marketplace.json` (see that repo's `RELEASING.md`).
 
 ## Testing in Figma (designagent MCP bridge)
 

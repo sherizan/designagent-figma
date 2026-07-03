@@ -20,7 +20,7 @@ Figma plugin: [DesignAgent — Claude bridge](https://www.figma.com/community/pl
 1. **Install the Figma plugin** from [Figma Community](https://www.figma.com/community/plugin/1604428052675393154/designagent-claude-bridge).
 2. **Install the Claude Code plugin:**
    ```bash
-   /plugin marketplace add sherizan/designagent-figma
+   /plugin marketplace add sherizan/designagent
    /plugin install designagent@designagent
    ```
 3. **Connect the bridge:** open the DesignAgent plugin in Figma and click **Start** on the Claude
