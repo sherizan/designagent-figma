@@ -558,6 +558,90 @@ server.registerTool(
 );
 
 server.registerTool(
+  'export_tokens',
+  {
+    description:
+      "Export the current selection's resolved Figma variables as a machine-readable token file. `format`: 'css' (CSS custom properties, all light/dark modes), 'dtcg' (Design Tokens W3C JSON, all modes preserved), 'tailwind' (tailwind.config.js theme.extend), or 'sass' (SCSS $variables). Tailwind/Sass use the default mode; CSS/DTCG carry every mode. Returns the file contents as text.",
+    inputSchema: {
+      format: z
+        .enum(['css', 'tailwind', 'sass', 'dtcg'])
+        .optional()
+        .describe("Token output format (default 'css').")
+    }
+  },
+  async ({ format }) => {
+    try {
+      const result = (await callPlugin('export_tokens', { format: format ?? 'css' })) as {
+        content?: string;
+      };
+      return ok(result?.content ?? result);
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+// --- MCP resources: let Claude read live Figma state without spending a tool call. ---
+// Each read forwards to the plugin over the broker; if the bridge is down we return a
+// readable note in the contents rather than throwing (resources shouldn't hard-fail).
+async function resourceText(uri: URL, command: string, params: Record<string, unknown> = {}) {
+  try {
+    const value = await callPlugin(command, params);
+    const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      contents: [{ uri: uri.href, mimeType: 'text/plain', text: `Bridge unavailable: ${message}` }]
+    };
+  }
+}
+
+server.registerResource(
+  'current-selection',
+  'figma://current-selection',
+  {
+    title: 'Current Figma selection',
+    description: 'Structured UI spec (hierarchy, tokens, layout, text, components) of what is selected now.',
+    mimeType: 'application/json'
+  },
+  async (uri) => resourceText(uri, 'get_spec')
+);
+
+server.registerResource(
+  'design-tokens',
+  'figma://design-tokens',
+  {
+    title: 'Design tokens (DTCG)',
+    description: "The selection's resolved Figma variables as W3C Design Tokens JSON, all modes preserved.",
+    mimeType: 'application/json'
+  },
+  async (uri) => {
+    try {
+      const result = (await callPlugin('export_tokens', { format: 'dtcg' })) as { content?: string };
+      const text = result?.content ?? JSON.stringify(result, null, 2);
+      return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        contents: [{ uri: uri.href, mimeType: 'text/plain', text: `Bridge unavailable: ${message}` }]
+      };
+    }
+  }
+);
+
+server.registerResource(
+  'current-file',
+  'figma://current-file',
+  {
+    title: 'Current Figma file',
+    description: 'Bridge status: connected file name, current page, and selection summary.',
+    mimeType: 'application/json'
+  },
+  async (uri) => resourceText(uri, 'status')
+);
+
+server.registerTool(
   'list_page_nodes',
   {
     description:
