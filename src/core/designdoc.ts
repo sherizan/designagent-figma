@@ -463,6 +463,16 @@ function emitFrontmatter(
 function describeLayout(uiSpec: UiSpec): string | null {
   const layout = uiSpec.root.layout;
   if (!layout || !layout.layoutMode || layout.layoutMode === 'NONE') return null;
+  if (layout.layoutMode === 'GRID') {
+    const cols = layout.gridColumnCount ?? '?';
+    const rows = layout.gridRowCount ?? '?';
+    const parts = [`grid layout, ${cols} cols × ${rows} rows`];
+    const gaps: string[] = [];
+    if (typeof layout.gridColumnGap === 'number') gaps.push(`col ${layout.gridColumnGap}`);
+    if (typeof layout.gridRowGap === 'number') gaps.push(`row ${layout.gridRowGap}`);
+    if (gaps.length) parts.push(`gap ${gaps.join('/')}`);
+    return parts.join(', ');
+  }
   const direction = layout.layoutMode === 'HORIZONTAL' ? 'horizontal' : 'vertical';
   const parts = [`${direction} auto-layout`];
   if (typeof layout.itemSpacing === 'number') parts.push(`gap ${layout.itemSpacing}`);
@@ -545,10 +555,15 @@ export function generateDesignDoc(frames: DesignDocFrame[], meta: DesignDocMeta)
   );
 
   out.push('## Elevation & Depth');
-  out.push(
+  const elevation =
     shadows.length > 0
       ? `Shadows in use:\n${shadows.slice(0, 6).map((s) => `- \`${s}\``).join('\n')}`
-      : 'Flat — no drop shadows detected. Use borders and surface contrast for depth.'
+      : 'Flat — no drop shadows detected. Use borders and surface contrast for depth.';
+  const shaderCount = nodes.reduce((n, node) => n + (node.visual?.shaders?.length ?? 0), 0);
+  out.push(
+    shaderCount > 0
+      ? `${elevation}\n\n${shaderCount} shader ${shaderCount === 1 ? 'effect is' : 'effects are'} applied in the design (Figma shaders — descriptive only, not reproducible from this spec).`
+      : elevation
   );
 
   out.push('## Shapes');
@@ -561,6 +576,19 @@ export function generateDesignDoc(frames: DesignDocFrame[], meta: DesignDocMeta)
   if (components.length > 0) {
     out.push('## Components');
     out.push(components.map((c) => `- \`${c.key}\``).join('\n'));
+  }
+
+  const animations = nodes.flatMap((n) => n.animations ?? []);
+  if (animations.length > 0) {
+    out.push('## Motion');
+    const byName = new Map<string, number>();
+    for (const a of animations) byName.set(a.name, (byName.get(a.name) ?? 0) + 1);
+    const lines = [...byName.entries()].map(
+      ([name, count]) => `- \`${name}\`${count > 1 ? ` ×${count}` : ''}`
+    );
+    out.push(
+      `Figma Motion animation styles applied in the design (Beta — descriptive only, not re-applied on import):\n${lines.join('\n')}`
+    );
   }
 
   out.push("## Do's and Don'ts");

@@ -1548,6 +1548,60 @@ function buildDropShadow(params: Record<string, unknown>): DropShadowEffect {
   };
 }
 
+// Apply native Figma grid layout (Update 126) to a frame-like node.
+// gridAutoTracks defaults to 'NONE', so setting the counts directly is safe; we still
+// guard the assignment in case a track is being managed automatically.
+function applyGridLayout(frame: FrameNode, params: Record<string, unknown>): void {
+  frame.layoutMode = 'GRID';
+  try {
+    if (params.columns != null) {
+      frame.gridColumnCount = Math.max(1, Math.round(toNumber(params.columns, 1)));
+    }
+    if (params.rows != null) {
+      frame.gridRowCount = Math.max(1, Math.round(toNumber(params.rows, 1)));
+    }
+  } catch (error) {
+    throw new Error(
+      `Could not set grid track counts: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (params.columnGap != null) {
+    frame.gridColumnGap = toNumber(params.columnGap, 0);
+  }
+  if (params.rowGap != null) {
+    frame.gridRowGap = toNumber(params.rowGap, 0);
+  }
+}
+
+// Resolve a shader by id, importing it into the file if needed (mirrors loadFontAsync).
+async function resolveShader(shaderId: string): Promise<Shader> {
+  if (!shaderId) {
+    throw new Error('A shaderId is required. Call list_shaders to discover available shaders.');
+  }
+  const available = await figma.listAvailableShaders();
+  const match = available.find((s) => s.id === shaderId);
+  if (!match) {
+    throw new Error(`Shader ${shaderId} not found. Call list_shaders for valid ids.`);
+  }
+  if (match.imported) {
+    return match;
+  }
+  try {
+    return await figma.importShaderById(shaderId);
+  } catch (error) {
+    throw new Error(
+      `Could not import shader ${shaderId}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+function shaderProperties(input: unknown): { [defId: string]: ShaderPropertyValue } | undefined {
+  if (!input || typeof input !== 'object') {
+    return undefined;
+  }
+  return input as { [defId: string]: ShaderPropertyValue };
+}
+
 async function resolveParentContainer(parentId: unknown): Promise<BaseNode & ChildrenMixin> {
   if (parentId) {
     const parent = await figma.getNodeByIdAsync(String(parentId));
@@ -1813,6 +1867,8 @@ async function runBridgeCommand(
           frame.paddingBottom = pad;
           frame.paddingLeft = pad;
         }
+      } else if (layoutMode === 'GRID') {
+        applyGridLayout(frame, params);
       }
       if (params.fill != null) {
         frame.fills = [solidPaint(params.fill)];
@@ -2144,6 +2200,113 @@ async function runBridgeCommand(
         placeOnPage(instance, params.x, params.y);
       }
       return selectAndReturn(instance);
+    }
+    case 'set_grid': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('layoutMode' in node)) {
+        throw new Error('set_grid requires a frame, component, or instance node.');
+      }
+      applyGridLayout(node as FrameNode, params);
+      return { id: node.id, name: node.name };
+    }
+    case 'list_shaders': {
+      const shaders = await figma.listAvailableShaders();
+      return {
+        shaders: shaders.map((s) => ({
+          id: s.id,
+          name: s.name,
+          type: s.type,
+          imported: s.imported
+        }))
+      };
+    }
+    case 'set_shader': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node)) {
+        throw new Error('set_shader requires a scene node.');
+      }
+      const shader = await resolveShader(String(params.shaderId ?? ''));
+      const properties = shaderProperties(params.properties);
+      const target = String(params.target ?? (shader.type === 'effect' ? 'effect' : 'fill'));
+      if (target === 'effect') {
+        if (!('effects' in node)) {
+          throw new Error('This node does not support effects.');
+        }
+        const effect: ShaderEffect = { type: 'SHADER', visible: true, id: shader.id, properties };
+        (node as BlendMixin).effects = [effect];
+      } else if (target === 'stroke') {
+        if (!('strokes' in node)) {
+          throw new Error('This node does not support strokes.');
+        }
+        const paint: ShaderPaint = { type: 'SHADER', id: shader.id, properties };
+        (node as GeometryMixin).strokes = [paint];
+      } else {
+        if (!('fills' in node)) {
+          throw new Error('This node does not support fills.');
+        }
+        const paint: ShaderPaint = { type: 'SHADER', id: shader.id, properties };
+        (node as GeometryMixin).fills = [paint];
+      }
+      return { id: node.id, name: node.name, shaderId: shader.id, target };
+    }
+    case 'list_animation_styles': {
+      const styles = figma.motion.figmaAnimationStyles();
+      return {
+        styles: styles.map((s) => ({
+          styleId: s.styleId,
+          name: s.name,
+          description: s.description ?? null
+        }))
+      };
+    }
+    case 'apply_animation': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node)) {
+        throw new Error('apply_animation requires a scene node.');
+      }
+      const styleId = String(params.styleId ?? '');
+      if (!styleId) {
+        throw new Error('apply_animation requires a styleId. Call list_animation_styles.');
+      }
+      const config: { duration?: number; timelineOffset?: number; props?: Record<string, unknown> } = {};
+      if (params.duration != null) {
+        config.duration = toNumber(params.duration, 0.3);
+      }
+      if (params.timelineOffset != null) {
+        config.timelineOffset = toNumber(params.timelineOffset, 0);
+      }
+      if (params.props && typeof params.props === 'object') {
+        config.props = params.props as Record<string, unknown>;
+      }
+      const appliedId = node.applyAnimationStyle(styleId, config as AnimationStyleConfiguration);
+      return { id: node.id, name: node.name, appliedId };
+    }
+    case 'remove_animation': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node)) {
+        throw new Error('remove_animation requires a scene node.');
+      }
+      const appliedId = String(params.appliedId ?? '');
+      if (!appliedId) {
+        throw new Error('remove_animation requires the appliedId returned by apply_animation.');
+      }
+      node.removeAnimationStyle(appliedId);
+      return { id: node.id, name: node.name, removed: appliedId };
+    }
+    case 'get_animations': {
+      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      if (!isSceneNode(node)) {
+        throw new Error('get_animations requires a scene node.');
+      }
+      return {
+        animations: node.animationStyles.map((a) => ({
+          id: a.id,
+          styleId: a.styleId,
+          name: a.name,
+          duration: a.duration ?? null,
+          props: a.props ?? null
+        }))
+      };
     }
     case 'batch': {
       const ops = Array.isArray(params.operations) ? params.operations : [];

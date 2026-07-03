@@ -12,10 +12,30 @@ export interface LayoutSummary {
   paddingBottom?: number;
   paddingLeft?: number;
   layoutPositioning?: string;
+  // Native Figma grid layout (layoutMode === 'GRID'), captured for round-trip.
+  gridRowCount?: number;
+  gridColumnCount?: number;
+  gridRowGap?: number;
+  gridColumnGap?: number;
   constraints?: {
     horizontal?: string;
     vertical?: string;
   };
+}
+
+// A shader applied to a node's fill, stroke, or effect. Captured for the spec to
+// describe; not parsed back to re-apply (shader ids are file-specific).
+export interface ShaderSummary {
+  surface: 'fill' | 'stroke' | 'effect';
+  shaderId: string;
+}
+
+// A Figma Motion animation style applied to a node (Beta). Descriptive only —
+// applied-style ids are file-specific and not parsed back.
+export interface AnimationSummary {
+  name: string;
+  styleId?: string;
+  duration?: number;
 }
 
 export interface VisualSummary {
@@ -25,6 +45,7 @@ export interface VisualSummary {
   strokeColor?: string;
   cornerRadius: number | 'mixed' | 'undefined';
   effects: 'none' | 'shadow' | 'blur' | 'mixed';
+  shaders?: ShaderSummary[];
 }
 
 export interface TextSummary {
@@ -80,6 +101,7 @@ export interface UiNodeSpec {
   css?: Record<string, string>;
   annotations?: AnnotationEntry[];
   devStatus?: 'READY_FOR_DEV' | 'COMPLETED' | 'NONE';
+  animations?: AnimationSummary[];
   children: UiNodeSpec[];
 }
 
