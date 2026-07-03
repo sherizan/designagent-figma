@@ -88,7 +88,10 @@ function exportTailwind(vars: ResolvedVariable[]): string {
     (groups[group] ??= {})[key] = val;
   }
   const theme = { theme: { extend: groups } };
-  return '/** @type {import("tailwindcss").Config} */\nmodule.exports = ' + JSON.stringify(theme, null, 2) + ';\n';
+  // ponytail: plain comment, NOT the `@type {import('tailwindcss').Config}` JSDoc — Figma's plugin
+  // sandbox rejects any literal `import(` in the bundled code, even inside a string. Not worth an
+  // anti-constant-folding hack for editor autocomplete.
+  return '// tailwind.config.js — design tokens exported from Figma by DesignAgent\nmodule.exports = ' + JSON.stringify(theme, null, 2) + ';\n';
 }
 
 function dtcgType(resolvedType: string): string {
@@ -167,6 +170,7 @@ export function demo(): void {
   assert(sass.includes('$spacing-md: 16;'), 'sass float');
   const tw = exportTokens(vars, 'tailwind');
   assert(tw.includes('module.exports') && /"color"[\s\S]*"brand-primary": "#d97757"/.test(tw), 'tailwind grouped');
+  assert(!tw.includes('import('), 'no literal import( — Figma sandbox rejects it in the bundle');
   const dtcg = JSON.parse(exportTokens(vars, 'dtcg'));
   assert(dtcg.color.brand.primary.$type === 'color', 'dtcg $type');
   assert(dtcg.color.brand.primary.$value === '#d97757', 'dtcg $value default mode');
