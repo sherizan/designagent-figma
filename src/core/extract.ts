@@ -1,7 +1,9 @@
 import type {
+  AnimationSummary,
   AnnotationEntry,
   LayoutSummary,
   ResolvedVariable,
+  ShaderSummary,
   TextSummary,
   TokenHints,
   UiNodeSpec,
@@ -194,6 +196,13 @@ function extractLayout(node: SceneNode): LayoutSummary | undefined {
     layout.paddingBottom = node.paddingBottom;
     layout.paddingLeft = node.paddingLeft;
     hasAny = true;
+
+    if (node.layoutMode === 'GRID' && 'gridRowCount' in node) {
+      layout.gridRowCount = node.gridRowCount;
+      layout.gridColumnCount = node.gridColumnCount;
+      layout.gridRowGap = node.gridRowGap;
+      layout.gridColumnGap = node.gridColumnGap;
+    }
   }
 
   if ('layoutPositioning' in node) {
@@ -409,6 +418,53 @@ function shouldIgnoreForTokenScoring(node: SceneNode): boolean {
   return !node.visible || GHOST_NAME_PATTERN.test(node.name);
 }
 
+// Capture shaders (Figma API Update 127) applied to fills/strokes/effects so the
+// spec can describe them. Not parsed back — shader ids are file-specific.
+function summarizeShaders(node: SceneNode): ShaderSummary[] | undefined {
+  const shaders: ShaderSummary[] = [];
+  const scanPaints = (paints: unknown, surface: 'fill' | 'stroke'): void => {
+    if (!Array.isArray(paints)) {
+      return;
+    }
+    for (const paint of paints as ReadonlyArray<Paint>) {
+      if (paint.type === 'SHADER') {
+        shaders.push({ surface, shaderId: paint.id });
+      }
+    }
+  };
+  if ('fills' in node && !isMixed(node.fills)) {
+    scanPaints(node.fills, 'fill');
+  }
+  if ('strokes' in node && !isMixed(node.strokes)) {
+    scanPaints(node.strokes, 'stroke');
+  }
+  if ('effects' in node && !isMixed(node.effects)) {
+    for (const effect of node.effects) {
+      if (effect.type === 'SHADER') {
+        shaders.push({ surface: 'effect', shaderId: effect.id });
+      }
+    }
+  }
+  return shaders.length > 0 ? shaders : undefined;
+}
+
+// Capture applied Figma Motion animation styles (Beta, Update 127). Descriptive only.
+function summarizeAnimations(node: SceneNode): AnimationSummary[] | undefined {
+  if (!('animationStyles' in node)) {
+    return undefined;
+  }
+  try {
+    const applied = node.animationStyles;
+    if (!applied || applied.length === 0) {
+      return undefined;
+    }
+    return applied.map((a) => ({ name: a.name, styleId: a.styleId, duration: a.duration }));
+  } catch {
+    // Motion is Beta; reading may fail on clients without it enabled.
+    return undefined;
+  }
+}
+
 function extractVisualSummary(node: SceneNode): VisualSummary | undefined {
   if (!('fills' in node || 'strokes' in node || 'effects' in node || 'cornerRadius' in node)) {
     return undefined;
@@ -420,6 +476,10 @@ function extractVisualSummary(node: SceneNode): VisualSummary | undefined {
     cornerRadius: summarizeCornerRadius(node),
     effects: 'effects' in node ? summarizeEffects(node.effects) : 'none'
   };
+  const shaders = summarizeShaders(node);
+  if (shaders) {
+    summary.shaders = shaders;
+  }
   if ('fills' in node) {
     const hexes = paintHexes(node.fills);
     if (hexes.length > 0) {
@@ -509,6 +569,11 @@ function extractNode(node: SceneNode, stats: MutableStats): UiNodeSpec {
   const instance = extractInstanceSummary(node);
   if (instance) {
     spec.instance = instance;
+  }
+
+  const animations = summarizeAnimations(node);
+  if (animations) {
+    spec.animations = animations;
   }
 
   if ('children' in node) {

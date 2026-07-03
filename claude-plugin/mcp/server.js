@@ -25616,9 +25616,13 @@ server.registerTool(
       y: external_exports.number().optional(),
       width: external_exports.number().optional(),
       height: external_exports.number().optional(),
-      layoutMode: external_exports.enum(["NONE", "HORIZONTAL", "VERTICAL"]).optional(),
+      layoutMode: external_exports.enum(["NONE", "HORIZONTAL", "VERTICAL", "GRID"]).optional(),
       itemSpacing: external_exports.number().optional().describe("Gap between children when Auto Layout is on."),
       padding: external_exports.number().optional().describe("Uniform padding (all sides) when Auto Layout is on."),
+      rows: external_exports.number().optional().describe("Grid row count (only when layoutMode is GRID)."),
+      columns: external_exports.number().optional().describe("Grid column count (only when layoutMode is GRID)."),
+      rowGap: external_exports.number().optional().describe("Gap between grid rows (only when layoutMode is GRID)."),
+      columnGap: external_exports.number().optional().describe("Gap between grid columns (only when layoutMode is GRID)."),
       fill: COLOR.optional(),
       cornerRadius: external_exports.number().optional(),
       stroke: COLOR.optional().describe("Border color."),
@@ -25809,6 +25813,82 @@ server.registerTool(
       return fail(error2);
     }
   }
+);
+server.registerTool(
+  "set_grid",
+  {
+    description: "Turn an existing frame/component into a native Figma grid layout (or update its grid). Children flow into the grid automatically.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      rows: external_exports.number().optional().describe("Number of grid rows."),
+      columns: external_exports.number().optional().describe("Number of grid columns."),
+      rowGap: external_exports.number().optional().describe("Gap between rows in px."),
+      columnGap: external_exports.number().optional().describe("Gap between columns in px.")
+    }
+  },
+  async (args) => run("set_grid", args)
+);
+server.registerTool(
+  "list_shaders",
+  {
+    description: "List shaders available to the current file (in-file, subscribed libraries, and owned). Returns an empty list when none exist. Use a returned id with set_shader.",
+    inputSchema: {}
+  },
+  async () => run("list_shaders")
+);
+server.registerTool(
+  "set_shader",
+  {
+    description: "Apply a shader (from list_shaders) to a node as a fill, stroke, or effect. The shader is imported automatically if needed.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      shaderId: external_exports.string().describe("Shader id from list_shaders."),
+      target: external_exports.enum(["fill", "stroke", "effect"]).optional().describe("Where to apply it; defaults to the shader's native surface (fill or effect)."),
+      properties: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Optional property assignments keyed by the shader's property-definition ids.")
+    }
+  },
+  async (args) => run("set_shader", args)
+);
+server.registerTool(
+  "list_animation_styles",
+  {
+    description: "(Beta) List the Figma Motion animation styles available in the current document. Use a returned styleId with apply_animation.",
+    inputSchema: {}
+  },
+  async () => run("list_animation_styles")
+);
+server.registerTool(
+  "apply_animation",
+  {
+    description: "(Beta \u2014 Figma Motion) Apply an animation style to a node. Returns an appliedId you can pass to remove_animation.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      styleId: external_exports.string().describe("Animation style id from list_animation_styles."),
+      duration: external_exports.number().optional().describe("Duration in seconds."),
+      timelineOffset: external_exports.number().optional().describe("Timeline offset in seconds."),
+      properties: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Style-specific configuration props (e.g. direction, distance).")
+    }
+  },
+  async ({ nodeId, styleId, duration: duration3, timelineOffset, properties }) => run("apply_animation", { nodeId, styleId, duration: duration3, timelineOffset, props: properties })
+);
+server.registerTool(
+  "remove_animation",
+  {
+    description: "(Beta \u2014 Figma Motion) Remove an applied animation style from a node.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      appliedId: external_exports.string().describe("The appliedId returned by apply_animation (or from get_animations).")
+    }
+  },
+  async (args) => run("remove_animation", args)
+);
+server.registerTool(
+  "get_animations",
+  {
+    description: "(Beta \u2014 Figma Motion) Read the animation styles currently applied to a node.",
+    inputSchema: { nodeId: external_exports.string() }
+  },
+  async (args) => run("get_animations", args)
 );
 server.registerTool(
   "move",

@@ -629,9 +629,13 @@ server.registerTool(
       y: z.number().optional(),
       width: z.number().optional(),
       height: z.number().optional(),
-      layoutMode: z.enum(['NONE', 'HORIZONTAL', 'VERTICAL']).optional(),
+      layoutMode: z.enum(['NONE', 'HORIZONTAL', 'VERTICAL', 'GRID']).optional(),
       itemSpacing: z.number().optional().describe('Gap between children when Auto Layout is on.'),
       padding: z.number().optional().describe('Uniform padding (all sides) when Auto Layout is on.'),
+      rows: z.number().optional().describe('Grid row count (only when layoutMode is GRID).'),
+      columns: z.number().optional().describe('Grid column count (only when layoutMode is GRID).'),
+      rowGap: z.number().optional().describe('Gap between grid rows (only when layoutMode is GRID).'),
+      columnGap: z.number().optional().describe('Gap between grid columns (only when layoutMode is GRID).'),
       fill: COLOR.optional(),
       cornerRadius: z.number().optional(),
       stroke: COLOR.optional().describe('Border color.'),
@@ -843,6 +847,110 @@ server.registerTool(
       return fail(error);
     }
   }
+);
+
+// ---- Grid layout (Figma API Update 126) ----
+
+server.registerTool(
+  'set_grid',
+  {
+    description:
+      'Turn an existing frame/component into a native Figma grid layout (or update its grid). Children flow into the grid automatically.',
+    inputSchema: {
+      nodeId: z.string(),
+      rows: z.number().optional().describe('Number of grid rows.'),
+      columns: z.number().optional().describe('Number of grid columns.'),
+      rowGap: z.number().optional().describe('Gap between rows in px.'),
+      columnGap: z.number().optional().describe('Gap between columns in px.')
+    }
+  },
+  async (args) => run('set_grid', args as Record<string, unknown>)
+);
+
+// ---- Shaders (Figma API Update 127) ----
+
+server.registerTool(
+  'list_shaders',
+  {
+    description:
+      'List shaders available to the current file (in-file, subscribed libraries, and owned). Returns an empty list when none exist. Use a returned id with set_shader.',
+    inputSchema: {}
+  },
+  async () => run('list_shaders')
+);
+
+server.registerTool(
+  'set_shader',
+  {
+    description:
+      'Apply a shader (from list_shaders) to a node as a fill, stroke, or effect. The shader is imported automatically if needed.',
+    inputSchema: {
+      nodeId: z.string(),
+      shaderId: z.string().describe('Shader id from list_shaders.'),
+      target: z
+        .enum(['fill', 'stroke', 'effect'])
+        .optional()
+        .describe("Where to apply it; defaults to the shader's native surface (fill or effect)."),
+      properties: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe('Optional property assignments keyed by the shader\'s property-definition ids.')
+    }
+  },
+  async (args) => run('set_shader', args as Record<string, unknown>)
+);
+
+// ---- Motion (Figma API Update 127, Beta — API may change) ----
+
+server.registerTool(
+  'list_animation_styles',
+  {
+    description:
+      '(Beta) List the Figma Motion animation styles available in the current document. Use a returned styleId with apply_animation.',
+    inputSchema: {}
+  },
+  async () => run('list_animation_styles')
+);
+
+server.registerTool(
+  'apply_animation',
+  {
+    description:
+      '(Beta — Figma Motion) Apply an animation style to a node. Returns an appliedId you can pass to remove_animation.',
+    inputSchema: {
+      nodeId: z.string(),
+      styleId: z.string().describe('Animation style id from list_animation_styles.'),
+      duration: z.number().optional().describe('Duration in seconds.'),
+      timelineOffset: z.number().optional().describe('Timeline offset in seconds.'),
+      properties: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe('Style-specific configuration props (e.g. direction, distance).')
+    }
+  },
+  async ({ nodeId, styleId, duration, timelineOffset, properties }) =>
+    run('apply_animation', { nodeId, styleId, duration, timelineOffset, props: properties })
+);
+
+server.registerTool(
+  'remove_animation',
+  {
+    description: '(Beta — Figma Motion) Remove an applied animation style from a node.',
+    inputSchema: {
+      nodeId: z.string(),
+      appliedId: z.string().describe('The appliedId returned by apply_animation (or from get_animations).')
+    }
+  },
+  async (args) => run('remove_animation', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'get_animations',
+  {
+    description: '(Beta — Figma Motion) Read the animation styles currently applied to a node.',
+    inputSchema: { nodeId: z.string() }
+  },
+  async (args) => run('get_animations', args as Record<string, unknown>)
 );
 
 // ---- Layout ops ----
