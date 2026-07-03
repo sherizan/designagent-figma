@@ -49,11 +49,11 @@ re-renders:
 In Claude Code, add the marketplace and install the plugin:
 
 ```bash
-/plugin marketplace add sherizan/designagent-figma
+/plugin marketplace add sherizan/designagent
 /plugin install designagent@designagent
 ```
 
-(`sherizan/designagent-figma` is the GitHub repo that hosts the marketplace;
+(`sherizan/designagent` is the GitHub repo that hosts the DesignAgent marketplace;
 `designagent@designagent` is the plugin `designagent` from the `designagent`
 marketplace.)
 

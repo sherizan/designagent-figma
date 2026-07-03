@@ -95,7 +95,7 @@ export function BridgeBar({
           <summary>Setup</summary>
           <ol className="bridge-steps">
             <li>
-              In Claude Code: <code>/plugin marketplace add sherizan/designagent-figma</code>
+              In Claude Code: <code>/plugin marketplace add sherizan/designagent</code>
             </li>
             <li>
               <code>/plugin install designagent@designagent</code>, then restart Claude Code.
@@ -507,7 +507,7 @@ export function EmptyState({ message }: EmptyStateProps): JSX.Element {
 export function Footer(): JSX.Element {
   return (
     <div className="panel-footer">
-      <span className="version-tag">v1.17.1</span> · Built by Sherizan ·{' '}
+      <span className="version-tag">v1.17.2</span> · Built by Sherizan ·{' '}
       <a href="https://www.designagent.dev" target="_blank" rel="noreferrer">
         DesignAgent.dev
       </a>
