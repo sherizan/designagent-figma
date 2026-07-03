@@ -25559,6 +25559,76 @@ server.registerTool(
   async () => run("get_spec")
 );
 server.registerTool(
+  "export_tokens",
+  {
+    description: "Export the current selection's resolved Figma variables as a machine-readable token file. `format`: 'css' (CSS custom properties, all light/dark modes), 'dtcg' (Design Tokens W3C JSON, all modes preserved), 'tailwind' (tailwind.config.js theme.extend), or 'sass' (SCSS $variables). Tailwind/Sass use the default mode; CSS/DTCG carry every mode. Returns the file contents as text.",
+    inputSchema: {
+      format: external_exports.enum(["css", "tailwind", "sass", "dtcg"]).optional().describe("Token output format (default 'css').")
+    }
+  },
+  async ({ format }) => {
+    try {
+      const result = await callPlugin("export_tokens", { format: format ?? "css" });
+      return ok(result?.content ?? result);
+    } catch (error2) {
+      return fail(error2);
+    }
+  }
+);
+async function resourceText(uri, command, params = {}) {
+  try {
+    const value = await callPlugin(command, params);
+    const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    return { contents: [{ uri: uri.href, mimeType: "application/json", text }] };
+  } catch (error2) {
+    const message = error2 instanceof Error ? error2.message : String(error2);
+    return {
+      contents: [{ uri: uri.href, mimeType: "text/plain", text: `Bridge unavailable: ${message}` }]
+    };
+  }
+}
+server.registerResource(
+  "current-selection",
+  "figma://current-selection",
+  {
+    title: "Current Figma selection",
+    description: "Structured UI spec (hierarchy, tokens, layout, text, components) of what is selected now.",
+    mimeType: "application/json"
+  },
+  async (uri) => resourceText(uri, "get_spec")
+);
+server.registerResource(
+  "design-tokens",
+  "figma://design-tokens",
+  {
+    title: "Design tokens (DTCG)",
+    description: "The selection's resolved Figma variables as W3C Design Tokens JSON, all modes preserved.",
+    mimeType: "application/json"
+  },
+  async (uri) => {
+    try {
+      const result = await callPlugin("export_tokens", { format: "dtcg" });
+      const text = result?.content ?? JSON.stringify(result, null, 2);
+      return { contents: [{ uri: uri.href, mimeType: "application/json", text }] };
+    } catch (error2) {
+      const message = error2 instanceof Error ? error2.message : String(error2);
+      return {
+        contents: [{ uri: uri.href, mimeType: "text/plain", text: `Bridge unavailable: ${message}` }]
+      };
+    }
+  }
+);
+server.registerResource(
+  "current-file",
+  "figma://current-file",
+  {
+    title: "Current Figma file",
+    description: "Bridge status: connected file name, current page, and selection summary.",
+    mimeType: "application/json"
+  },
+  async (uri) => resourceText(uri, "status")
+);
+server.registerTool(
   "list_page_nodes",
   {
     description: "List the current Figma page's top-level nodes (id, name, type, x, y, width, height). Use to find a frame by name/position \u2014 e.g. to recover and `delete`/`replaceId` an html_to_design frame whose earlier render is an orphan."

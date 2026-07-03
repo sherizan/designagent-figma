@@ -7,6 +7,7 @@ import { generateDesignDoc, type DesignDocFrame } from './core/designdoc';
 import { parseDesignMd } from './core/parsedesignmd';
 import { generateHtml, type HtmlNode } from './core/htmldoc';
 import { loadAnnotationCategories } from './core/extract';
+import { exportTokens, type TokenFormat } from './core/tokens';
 import type { DesignTreeNode, TextRun } from './shared/designtree';
 import { isScreenLikeNode } from './core/intent';
 import type { EmptyAnalysis, Mode } from './core/types';
@@ -1762,6 +1763,16 @@ async function runBridgeCommand(
     case 'get_spec': {
       const core = await analyzePrimaryForBridge();
       return { selectedNode: core.selectedNode, intent: core.intent, uiSpec: core.uiSpec };
+    }
+    case 'export_tokens': {
+      const allowed: TokenFormat[] = ['css', 'tailwind', 'sass', 'dtcg'];
+      const requested = String(params.format ?? 'css').toLowerCase();
+      const format = (allowed as string[]).includes(requested)
+        ? (requested as TokenFormat)
+        : 'css';
+      const core = await analyzePrimaryForBridge();
+      const vars = core.uiSpec.tokenization.resolvedVariables ?? [];
+      return { format, count: vars.length, content: exportTokens(vars, format) };
     }
     case 'list_page_nodes': {
       const nodes = figma.currentPage.children.map((child) => ({
