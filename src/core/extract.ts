@@ -523,6 +523,11 @@ function updateGlobalStats(node: SceneNode, stats: MutableStats, tokenHints: Tok
   stats.rawValueCandidates += tokenHints.rawValueHints;
 }
 
+// Raw vector-ish leaves (icon paths, boolean ops) aren't buildable as UI —
+// collapse them to name + bbox instead of shipping their full subtree
+// (PERF-REPORT: 30 of 121 nodes in a real frame were raw VECTORs).
+const VECTOR_LEAF_TYPES = new Set(['VECTOR', 'BOOLEAN_OPERATION', 'STAR', 'POLYGON', 'LINE']);
+
 function extractNode(node: SceneNode, stats: MutableStats): UiNodeSpec {
   const tokenHints: TokenHints = shouldIgnoreForTokenScoring(node)
     ? { styleRefs: 0, variableRefs: 0, rawValueHints: 0 }
@@ -538,7 +543,6 @@ function extractNode(node: SceneNode, stats: MutableStats): UiNodeSpec {
     id: node.id,
     name: node.name,
     type: node.type,
-    visible: node.visible,
     tokenHints,
     children: []
   };
@@ -576,8 +580,12 @@ function extractNode(node: SceneNode, stats: MutableStats): UiNodeSpec {
     spec.animations = animations;
   }
 
-  if ('children' in node) {
-    spec.children = node.children.map((child) => extractNode(child, stats));
+  if ('children' in node && !VECTOR_LEAF_TYPES.has(node.type)) {
+    // hidden subtrees aren't buildable UI — don't ship them (PERF-REPORT: 12
+    // of 121 nodes in a real frame were visible: false)
+    spec.children = node.children
+      .filter((child) => child.visible !== false)
+      .map((child) => extractNode(child, stats));
   }
 
   return spec;
@@ -1022,11 +1030,12 @@ export async function enrichUiSpec(
     }
 
     if ('children' in sceneNode) {
-      const sceneChildren = sceneNode.children;
-      for (let i = 0; i < specNode.children.length; i += 1) {
-        const childSpec = specNode.children[i];
-        const childScene = sceneChildren[i];
-        if (childSpec && childScene) {
+      // match by id, not index — extraction skips hidden/vector subtrees, so
+      // the spec children are a filtered subset of the scene children
+      const byId = new Map(sceneNode.children.map((child) => [child.id, child]));
+      for (const childSpec of specNode.children) {
+        const childScene = byId.get(childSpec.id);
+        if (childScene) {
           await walk(childSpec, childScene);
         }
       }

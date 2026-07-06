@@ -269,7 +269,9 @@ type ToolContent =
 type ToolResult = { content: ToolContent[]; isError?: boolean };
 
 function ok(value: unknown): ToolResult {
-  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  // Minified: 62% of a real get_spec payload was pretty-print whitespace,
+  // overflowing the tool-result limit and forcing a file+subagent detour.
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
   return { content: [{ type: 'text', text }] };
 }
 
@@ -587,7 +589,7 @@ server.registerTool(
 async function resourceText(uri: URL, command: string, params: Record<string, unknown> = {}) {
   try {
     const value = await callPlugin(command, params);
-    const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

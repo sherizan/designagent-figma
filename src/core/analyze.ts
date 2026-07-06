@@ -74,7 +74,9 @@ export async function analyzeNodeCoreAsync(
 ): Promise<AnalysisCore> {
   const core = analyzeNodeCore(node, options);
   const categories = options?.annotationCategories ?? (await loadAnnotationCategories());
-  await enrichUiSpec(core.uiSpec, node, { categories });
+  // PERF-REPORT: the per-node css block restates layout as CSS strings (~14%
+  // of a real get_spec payload) — keep it out of the analyze path.
+  await enrichUiSpec(core.uiSpec, node, { categories, maxNodesForCss: 0 });
   return core;
 }
 

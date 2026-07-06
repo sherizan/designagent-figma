@@ -25321,7 +25321,7 @@ function callPlugin(command, params = {}) {
 }
 var server = new McpServer({ name: "designagent", version: "0.1.0" });
 function ok(value) {
-  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  const text = typeof value === "string" ? value : JSON.stringify(value);
   return { content: [{ type: "text", text }] };
 }
 function okImage(base642, mimeType, caption) {
@@ -25578,7 +25578,7 @@ server.registerTool(
 async function resourceText(uri, command, params = {}) {
   try {
     const value = await callPlugin(command, params);
-    const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    const text = typeof value === "string" ? value : JSON.stringify(value);
     return { contents: [{ uri: uri.href, mimeType: "application/json", text }] };
   } catch (error2) {
     const message = error2 instanceof Error ? error2.message : String(error2);

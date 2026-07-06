@@ -90,7 +90,9 @@ export interface UiNodeSpec {
   id: string;
   name: string;
   type: string;
-  visible: boolean;
+  // omitted when true — hidden subtrees are stripped at extraction, so only
+  // the (rare) explicitly-false case would ever appear
+  visible?: boolean;
   width?: number;
   height?: number;
   layout?: LayoutSummary;
