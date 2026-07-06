@@ -15,7 +15,8 @@ import {
   type MainTab,
   MainTabs,
   ProjectPicker,
-  type SessionInfo
+  type SessionInfo,
+  UpdateBanner
 } from './ui_components';
 import type { DesignTreeNode } from './shared/designtree';
 import { UI_STYLES } from './ui_theme';
@@ -26,6 +27,19 @@ const BRIDGE_URL = 'ws://localhost:3790';
 // Tabs hidden for launch — the panel ships as the bridge + project-picker MVP.
 // WS2 reworks the connected UI; flip this to bring the tabs back.
 const SHOW_MAIN_TABS: boolean = false;
+
+// Numeric dot-segment compare. '' (pre-0.19 plugin) and garbage both read as older.
+function isOlderVersion(session: string, panel: string): boolean {
+  const a = session.split('.').map(Number);
+  const b = panel.split('.').map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (Number.isNaN(x)) return true;
+    if (x !== y) return x < y;
+  }
+  return false;
+}
 
 // Forward this iframe's console into the sandbox's log buffer so the console_logs
 // bridge tool sees UI logs alongside sandbox logs. Installed before anything else.
@@ -408,7 +422,8 @@ function App(): JSX.Element {
               id: String(s.id ?? ''),
               label: String(s.label ?? ''),
               root: String(s.root ?? ''),
-              selected: Boolean(s.selected)
+              selected: Boolean(s.selected),
+              pluginVersion: String(s.pluginVersion ?? '')
             }))
             .filter((s) => s.id);
           setSessions(list);
@@ -715,6 +730,12 @@ function App(): JSX.Element {
 
   const errorHelpLink = error ? getErrorHelpLink(error) : undefined;
 
+  const bannerSession = sessions.find((s) => s.selected) ?? sessions[0];
+  const showUpdateBanner =
+    bridgeStatus === 'connected' &&
+    !!bannerSession &&
+    isOlderVersion(bannerSession.pluginVersion, __PLUGIN_VERSION__);
+
   return (
     <div className="app-shell" ref={shellRef}>
       <style>{UI_STYLES}</style>
@@ -726,6 +747,10 @@ function App(): JSX.Element {
           onToggle={() => setBridgeEnabled((value) => !value)}
           onReconnect={() => forceReconnect.current?.()}
         />
+
+        {showUpdateBanner && bannerSession ? (
+          <UpdateBanner version={bannerSession.pluginVersion} />
+        ) : null}
 
         {bridgeStatus === 'connected' && sessions.length >= 2 && !projectConfirmed ? (
           <ProjectPicker variant="gate" sessions={sessions} onSelect={selectSession} />
