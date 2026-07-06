@@ -106,6 +106,19 @@ export function BridgeBar({
           </ol>
         </details>
       ) : null}
+
+      <details className="bridge-setup">
+        <summary>Update</summary>
+        <ol className="bridge-steps">
+          <li>
+            In Claude Code: <code>/plugins</code>, find <strong>designagent</strong>, choose{' '}
+            <strong>Update now</strong> (or enable auto-updates).
+          </li>
+          <li>
+            Run <code>/reload-plugins</code>.
+          </li>
+        </ol>
+      </details>
     </div>
   );
 }
