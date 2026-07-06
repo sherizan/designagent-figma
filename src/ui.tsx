@@ -731,8 +731,22 @@ function App(): JSX.Element {
           <ProjectPicker variant="gate" sessions={sessions} onSelect={selectSession} />
         ) : (
           <>
-            {bridgeStatus === 'connected' && sessions.length >= 1 ? (
-              <ProjectPicker variant="compact" sessions={sessions} onSelect={selectSession} />
+            {bridgeStatus === 'connected' ? (
+              <div className="panel">
+                {sessions.length >= 1 ? (
+                  <ProjectPicker variant="compact" sessions={sessions} onSelect={selectSession} />
+                ) : null}
+                {sessions.length === 0 ? (
+                  <p className="bridge-explainer">
+                    Connected, but no project folder is linked yet. Run Claude from inside
+                    your project directory so DesignAgent knows which folder to read &amp; write.
+                  </p>
+                ) : (
+                  <p className="bridge-explainer" style={{ marginTop: 6 }}>
+                    Connected — ask Claude in your terminal to read or build in this file.
+                  </p>
+                )}
+              </div>
             ) : null}
 
             {error ? (
@@ -744,19 +758,6 @@ function App(): JSX.Element {
                   </a>
                 ) : null}
               </div>
-            ) : null}
-
-            {bridgeStatus === 'connected' ? (
-              sessions.length === 0 ? (
-                <p className="bridge-explainer" style={{ marginTop: 6 }}>
-                  Connected, but no project folder is linked yet. Run Claude from inside
-                  your project directory so DesignAgent knows which folder to read &amp; write.
-                </p>
-              ) : (
-                <p className="bridge-explainer" style={{ marginTop: 6 }}>
-                  Connected — ask Claude in your terminal to read or build in this file.
-                </p>
-              )
             ) : null}
 
             {SHOW_MAIN_TABS ? (
