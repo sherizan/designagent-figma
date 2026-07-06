@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Frame } from 'lucide-react';
 
 export type MainTab = 'design-to-code' | 'code-to-design';
@@ -143,7 +143,6 @@ export interface SessionInfo {
   label: string;
   root: string;
   selected: boolean;
-  pluginVersion: string;
 }
 
 interface ProjectPickerProps {
@@ -200,34 +199,6 @@ export function ProjectPicker({ sessions, onSelect, variant }: ProjectPickerProp
           </button>
         ))}
       </div>
-    </div>
-  );
-}
-
-const UPDATE_COMMAND = '/plugin marketplace update designagent';
-
-export function UpdateBanner({ version }: { version: string }): JSX.Element {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    // Figma plugin iframes block navigator.clipboard — textarea + execCommand works.
-    const textarea = document.createElement('textarea');
-    textarea.value = UPDATE_COMMAND;
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand('copy');
-    document.body.removeChild(textarea);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
-  };
-  return (
-    <div className="update-banner">
-      <span>
-        Claude plugin {version ? `v${version} ` : ''}is out of date — run{' '}
-        <code>{UPDATE_COMMAND}</code> in Claude Code
-      </span>
-      <button type="button" className="update-banner-copy" onClick={copy}>
-        {copied ? 'Copied' : 'Copy'}
-      </button>
     </div>
   );
 }

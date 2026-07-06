@@ -709,7 +709,4 @@ export const UI_STYLES = `
   .project-switch-label { opacity: 0.6; color: var(--text-muted); }
   .project-switch-select { font: inherit; font-size: 11px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 2px 4px; }
   .project-switch-current { font-size: 11px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .update-banner { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 12px 0; padding: 6px 10px; font-size: 11px; background: var(--accent-soft); border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
-  .update-banner code { font-size: 10px; color: var(--accent); word-break: break-all; }
-  .update-banner-copy { flex-shrink: 0; font: inherit; font-size: 11px; color: var(--accent); background: none; border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
 `;
