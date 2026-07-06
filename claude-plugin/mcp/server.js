@@ -24883,7 +24883,8 @@ function runBroker() {
         id: s.sessionId,
         label: s.label,
         root: s.root,
-        selected: target ? s.sessionId === target.sessionId : false
+        selected: target ? s.sessionId === target.sessionId : false,
+        pluginVersion: s.pluginVersion
       }))
     });
   }
@@ -24965,6 +24966,7 @@ function runBroker() {
         const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "unknown";
         const root = typeof msg.root === "string" ? msg.root : "";
         const label = typeof msg.label === "string" && msg.label ? msg.label : sessionId.slice(0, 8);
+        const pluginVersion2 = typeof msg.pluginVersion === "string" ? msg.pluginVersion : "";
         const existingIdx = servers.findIndex((s) => s.sessionId === sessionId);
         if (existingIdx !== -1) {
           const prevSocket = servers[existingIdx].socket;
@@ -24975,7 +24977,7 @@ function runBroker() {
             }
           }
         }
-        servers.push({ socket, sessionId, root, label });
+        servers.push({ socket, sessionId, root, label, pluginVersion: pluginVersion2 });
         blog(`session ${sessionId} (label: ${label}, root: ${root || "?"}) registered (active). ${servers.length} session(s).`);
         if (idleTimer) {
           clearTimeout(idleTimer);
@@ -25197,7 +25199,7 @@ function connectToBroker() {
     return;
   }
   brokerSocket = socket;
-  socket.on("open", () => {
+  socket.on("open", async () => {
     try {
       socket.send(
         JSON.stringify({
@@ -25207,7 +25209,8 @@ function connectToBroker() {
           version: BROKER_PROTOCOL_VERSION,
           buildMtime: BUILD_MTIME,
           root: PROJECT_ROOT,
-          label: PROJECT_LABEL
+          label: PROJECT_LABEL,
+          pluginVersion: await getPluginVersion()
         })
       );
     } catch {

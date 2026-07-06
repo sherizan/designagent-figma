@@ -68,6 +68,7 @@ interface ServerClient {
   sessionId: string;
   root: string;
   label: string;
+  pluginVersion: string; // '' = pre-0.19 Claude plugin (field absent)
 }
 
 export function runBroker(): void {
@@ -155,7 +156,8 @@ export function runBroker(): void {
         id: s.sessionId,
         label: s.label,
         root: s.root,
-        selected: target ? s.sessionId === target.sessionId : false
+        selected: target ? s.sessionId === target.sessionId : false,
+        pluginVersion: s.pluginVersion
       }))
     });
   }
@@ -220,6 +222,7 @@ export function runBroker(): void {
         buildMtime?: number;
         root?: string;
         label?: string;
+        pluginVersion?: unknown;
       };
       try {
         msg = JSON.parse(data.toString());
@@ -267,6 +270,7 @@ export function runBroker(): void {
         const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : 'unknown';
         const root = typeof msg.root === 'string' ? msg.root : '';
         const label = typeof msg.label === 'string' && msg.label ? msg.label : sessionId.slice(0, 8); // 8-char UUID prefix fallback
+        const pluginVersion = typeof msg.pluginVersion === 'string' ? msg.pluginVersion : '';
         // Replace any prior entry for this session (a reconnect reuses SERVER_INSTANCE_ID),
         // and purge the old socket's in-flight tool calls so they don't dangle.
         const existingIdx = servers.findIndex((s) => s.sessionId === sessionId);
@@ -280,7 +284,7 @@ export function runBroker(): void {
           }
         }
         // Newest registration becomes active.
-        servers.push({ socket, sessionId, root, label });
+        servers.push({ socket, sessionId, root, label, pluginVersion });
         blog(`session ${sessionId} (label: ${label}, root: ${root || '?'}) registered (active). ${servers.length} session(s).`);
         if (idleTimer) {
           clearTimeout(idleTimer);

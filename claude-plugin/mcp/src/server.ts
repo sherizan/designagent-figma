@@ -94,7 +94,7 @@ function connectToBroker(): void {
   }
   brokerSocket = socket;
 
-  socket.on('open', () => {
+  socket.on('open', async () => {
     try {
       socket.send(
         JSON.stringify({
@@ -104,7 +104,8 @@ function connectToBroker(): void {
           version: BROKER_PROTOCOL_VERSION,
           buildMtime: BUILD_MTIME,
           root: PROJECT_ROOT,
-          label: PROJECT_LABEL
+          label: PROJECT_LABEL,
+          pluginVersion: await getPluginVersion()
         })
       );
     } catch {
