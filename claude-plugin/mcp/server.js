@@ -10571,6 +10571,7 @@ var import_node_crypto = require("node:crypto");
 var import_promises = require("node:dns/promises");
 var import_promises2 = require("node:fs/promises");
 var import_node_net = require("node:net");
+var import_node_os2 = require("node:os");
 var import_node_path3 = require("node:path");
 
 // node_modules/zod/v3/external.js
@@ -25312,12 +25313,66 @@ function callPlugin(command, params = {}) {
     pending.set(id, { resolve: resolve3, reject, timer });
     try {
       brokerSocket.send(JSON.stringify({ type: "request", id, command, params }));
+      countToolCall(command);
     } catch (error2) {
       pending.delete(id);
       clearTimeout(timer);
       reject(error2 instanceof Error ? error2 : new Error(String(error2)));
     }
   });
+}
+var TELEMETRY_ENABLED = process.env.DESIGNAGENT_TELEMETRY !== "0";
+var TELEMETRY_URL = process.env.DESIGNAGENT_TELEMETRY_URL ?? "https://designagent.dev/api/telemetry";
+var TELEMETRY_FLUSH_MS = 5 * 60 * 1e3;
+var toolCounts = /* @__PURE__ */ new Map();
+function countToolCall(command) {
+  if (TELEMETRY_ENABLED) {
+    toolCounts.set(command, (toolCounts.get(command) ?? 0) + 1);
+  }
+}
+var telemetryId;
+async function getTelemetryId() {
+  if (!telemetryId) {
+    const idFile = (0, import_node_path3.join)((0, import_node_os2.homedir)(), ".designagent-id");
+    telemetryId = await (0, import_promises2.readFile)(idFile, "utf8").then(
+      (raw) => raw.trim() || void 0,
+      () => void 0
+    );
+    if (!telemetryId) {
+      telemetryId = (0, import_node_crypto.randomUUID)();
+      await (0, import_promises2.writeFile)(idFile, telemetryId).catch(() => {
+      });
+    }
+  }
+  return telemetryId;
+}
+var pluginVersion;
+async function getPluginVersion() {
+  if (!pluginVersion) {
+    try {
+      const raw = await (0, import_promises2.readFile)((0, import_node_path3.resolve)(__dirname, "../.claude-plugin/plugin.json"), "utf8");
+      pluginVersion = JSON.parse(raw).version || "0.0.0";
+    } catch {
+      pluginVersion = "0.0.0";
+    }
+  }
+  return pluginVersion;
+}
+async function flushTelemetry() {
+  if (!TELEMETRY_ENABLED || toolCounts.size === 0) {
+    return;
+  }
+  const counts = Object.fromEntries(toolCounts);
+  toolCounts.clear();
+  try {
+    await fetch(TELEMETRY_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ v: await getPluginVersion(), id: await getTelemetryId(), counts }),
+      signal: AbortSignal.timeout(2e3)
+    });
+  } catch {
+  }
 }
 var server = new McpServer({ name: "designagent", version: "0.1.0" });
 function ok(value) {
@@ -26227,9 +26282,13 @@ async function main() {
   await server.connect(transport);
   log(`DesignAgent MCP server ready (stdio). instance=${SERVER_INSTANCE_ID} pid=${process.pid}`);
   connectToBroker();
+  setInterval(() => void flushTelemetry(), TELEMETRY_FLUSH_MS).unref();
+  let exiting = false;
   const exit = () => {
+    if (exiting) return;
+    exiting = true;
     log("stdin closed; shutting down.");
-    process.exit(0);
+    void flushTelemetry().finally(() => process.exit(0));
   };
   process.stdin.on("close", exit);
   process.stdin.on("end", exit);

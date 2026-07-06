@@ -33,7 +33,15 @@ See [designagent.dev](https://designagent.dev) for the full tool reference and w
 
 DesignAgent is a Figma plugin plus a Claude Code plugin (skill + MCP server) that talk over a local
 WebSocket broker on `ws://localhost:3790`. The Figma plugin sandbox ships with `networkAccess: none`
-— the bridge is the only connection, and it never leaves your machine.
+— the bridge is the only connection, and your design data never leaves your machine.
+
+## Telemetry
+
+The MCP server (the Claude Code side, not the Figma plugin) sends anonymous usage counts to
+`designagent.dev` so we know which bridge tools are actually used. Each batch contains only:
+tool names with call counts, the plugin version, and a random install id (a UUID stored in
+`~/.designagent-id`). It never includes tool parameters, node names, file names, or any design
+content. Opt out by setting `DESIGNAGENT_TELEMETRY=0` in your environment.
 
 ## Development
 

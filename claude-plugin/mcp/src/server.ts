@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -251,12 +252,80 @@ function callPlugin(command: string, params: Record<string, unknown> = {}): Prom
     pending.set(id, { resolve, reject, timer });
     try {
       brokerSocket.send(JSON.stringify({ type: 'request', id, command, params }));
+      countToolCall(command);
     } catch (error) {
       pending.delete(id);
       clearTimeout(timer);
       reject(error instanceof Error ? error : new Error(String(error)));
     }
   });
+}
+
+// ---- Anonymous usage telemetry ----
+//
+// Counts tool-call *names* only — never params, node data, or design content —
+// and posts the tallies to designagent.dev so we know which bridge tools earn
+// their keep. Opt out with DESIGNAGENT_TELEMETRY=0. See README "Telemetry".
+
+const TELEMETRY_ENABLED = process.env.DESIGNAGENT_TELEMETRY !== '0';
+const TELEMETRY_URL =
+  process.env.DESIGNAGENT_TELEMETRY_URL ?? 'https://designagent.dev/api/telemetry';
+const TELEMETRY_FLUSH_MS = 5 * 60 * 1000;
+
+const toolCounts = new Map<string, number>();
+
+function countToolCall(command: string): void {
+  if (TELEMETRY_ENABLED) {
+    toolCounts.set(command, (toolCounts.get(command) ?? 0) + 1);
+  }
+}
+
+// Random install id so we can count active bridges — carries no user identity.
+let telemetryId: string | undefined;
+async function getTelemetryId(): Promise<string> {
+  if (!telemetryId) {
+    const idFile = join(homedir(), '.designagent-id');
+    telemetryId = await readFile(idFile, 'utf8').then(
+      (raw) => raw.trim() || undefined,
+      () => undefined
+    );
+    if (!telemetryId) {
+      telemetryId = randomUUID();
+      await writeFile(idFile, telemetryId).catch(() => {});
+    }
+  }
+  return telemetryId;
+}
+
+let pluginVersion: string | undefined;
+async function getPluginVersion(): Promise<string> {
+  if (!pluginVersion) {
+    try {
+      const raw = await readFile(resolve(__dirname, '../.claude-plugin/plugin.json'), 'utf8');
+      pluginVersion = (JSON.parse(raw) as { version?: string }).version || '0.0.0';
+    } catch {
+      pluginVersion = '0.0.0';
+    }
+  }
+  return pluginVersion;
+}
+
+async function flushTelemetry(): Promise<void> {
+  if (!TELEMETRY_ENABLED || toolCounts.size === 0) {
+    return;
+  }
+  const counts = Object.fromEntries(toolCounts);
+  toolCounts.clear();
+  try {
+    await fetch(TELEMETRY_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ v: await getPluginVersion(), id: await getTelemetryId(), counts }),
+      signal: AbortSignal.timeout(2000)
+    });
+  } catch {
+    // Telemetry must never break (or noticeably delay) the bridge — drop the batch.
+  }
 }
 
 // ---- MCP server + tools ----
@@ -1364,11 +1433,18 @@ async function main(): Promise<void> {
   // Connect to the bridge broker (spawning it if needed) once we're up.
   connectToBroker();
 
+  setInterval(() => void flushTelemetry(), TELEMETRY_FLUSH_MS).unref();
+
   // When Claude Code shuts this session down, our stdin closes. Exit promptly so
   // the broker sees us leave (and idle-exits once the last session is gone).
+  // The final telemetry flush is capped at 2s by its fetch timeout. stdin fires
+  // both 'end' and 'close' — only the first may exit, or it kills the flush.
+  let exiting = false;
   const exit = () => {
+    if (exiting) return;
+    exiting = true;
     log('stdin closed; shutting down.');
-    process.exit(0);
+    void flushTelemetry().finally(() => process.exit(0));
   };
   process.stdin.on('close', exit);
   process.stdin.on('end', exit);
