@@ -1,6 +1,11 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 
+// Footer version comes from package.json — a hand-maintained string drifted
+// to a wrong major (v1.17.2) before this.
+const pkg = JSON.parse(await readFile('package.json', 'utf8'));
+const versionDefine = { __PLUGIN_VERSION__: JSON.stringify(pkg.version) };
+
 const outdir = 'dist';
 const uiTemplatePath = 'src/ui.html';
 const uiBundlePath = `${outdir}/ui.js`;
@@ -27,7 +32,8 @@ await Promise.all([
     format: 'iife',
     target: ['es2015'],
     define: {
-      'process.env.NODE_ENV': '"production"'
+      'process.env.NODE_ENV': '"production"',
+      ...versionDefine
     },
     minify: true,
     sourcemap: true,
@@ -41,7 +47,8 @@ await Promise.all([
     format: 'iife',
     target: ['es2015'],
     define: {
-      'process.env.NODE_ENV': '"production"'
+      'process.env.NODE_ENV': '"production"',
+      ...versionDefine
     },
     minify: false,
     sourcemap: true,

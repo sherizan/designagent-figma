@@ -1,6 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { context } from 'esbuild';
 
+import { readFileSync } from 'node:fs';
+const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+const versionDefine = { __PLUGIN_VERSION__: JSON.stringify(pkg.version) };
+
 const outdir = 'dist';
 const uiTemplatePath = 'src/ui.html';
 const uiBundlePath = `${outdir}/ui.js`;
@@ -26,7 +30,8 @@ const codeContext = await context({
   format: 'iife',
   target: ['es2017'],
   define: {
-    'process.env.NODE_ENV': '"production"'
+    'process.env.NODE_ENV': '"production"',
+    ...versionDefine
   },
   minify: true,
   sourcemap: true,
@@ -41,7 +46,8 @@ const uiContext = await context({
   format: 'iife',
   target: ['es2017'],
   define: {
-    'process.env.NODE_ENV': '"production"'
+    'process.env.NODE_ENV': '"production"',
+    ...versionDefine
   },
   minify: true,
   sourcemap: true,
