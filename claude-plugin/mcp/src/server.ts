@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -235,7 +235,11 @@ function connectToBroker(): void {
   });
 }
 
-function callPlugin(command: string, params: Record<string, unknown> = {}): Promise<unknown> {
+function callPlugin(
+  command: string,
+  params: Record<string, unknown> = {},
+  timeoutMs: number = REQUEST_TIMEOUT_MS
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (!brokerSocket || brokerSocket.readyState !== WebSocket.OPEN || !brokerReady) {
       reject(
@@ -248,8 +252,8 @@ function callPlugin(command: string, params: Record<string, unknown> = {}): Prom
     const id = randomUUID();
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`DesignAgent plugin did not respond within ${REQUEST_TIMEOUT_MS / 1000}s.`));
-    }, REQUEST_TIMEOUT_MS);
+      reject(new Error(`DesignAgent plugin did not respond within ${timeoutMs / 1000}s.`));
+    }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     try {
       brokerSocket.send(JSON.stringify({ type: 'request', id, command, params }));
@@ -1405,6 +1409,66 @@ server.registerTool(
       }
       const caption = `${result.name ?? 'node'} — ${Math.round(result.width ?? 0)}×${Math.round(result.height ?? 0)}`;
       return okImage(result.base64, result.mimeType ?? 'image/png', caption);
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.registerTool(
+  'export_asset',
+  {
+    description:
+      'Export Figma nodes as real asset files written into the project — SVG for icons/vectors, PNG for images and illustrations. This is the design-to-code way to get icons, logos, and illustrations out of a design, including nodes inside nested component instances (ids like "I123:4;56:7" are handled automatically via a temporary instance). Pass ALL node ids in ONE call — they export sequentially; parallel export calls can wedge the bridge. With format "auto", vector nodes become SVG and everything else PNG. Returns the written file paths; re-exporting a node overwrites its file.',
+    inputSchema: {
+      nodeIds: z
+        .array(z.string())
+        .min(1)
+        .max(50)
+        .describe('Node ids to export — e.g. collapsed vector leaves or image-fill nodes from get_spec.'),
+      dir: z.string().optional().describe("Project-relative output directory (default 'assets')."),
+      format: z.enum(['auto', 'svg', 'png']).optional().describe("Default 'auto': SVG for vectors, PNG elsewhere."),
+      scale: z.number().optional().describe('PNG export scale, 0.5–4 (default 2). Ignored for SVG.')
+    }
+  },
+  async (args) => {
+    try {
+      const result = (await callPlugin(
+        'export_asset',
+        { nodeIds: args.nodeIds, format: args.format, scale: args.scale },
+        120_000 // sequential batch of up to 50 exports won't fit the default 20s
+      )) as {
+        assets?: Array<{
+          nodeId: string;
+          name: string;
+          format: 'svg' | 'png';
+          base64: string;
+          width: number;
+          height: number;
+        }>;
+        errors?: Array<{ nodeId: string; error: string }>;
+      };
+      const dir = args.dir ?? 'assets';
+      await mkdir(resolveInProject(dir), { recursive: true });
+      const usedNames = new Set<string>();
+      const written: Array<{ nodeId: string; path: string; format: string; width: number; height: number }> = [];
+      for (const asset of result.assets ?? []) {
+        const base =
+          asset.name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .slice(0, 60) || 'asset';
+        let file = `${base}.${asset.format}`;
+        for (let n = 2; usedNames.has(file); n++) {
+          file = `${base}-${n}.${asset.format}`;
+        }
+        usedNames.add(file);
+        const path = `${dir}/${file}`;
+        await writeFile(resolveInProject(path), Buffer.from(asset.base64, 'base64'));
+        written.push({ nodeId: asset.nodeId, path, format: asset.format, width: asset.width, height: asset.height });
+      }
+      return ok({ written, errors: result.errors ?? [] });
     } catch (error) {
       return fail(error);
     }

@@ -25298,7 +25298,7 @@ function connectToBroker() {
   socket.on("error", () => {
   });
 }
-function callPlugin(command, params = {}) {
+function callPlugin(command, params = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
   return new Promise((resolve3, reject) => {
     if (!brokerSocket || brokerSocket.readyState !== import_websocket.default.OPEN || !brokerReady) {
       reject(
@@ -25311,8 +25311,8 @@ function callPlugin(command, params = {}) {
     const id = (0, import_node_crypto.randomUUID)();
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`DesignAgent plugin did not respond within ${REQUEST_TIMEOUT_MS / 1e3}s.`));
-    }, REQUEST_TIMEOUT_MS);
+      reject(new Error(`DesignAgent plugin did not respond within ${timeoutMs / 1e3}s.`));
+    }, timeoutMs);
     pending.set(id, { resolve: resolve3, reject, timer });
     try {
       brokerSocket.send(JSON.stringify({ type: "request", id, command, params }));
@@ -26263,6 +26263,46 @@ server.registerTool(
       }
       const caption = `${result.name ?? "node"} \u2014 ${Math.round(result.width ?? 0)}\xD7${Math.round(result.height ?? 0)}`;
       return okImage(result.base64, result.mimeType ?? "image/png", caption);
+    } catch (error2) {
+      return fail(error2);
+    }
+  }
+);
+server.registerTool(
+  "export_asset",
+  {
+    description: 'Export Figma nodes as real asset files written into the project \u2014 SVG for icons/vectors, PNG for images and illustrations. This is the design-to-code way to get icons, logos, and illustrations out of a design, including nodes inside nested component instances (ids like "I123:4;56:7" are handled automatically via a temporary instance). Pass ALL node ids in ONE call \u2014 they export sequentially; parallel export calls can wedge the bridge. With format "auto", vector nodes become SVG and everything else PNG. Returns the written file paths; re-exporting a node overwrites its file.',
+    inputSchema: {
+      nodeIds: external_exports.array(external_exports.string()).min(1).max(50).describe("Node ids to export \u2014 e.g. collapsed vector leaves or image-fill nodes from get_spec."),
+      dir: external_exports.string().optional().describe("Project-relative output directory (default 'assets')."),
+      format: external_exports.enum(["auto", "svg", "png"]).optional().describe("Default 'auto': SVG for vectors, PNG elsewhere."),
+      scale: external_exports.number().optional().describe("PNG export scale, 0.5\u20134 (default 2). Ignored for SVG.")
+    }
+  },
+  async (args) => {
+    try {
+      const result = await callPlugin(
+        "export_asset",
+        { nodeIds: args.nodeIds, format: args.format, scale: args.scale },
+        12e4
+        // sequential batch of up to 50 exports won't fit the default 20s
+      );
+      const dir = args.dir ?? "assets";
+      await (0, import_promises2.mkdir)(resolveInProject(dir), { recursive: true });
+      const usedNames = /* @__PURE__ */ new Set();
+      const written = [];
+      for (const asset of result.assets ?? []) {
+        const base = asset.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "asset";
+        let file = `${base}.${asset.format}`;
+        for (let n = 2; usedNames.has(file); n++) {
+          file = `${base}-${n}.${asset.format}`;
+        }
+        usedNames.add(file);
+        const path = `${dir}/${file}`;
+        await (0, import_promises2.writeFile)(resolveInProject(path), Buffer.from(asset.base64, "base64"));
+        written.push({ nodeId: asset.nodeId, path, format: asset.format, width: asset.width, height: asset.height });
+      }
+      return ok({ written, errors: result.errors ?? [] });
     } catch (error2) {
       return fail(error2);
     }

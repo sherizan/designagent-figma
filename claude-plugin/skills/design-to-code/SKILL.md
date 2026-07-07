@@ -85,6 +85,17 @@ spacing by eye when the values are stated.
 requirements from the designer (e.g. "Primary CTA must be sticky"). They override
 generic conventions — satisfy every one.
 
+**Assets — export, never rebuild.** Icons, logos, images, and illustrations are
+*not buildable from the spec*: `get_spec` collapses vector leaves (`type` of
+`VECTOR`/`BOOLEAN_OPERATION`/`STAR`/`POLYGON`/`LINE`) to id + bbox, and raster
+nodes only carry `visual.fills: "image"`. Collect those node ids and call the
+bridge's `export_asset` tool with ALL of them in ONE call (it exports
+sequentially; parallel calls can wedge the bridge) — it writes real SVG/PNG
+files into the project (default `assets/`) and returns their paths. Reference
+the written paths in code. Never hand-draw an SVG approximation, rebuild a
+wordmark as font text, or screenshot-and-crop. Nested component internals
+(ids like `I123:4;56:7`) are handled automatically.
+
 **Determinism.** Implement only what the spec evidences. No speculative states,
 extra screens, alternate variations, or "while I'm here" features. If the design
 shows one state, build that state.

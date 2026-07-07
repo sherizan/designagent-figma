@@ -192,6 +192,39 @@ function isSceneNode(node: BaseNode | null): node is SceneNode {
   );
 }
 
+// In dynamic-page mode, getNodeByIdAsync on an instance-sublayer id ("I…;…")
+// can stall indefinitely while Figma loads the subtree; every handler routes
+// through this guard so callers fail fast with a useful error instead of the
+// bridge's generic 20s timeout.
+const NODE_LOOKUP_TIMEOUT_MS = 5000;
+async function getNodeByIdGuarded(id: string): Promise<BaseNode | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const hint = id.startsWith('I')
+        ? 'Instance sublayers can stall — export_asset handles them automatically, or use instantiate_component for a fresh top-level instance.'
+        : 'The node may be on an unloaded page.';
+      reject(new Error(`Node lookup for ${id} timed out after ${NODE_LOOKUP_TIMEOUT_MS / 1000}s. ${hint}`));
+    }, NODE_LOOKUP_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([figma.getNodeByIdAsync(id), timeout]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+// Heavy exportAsync bursts (e.g. parallel screenshots) can wedge the plugin;
+// export-class commands run one at a time through this queue.
+let exportQueue: Promise<unknown> = Promise.resolve();
+function enqueueExport<T>(job: () => Promise<T>): Promise<T> {
+  const run = exportQueue.then(job, job);
+  exportQueue = run.catch(() => {});
+  return run;
+}
+
 function hasAnnotationsMixin(node: SceneNode): node is SceneNode & AnnotationsMixin {
   return 'annotations' in node;
 }
@@ -449,7 +482,7 @@ async function tryFixIssue(message: {
   reason: string;
   suggestion: string;
 }): Promise<void> {
-  const baseNode = await figma.getNodeByIdAsync(message.nodeId);
+  const baseNode = await getNodeByIdGuarded(message.nodeId);
   if (!isSceneNode(baseNode)) {
     figma.notify('Fix failed: target node not found.');
     return;
@@ -526,7 +559,7 @@ async function createAnnotationForNode(message: {
       return;
     }
 
-    const baseNode = await figma.getNodeByIdAsync(message.nodeId);
+    const baseNode = await getNodeByIdGuarded(message.nodeId);
     if (!isSceneNode(baseNode)) {
       figma.notify('Could not add annotation: target node not found.');
       return;
@@ -1262,7 +1295,7 @@ async function createDesignTree(message: {
     let replaceParent: (BaseNode & ChildrenMixin) | null = null;
     let replaceIndex = -1;
     if (message.replaceId) {
-      const old = await figma.getNodeByIdAsync(message.replaceId);
+      const old = await getNodeByIdGuarded(message.replaceId);
       if (isSceneNode(old) && old.parent) {
         replaceParent = old.parent as BaseNode & ChildrenMixin;
         replaceIndex = replaceParent.children.indexOf(old);
@@ -1605,7 +1638,7 @@ function shaderProperties(input: unknown): { [defId: string]: ShaderPropertyValu
 
 async function resolveParentContainer(parentId: unknown): Promise<BaseNode & ChildrenMixin> {
   if (parentId) {
-    const parent = await figma.getNodeByIdAsync(String(parentId));
+    const parent = await getNodeByIdGuarded(String(parentId));
     if (parent && 'appendChild' in parent) {
       return parent as BaseNode & ChildrenMixin;
     }
@@ -1788,7 +1821,7 @@ async function runBridgeCommand(
     }
     case 'focus': {
       const nodeId = String(params.nodeId ?? '');
-      const node = await figma.getNodeByIdAsync(nodeId);
+      const node = await getNodeByIdGuarded(nodeId);
       if (!isSceneNode(node)) {
         throw new Error(`Node not found: ${nodeId}`);
       }
@@ -1804,7 +1837,7 @@ async function runBridgeCommand(
         : [];
       const nodes: SceneNode[] = [];
       for (const id of ids) {
-        const node = await figma.getNodeByIdAsync(id);
+        const node = await getNodeByIdGuarded(id);
         if (isSceneNode(node)) {
           nodes.push(node);
         }
@@ -1822,7 +1855,7 @@ async function runBridgeCommand(
       if (!nodeId || !label) {
         throw new Error('annotate requires "nodeId" and "label".');
       }
-      const node = await figma.getNodeByIdAsync(nodeId);
+      const node = await getNodeByIdGuarded(nodeId);
       if (!isSceneNode(node)) {
         throw new Error(`Node not found: ${nodeId}`);
       }
@@ -1838,7 +1871,7 @@ async function runBridgeCommand(
     case 'apply_fix': {
       const nodeId = String(params.nodeId ?? '');
       const fix = String(params.fix ?? '');
-      const node = await figma.getNodeByIdAsync(nodeId);
+      const node = await getNodeByIdGuarded(nodeId);
       if (!isSceneNode(node)) {
         throw new Error(`Node not found: ${nodeId}`);
       }
@@ -1947,7 +1980,7 @@ async function runBridgeCommand(
       return selectAndReturn(text);
     }
     case 'set_text': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!node || node.type !== 'TEXT') {
         throw new Error('set_text requires the id of a text node.');
       }
@@ -1956,7 +1989,7 @@ async function runBridgeCommand(
       return { id: node.id, name: node.name };
     }
     case 'set_fill': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node) || !('fills' in node)) {
         throw new Error('set_fill requires a node that supports fills.');
       }
@@ -1964,7 +1997,7 @@ async function runBridgeCommand(
       return { id: node.id, name: node.name };
     }
     case 'set_corner_radius': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node) || !('cornerRadius' in node)) {
         throw new Error('set_corner_radius requires a node with corners (frame, rectangle, component).');
       }
@@ -1994,7 +2027,7 @@ async function runBridgeCommand(
       return { id: node.id, name: node.name };
     }
     case 'set_stroke': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node) || !('strokes' in node)) {
         throw new Error('set_stroke requires a node that supports strokes.');
       }
@@ -2006,7 +2039,7 @@ async function runBridgeCommand(
       return { id: node.id, name: node.name };
     }
     case 'set_shadow': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node) || !('effects' in node)) {
         throw new Error('set_shadow requires a node that supports effects.');
       }
@@ -2014,7 +2047,7 @@ async function runBridgeCommand(
       return { id: node.id, name: node.name };
     }
     case 'set_text_style': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!node || node.type !== 'TEXT') {
         throw new Error('set_text_style requires the id of a text node.');
       }
@@ -2040,7 +2073,7 @@ async function runBridgeCommand(
       return { id: node.id, name: node.name };
     }
     case 'set_image': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node) || !('fills' in node)) {
         throw new Error('set_image requires a node that supports fills.');
       }
@@ -2067,7 +2100,7 @@ async function runBridgeCommand(
       return { ...selectAndReturn(rect), width, height };
     }
     case 'move': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node) || !('x' in node)) {
         throw new Error('move requires a node with a position.');
       }
@@ -2081,7 +2114,7 @@ async function runBridgeCommand(
       return { ...selectAndReturn(node), x: layout.x, y: layout.y };
     }
     case 'resize': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node) || !('resize' in node)) {
         throw new Error('resize is not supported for this node.');
       }
@@ -2092,7 +2125,7 @@ async function runBridgeCommand(
       return { ...selectAndReturn(node), width: layout.width, height: layout.height };
     }
     case 'reparent': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node)) {
         throw new Error('reparent requires a valid node.');
       }
@@ -2110,7 +2143,7 @@ async function runBridgeCommand(
       return { ...selectAndReturn(node), parent: parent.id };
     }
     case 'delete': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node)) {
         throw new Error('delete requires a valid node.');
       }
@@ -2119,7 +2152,7 @@ async function runBridgeCommand(
       return { deleted: info };
     }
     case 'clone': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node) || !('clone' in node)) {
         throw new Error('clone is not supported for this node.');
       }
@@ -2139,7 +2172,7 @@ async function runBridgeCommand(
       const ids = Array.isArray(params.nodeIds) ? params.nodeIds.map(String) : [];
       const nodes: SceneNode[] = [];
       for (const id of ids) {
-        const found = await figma.getNodeByIdAsync(id);
+        const found = await getNodeByIdGuarded(id);
         if (isSceneNode(found)) {
           nodes.push(found);
         }
@@ -2156,7 +2189,7 @@ async function runBridgeCommand(
       return selectAndReturn(group);
     }
     case 'ungroup': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node)) {
         throw new Error('ungroup requires a valid node.');
       }
@@ -2167,7 +2200,7 @@ async function runBridgeCommand(
       return { ungrouped: children.map((child) => ({ id: child.id, name: child.name })) };
     }
     case 'set_opacity': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node) || !('opacity' in node)) {
         throw new Error('set_opacity is not supported for this node.');
       }
@@ -2178,7 +2211,7 @@ async function runBridgeCommand(
       return { id: node.id, name: node.name };
     }
     case 'set_rotation': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node) || !('rotation' in node)) {
         throw new Error('set_rotation is not supported for this node.');
       }
@@ -2190,7 +2223,7 @@ async function runBridgeCommand(
       if (params.componentKey) {
         component = await figma.importComponentByKeyAsync(String(params.componentKey));
       } else if (params.componentId) {
-        const found = await figma.getNodeByIdAsync(String(params.componentId));
+        const found = await getNodeByIdGuarded(String(params.componentId));
         if (found && found.type === 'COMPONENT') {
           component = found;
         } else if (found && found.type === 'COMPONENT_SET') {
@@ -2213,7 +2246,7 @@ async function runBridgeCommand(
       return selectAndReturn(instance);
     }
     case 'set_grid': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node) || !('layoutMode' in node)) {
         throw new Error('set_grid requires a frame, component, or instance node.');
       }
@@ -2232,7 +2265,7 @@ async function runBridgeCommand(
       };
     }
     case 'set_shader': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node)) {
         throw new Error('set_shader requires a scene node.');
       }
@@ -2271,7 +2304,7 @@ async function runBridgeCommand(
       };
     }
     case 'apply_animation': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node)) {
         throw new Error('apply_animation requires a scene node.');
       }
@@ -2293,7 +2326,7 @@ async function runBridgeCommand(
       return { id: node.id, name: node.name, appliedId };
     }
     case 'remove_animation': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node)) {
         throw new Error('remove_animation requires a scene node.');
       }
@@ -2305,7 +2338,7 @@ async function runBridgeCommand(
       return { id: node.id, name: node.name, removed: appliedId };
     }
     case 'get_animations': {
-      const node = await figma.getNodeByIdAsync(String(params.nodeId ?? ''));
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node)) {
         throw new Error('get_animations requires a scene node.');
       }
@@ -2344,12 +2377,128 @@ async function runBridgeCommand(
       return { count: results.length, results };
     }
     case 'take_screenshot':
-      return takeScreenshot(params);
+      return enqueueExport(() => takeScreenshot(params));
+    case 'export_asset':
+      return enqueueExport(() => exportAssets(params));
     case 'console_logs':
       return readConsoleLogs(params);
     default:
       throw new Error(`Unknown command: ${command}`);
   }
+}
+
+// Export nodes as asset files for design-to-code: SVG for vector leaves,
+// PNG for images/illustrations. Sequential by design — see enqueueExport.
+const ASSET_VECTOR_TYPES = new Set(['VECTOR', 'BOOLEAN_OPERATION', 'STAR', 'POLYGON', 'LINE']);
+
+interface ExportedAsset {
+  nodeId: string;
+  name: string;
+  format: 'svg' | 'png';
+  base64: string;
+  width: number;
+  height: number;
+}
+
+async function exportAssets(params: Record<string, unknown>): Promise<{
+  assets: ExportedAsset[];
+  errors: Array<{ nodeId: string; error: string }>;
+}> {
+  const nodeIds = Array.isArray(params.nodeIds)
+    ? params.nodeIds.filter((v): v is string => typeof v === 'string')
+    : [];
+  if (nodeIds.length === 0) {
+    throw new Error('Pass nodeIds: the Figma node ids to export.');
+  }
+  const requestedFormat = params.format === 'svg' || params.format === 'png' ? params.format : 'auto';
+  const scale = Math.max(0.5, Math.min(4, toNumber(params.scale, 2)));
+  const HARD_MAX = 4 * 1024 * 1024; // per-asset ceiling on the bridge payload
+
+  const assets: ExportedAsset[] = [];
+  const errors: Array<{ nodeId: string; error: string }> = [];
+  for (const nodeId of nodeIds) {
+    let temp: SceneNode | null = null;
+    try {
+      let node: BaseNode | null = await getNodeByIdGuarded(nodeId).catch(() => null);
+      // Instance sublayers can stall or refuse to export — materialize a
+      // temporary top-level copy, exported and removed inside this command.
+      if ((!node || !('exportAsync' in node)) && nodeId.startsWith('I')) {
+        temp = await materializeSublayer(nodeId);
+        node = temp;
+      }
+      if (!node) {
+        throw new Error(`No node with id ${nodeId}.`);
+      }
+      if (!('exportAsync' in node)) {
+        throw new Error(`Node ${nodeId} (${node.type}) is not exportable.`);
+      }
+      const scene = node as SceneNode;
+      const format: 'svg' | 'png' =
+        requestedFormat === 'auto' ? (ASSET_VECTOR_TYPES.has(scene.type) ? 'svg' : 'png') : requestedFormat;
+      let bytes =
+        format === 'svg'
+          ? await scene.exportAsync({ format: 'SVG' })
+          : await scene.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: scale } });
+      if (format === 'png' && bytes.byteLength > HARD_MAX && scale > 1) {
+        bytes = await scene.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
+      }
+      if (bytes.byteLength > HARD_MAX) {
+        throw new Error(
+          `Export is ${(bytes.byteLength / 1024 / 1024).toFixed(1)} MB; over the 4 MB per-asset cap. Lower the scale.`
+        );
+      }
+      const pixelScale = format === 'png' ? scale : 1;
+      assets.push({
+        nodeId,
+        name: scene.name,
+        format,
+        base64: figma.base64Encode(bytes),
+        width: 'width' in scene ? Math.round(scene.width * pixelScale) : 0,
+        height: 'height' in scene ? Math.round(scene.height * pixelScale) : 0
+      });
+    } catch (error) {
+      errors.push({ nodeId, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      try {
+        temp?.remove();
+      } catch {
+        // temp may already be gone; never let cleanup mask the export result
+      }
+    }
+  }
+  return { assets, errors };
+}
+
+// "I<instanceId>;<innerId…>" — clone the top-level instance (fresh plain ids),
+// then try to isolate the requested sublayer inside the clone. Whole-instance
+// export is the fallback when the sublayer can't be isolated.
+async function materializeSublayer(nodeId: string): Promise<SceneNode> {
+  const segments = nodeId.slice(1).split(';');
+  const rootId = segments[0] ?? '';
+  const suffix = segments.slice(1).join(';');
+  const root = rootId ? await getNodeByIdGuarded(rootId).catch(() => null) : null;
+  if (!root || root.type !== 'INSTANCE') {
+    throw new Error(
+      `Could not resolve instance sublayer ${nodeId}. Use instantiate_component with the component key, then export_asset on that instance.`
+    );
+  }
+  const copy = root.clone();
+  figma.currentPage.appendChild(copy);
+  if (!suffix) {
+    return copy;
+  }
+  try {
+    const inner = await getNodeByIdGuarded(`I${copy.id};${suffix}`).catch(() => null);
+    if (inner && isSceneNode(inner) && 'exportAsync' in inner) {
+      const detached = inner.clone();
+      figma.currentPage.appendChild(detached);
+      copy.remove();
+      return detached;
+    }
+  } catch {
+    // sublayer isolation failed — fall through to whole-instance export
+  }
+  return copy;
 }
 
 // Export a node/selection/page to PNG (base64) so Claude can see the design.
@@ -2359,7 +2508,7 @@ async function takeScreenshot(
   const nodeId = typeof params.nodeId === 'string' ? params.nodeId : '';
   let target: BaseNode | null = null;
   if (nodeId) {
-    target = await figma.getNodeByIdAsync(nodeId);
+    target = await getNodeByIdGuarded(nodeId);
     if (!target) {
       throw new Error(`No node with id ${nodeId}.`);
     }
@@ -2504,7 +2653,7 @@ figma.ui.onmessage = (message: ToPluginMessage) => {
   }
 
   if (message.type === 'FOCUS_NODE') {
-    void figma.getNodeByIdAsync(message.nodeId).then((node) => {
+    void getNodeByIdGuarded(message.nodeId).then((node) => {
       if (!node || !('type' in node)) {
         return;
       }
