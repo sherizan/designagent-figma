@@ -1564,10 +1564,18 @@ function applyStroke(node: SceneNode, params: Record<string, unknown>): void {
   }
 }
 
-function buildDropShadow(params: Record<string, unknown>): DropShadowEffect {
+function clamp01(value: unknown, fallback: number): number {
+  return Math.max(0, Math.min(1, toNumber(value, fallback)));
+}
+
+// Drop and inner shadows share every field except the type discriminant.
+function buildShadowEffect(
+  kind: 'DROP_SHADOW' | 'INNER_SHADOW',
+  params: Record<string, unknown>
+): DropShadowEffect | InnerShadowEffect {
   const { color, opacity } = parseHexColor(params.color ?? '#00000040');
   return {
-    type: 'DROP_SHADOW',
+    type: kind,
     color: {
       r: color.r,
       g: color.g,
@@ -1579,7 +1587,150 @@ function buildDropShadow(params: Record<string, unknown>): DropShadowEffect {
     spread: toNumber(params.spread, 0),
     visible: true,
     blendMode: 'NORMAL'
+  } as DropShadowEffect | InnerShadowEffect;
+}
+
+function buildDropShadow(params: Record<string, unknown>): DropShadowEffect {
+  return buildShadowEffect('DROP_SHADOW', params) as DropShadowEffect;
+}
+
+const GRADIENT_TYPES = {
+  linear: 'GRADIENT_LINEAR',
+  radial: 'GRADIENT_RADIAL',
+  angular: 'GRADIENT_ANGULAR',
+  diamond: 'GRADIENT_DIAMOND'
+} as const;
+
+// Build ColorStops from structured {position, color} input (hex, optional 8-digit alpha).
+// Positions default to an even spread when omitted.
+function buildGradientStops(input: unknown): ColorStop[] {
+  const arr = Array.isArray(input) ? input : [];
+  const stops = arr.map((entry, i) => {
+    const o = (entry ?? {}) as Record<string, unknown>;
+    const { color, opacity } = parseHexColor(o.color);
+    const position =
+      o.position != null
+        ? clamp01(o.position, i)
+        : arr.length <= 1
+          ? 0
+          : i / (arr.length - 1);
+    return { position, color: { r: color.r, g: color.g, b: color.b, a: opacity } };
+  });
+  if (stops.length < 2) {
+    throw new Error('set_gradient needs at least 2 stops.');
+  }
+  return stops;
+}
+
+// Position a gradient within the layer. Linear reuses the CSS-angle helper. Radial/
+// angular/diamond map the layer's unit space so `center` sits at gradient-space (0.5,0.5)
+// and `radius` reaches gradient-space 0.5 (the edge). Defaults center (0.5,0.5), radius 0.5
+// = identity = a gradient that fills the box. Uniform scale, so angular/diamond keep center.
+function gradientPaintTransform(
+  gradType: (typeof GRADIENT_TYPES)[keyof typeof GRADIENT_TYPES],
+  params: Record<string, unknown>
+): Transform {
+  if (gradType === 'GRADIENT_LINEAR') {
+    return linearGradientTransform(toNumber(params.angle, 180));
+  }
+  const cx = toNumber(params.centerX, 0.5);
+  const cy = toNumber(params.centerY, 0.5);
+  const r = Math.max(0.0001, toNumber(params.radius, 0.5));
+  const s = 0.5 / r;
+  return [
+    [s, 0, 0.5 - s * cx],
+    [0, s, 0.5 - s * cy]
+  ];
+}
+
+// ponytail: no blendMode. plugin-typings 1.130 and the docs both list blendMode on
+// NoiseEffectBase, but shipped Figma runtimes reject the key outright ("Unrecognized
+// key(s) in object: 'blendMode'") — their noise schema predates it. NORMAL is the
+// default, so omitting it costs nothing. The casts exist only to satisfy the typings,
+// which are ahead of the runtime. Drop them (and restore blendMode) once the runtime
+// catches up and a noise effect with blendMode applies cleanly.
+function buildNoiseEffect(params: Record<string, unknown>): NoiseEffect {
+  const { color, opacity } = parseHexColor(params.color ?? '#000000');
+  const base = {
+    type: 'NOISE' as const,
+    color: { r: color.r, g: color.g, b: color.b, a: opacity },
+    visible: true,
+    noiseSize: Math.max(0.01, toNumber(params.noiseSize, 1.5)),
+    density: clamp01(params.density, 0.4)
   };
+  const noiseType = String(params.noiseType ?? 'monotone').toUpperCase();
+  if (noiseType === 'DUOTONE') {
+    const sec = parseHexColor(params.secondaryColor ?? '#ffffff');
+    return {
+      ...base,
+      noiseType: 'DUOTONE',
+      secondaryColor: { r: sec.color.r, g: sec.color.g, b: sec.color.b, a: sec.opacity }
+    } as NoiseEffect;
+  }
+  if (noiseType === 'MULTITONE') {
+    return { ...base, noiseType: 'MULTITONE', opacity: clamp01(params.opacity, 0.5) } as NoiseEffect;
+  }
+  return { ...base, noiseType: 'MONOTONE' } as NoiseEffect;
+}
+
+function buildPatternPaint(params: Record<string, unknown>): PatternPaint {
+  const tt = String(params.tileType ?? 'RECTANGULAR').toUpperCase();
+  const tileType =
+    tt === 'HORIZONTAL_HEXAGONAL' || tt === 'VERTICAL_HEXAGONAL' ? tt : 'RECTANGULAR';
+  const align = String(params.horizontalAlignment ?? 'CENTER').toUpperCase();
+  const horizontalAlignment = align === 'START' || align === 'END' ? align : 'CENTER';
+  const spacing = Array.isArray(params.spacing) ? params.spacing : [];
+  return {
+    type: 'PATTERN',
+    sourceNodeId: String(params.sourceNodeId ?? ''),
+    tileType,
+    scalingFactor: Math.max(0.01, toNumber(params.scalingFactor, 1)),
+    spacing: { x: toNumber(spacing[0], 0), y: toNumber(spacing[1], 0) },
+    horizontalAlignment
+  };
+}
+
+// Build one native effect for set_effect: inner-shadow | blur | texture | glass.
+// (Drop shadow keeps its own tool; noise has its own richer tool.)
+function buildEffect(params: Record<string, unknown>): Effect {
+  const kind = String(params.type ?? '').toLowerCase().replace(/_/g, '-');
+  switch (kind) {
+    case 'inner-shadow':
+      return buildShadowEffect('INNER_SHADOW', params);
+    case 'blur': {
+      const bt = String(params.blurType ?? 'LAYER').toUpperCase();
+      const type = bt.indexOf('BACKGROUND') === 0 ? 'BACKGROUND_BLUR' : 'LAYER_BLUR';
+      return {
+        type,
+        blurType: 'NORMAL',
+        radius: Math.max(0, toNumber(params.radius, 8)),
+        visible: true
+      } as BlurEffect;
+    }
+    case 'texture':
+      return {
+        type: 'TEXTURE',
+        visible: true,
+        noiseSize: Math.max(0.01, toNumber(params.noiseSize, 0.5)),
+        radius: Math.max(0, toNumber(params.radius, 20)),
+        clipToShape: params.clipToShape != null ? Boolean(params.clipToShape) : true
+      } as TextureEffect;
+    case 'glass':
+      return {
+        type: 'GLASS',
+        visible: true,
+        lightIntensity: clamp01(params.lightIntensity, 0.5),
+        lightAngle: toNumber(params.lightAngle, 130),
+        refraction: clamp01(params.refraction, 0.3),
+        depth: Math.max(1, toNumber(params.depth, 10)),
+        dispersion: clamp01(params.dispersion, 0.2),
+        radius: Math.max(0, toNumber(params.radius, 10))
+      } as GlassEffect;
+    default:
+      throw new Error(
+        `Unknown effect type "${kind}". Use inner-shadow | blur | texture | glass.`
+      );
+  }
 }
 
 // Apply native Figma grid layout (Update 126) to a frame-like node.
@@ -2044,6 +2195,54 @@ async function runBridgeCommand(
         throw new Error('set_shadow requires a node that supports effects.');
       }
       (node as BlendMixin).effects = [buildDropShadow(params)];
+      return { id: node.id, name: node.name };
+    }
+    case 'set_gradient': {
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('fills' in node)) {
+        throw new Error('set_gradient requires a node that supports fills.');
+      }
+      const kind = String(params.type ?? 'linear').toLowerCase();
+      const gradType = GRADIENT_TYPES[kind as keyof typeof GRADIENT_TYPES];
+      if (!gradType) {
+        throw new Error(`Unknown gradient type "${kind}". Use linear | radial | angular | diamond.`);
+      }
+      const paint: GradientPaint = {
+        type: gradType,
+        gradientTransform: gradientPaintTransform(gradType, params),
+        gradientStops: buildGradientStops(params.stops)
+      };
+      (node as GeometryMixin).fills = [paint];
+      return { id: node.id, name: node.name };
+    }
+    case 'set_noise': {
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('effects' in node)) {
+        throw new Error('set_noise requires a node that supports effects.');
+      }
+      const existing = params.append ? (node as BlendMixin).effects : [];
+      (node as BlendMixin).effects = [...existing, buildNoiseEffect(params)];
+      return { id: node.id, name: node.name };
+    }
+    case 'set_pattern': {
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('fills' in node)) {
+        throw new Error('set_pattern requires a node that supports fills.');
+      }
+      const source = await getNodeByIdGuarded(String(params.sourceNodeId ?? ''));
+      if (!isSceneNode(source)) {
+        throw new Error('set_pattern requires a valid sourceNodeId to tile as the pattern.');
+      }
+      (node as GeometryMixin).fills = [buildPatternPaint(params)];
+      return { id: node.id, name: node.name };
+    }
+    case 'set_effect': {
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('effects' in node)) {
+        throw new Error('set_effect requires a node that supports effects.');
+      }
+      const existing = params.append ? (node as BlendMixin).effects : [];
+      (node as BlendMixin).effects = [...existing, buildEffect(params)];
       return { id: node.id, name: node.name };
     }
     case 'set_text_style': {

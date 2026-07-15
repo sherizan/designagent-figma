@@ -25956,6 +25956,90 @@ server.registerTool(
   async (args) => run("set_shadow", args)
 );
 server.registerTool(
+  "set_gradient",
+  {
+    description: "Fill a node with a native, editable Figma gradient. Multi-stop; linear/radial/angular/diamond. For linear, set `angle` (deg, 0=up, 180=down). For radial/angular/diamond, set `centerX`/`centerY` (0\u20131) and `radius` (0\u20131). No native mesh gradient exists \u2014 for a mesh look use the figma-effects skill (raster PNG via set_image).",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      type: external_exports.enum(["linear", "radial", "angular", "diamond"]).optional().describe("Gradient type (default linear)."),
+      stops: external_exports.array(
+        external_exports.object({
+          position: external_exports.number().optional().describe("0\u20131 along the gradient; evenly spread if omitted."),
+          color: COLOR
+        })
+      ).min(2).describe("At least 2 color stops."),
+      angle: external_exports.number().optional().describe("Linear only: CSS angle in deg (default 180 = to bottom)."),
+      centerX: external_exports.number().optional().describe("Radial/angular/diamond center X, 0\u20131 (default 0.5)."),
+      centerY: external_exports.number().optional().describe("Radial/angular/diamond center Y, 0\u20131 (default 0.5)."),
+      radius: external_exports.number().optional().describe("Radial/angular/diamond radius, 0\u20131 (default 0.5 = fills box).")
+    }
+  },
+  async (args) => run("set_gradient", args)
+);
+server.registerTool(
+  "set_noise",
+  {
+    description: "Add a native Figma noise/grain effect to a node. monotone (one color), duotone (two colors), or multitone (color + opacity). Requires a recent Figma version.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      noiseType: external_exports.enum(["monotone", "duotone", "multitone"]).optional().describe("Default monotone."),
+      noiseSize: external_exports.number().optional().describe("Grain size, >0 (default 1.5). Smaller = finer."),
+      density: external_exports.number().optional().describe("Coverage 0\u20131 (default 0.4)."),
+      color: COLOR.optional().describe("Primary noise color (default #000000)."),
+      secondaryColor: COLOR.optional().describe("Duotone: the second color (default #ffffff)."),
+      opacity: external_exports.number().optional().describe("Multitone: noise opacity 0\u20131 (default 0.5)."),
+      append: external_exports.boolean().optional().describe("Keep existing effects and add this (default false = replace).")
+    }
+  },
+  async (args) => run("set_noise", args)
+);
+server.registerTool(
+  "set_pattern",
+  {
+    description: "Fill a node by tiling another node (sourceNodeId) as a repeating pattern. The source must be a separate node, not an ancestor/descendant of the target.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      sourceNodeId: external_exports.string().describe("The node to tile as the pattern cell."),
+      tileType: external_exports.enum(["RECTANGULAR", "HORIZONTAL_HEXAGONAL", "VERTICAL_HEXAGONAL"]).optional().describe("Tiling arrangement (default RECTANGULAR)."),
+      scalingFactor: external_exports.number().optional().describe("Scale of each tile (default 1)."),
+      spacing: external_exports.array(external_exports.number()).optional().describe("[x, y] gap between tiles (default [0,0])."),
+      horizontalAlignment: external_exports.enum(["START", "CENTER", "END"]).optional().describe("Default CENTER.")
+    }
+  },
+  async (args) => run("set_pattern", args)
+);
+server.registerTool(
+  "set_effect",
+  {
+    description: "Add a native Figma effect to a node: inner-shadow, blur (layer or background), texture (grain), or glass (frost + refraction). Drop shadows use set_shadow; noise uses set_noise. Texture/glass require a recent Figma version.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      type: external_exports.enum(["inner-shadow", "blur", "texture", "glass"]).describe("Which effect to add."),
+      append: external_exports.boolean().optional().describe("Keep existing effects and add this (default false = replace)."),
+      // blur
+      radius: external_exports.number().optional().describe("blur/texture/glass: radius (blur default 8)."),
+      blurType: external_exports.enum(["LAYER", "BACKGROUND"]).optional().describe("blur: default LAYER. BACKGROUND needs a translucent fill."),
+      // inner-shadow (mirrors set_shadow)
+      color: COLOR.optional().describe("inner-shadow: shadow color, 8-digit hex ok (default #00000040)."),
+      offsetX: external_exports.number().optional().describe("inner-shadow: horizontal offset (default 0)."),
+      offsetY: external_exports.number().optional().describe("inner-shadow: vertical offset (default 4)."),
+      blur: external_exports.number().optional().describe("inner-shadow: blur radius (default 8)."),
+      spread: external_exports.number().optional().describe("inner-shadow: spread (default 0)."),
+      opacity: external_exports.number().optional().describe("inner-shadow: override alpha 0\u20131."),
+      // texture
+      noiseSize: external_exports.number().optional().describe("texture: grain size, >0 (default 0.5)."),
+      clipToShape: external_exports.boolean().optional().describe("texture: clip to the node shape (default true)."),
+      // glass
+      lightIntensity: external_exports.number().optional().describe("glass: specular highlight 0\u20131 (default 0.5)."),
+      lightAngle: external_exports.number().optional().describe("glass: light direction in deg (default 130)."),
+      refraction: external_exports.number().optional().describe("glass: distortion 0\u20131 (default 0.3)."),
+      depth: external_exports.number().optional().describe("glass: refraction depth, >=1 (default 10)."),
+      dispersion: external_exports.number().optional().describe("glass: chromatic aberration 0\u20131 (default 0.2).")
+    }
+  },
+  async (args) => run("set_effect", args)
+);
+server.registerTool(
   "set_image",
   {
     description: "Fill an existing node with an image from a URL, a local file path, or base64. The server fetches/reads it (the Figma sandbox cannot).",
