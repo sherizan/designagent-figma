@@ -43,7 +43,7 @@ function log(...args: unknown[]): void {
 
 const pending = new Map<
   string,
-  { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
+  { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; command: string }
 >();
 
 let brokerSocket: WebSocket | null = null;
@@ -189,6 +189,7 @@ function connectToBroker(): void {
       if (msg.ok) {
         entry.resolve(msg.result);
       } else {
+        countToolCall(`${entry.command}_err`);
         entry.reject(new Error(msg.error || 'DesignAgent plugin reported an error.'));
       }
       return;
@@ -252,9 +253,10 @@ function callPlugin(
     const id = randomUUID();
     const timer = setTimeout(() => {
       pending.delete(id);
+      countToolCall(`${command}_err`);
       reject(new Error(`DesignAgent plugin did not respond within ${timeoutMs / 1000}s.`));
     }, timeoutMs);
-    pending.set(id, { resolve, reject, timer });
+    pending.set(id, { resolve, reject, timer, command });
     try {
       brokerSocket.send(JSON.stringify({ type: 'request', id, command, params }));
       countToolCall(command);
@@ -270,7 +272,8 @@ function callPlugin(
 //
 // Counts tool-call *names* only — never params, node data, or design content —
 // and posts the tallies to designagent.dev so we know which bridge tools earn
-// their keep. Opt out with DESIGNAGENT_TELEMETRY=0. See README "Telemetry".
+// their keep. A failed call also counts under `<tool>_err` (name only, no message).
+// Opt out with DESIGNAGENT_TELEMETRY=0. See README "Telemetry".
 
 const TELEMETRY_ENABLED = process.env.DESIGNAGENT_TELEMETRY !== '0';
 const TELEMETRY_URL =
@@ -628,9 +631,13 @@ server.registerTool(
   'get_spec',
   {
     description:
-      'Get the structured UI spec (hierarchy, tokens, layout, text, components) for the current Figma selection as JSON.'
+      'Get the structured UI spec (hierarchy, tokens, layout, text, components) for the current Figma selection as JSON. Pass nodeId to spec a specific node instead of the selection, and depth to cap the hierarchy (0 = the node only, 1 = direct children) — use a shallow depth first on big frames, then drill into a child id.',
+    inputSchema: {
+      nodeId: z.string().optional().describe('Node id to spec (default: the current selection).'),
+      depth: z.number().optional().describe('Max hierarchy depth; 0 = root only, 1 = direct children. Omit for the full tree.')
+    }
   },
-  async () => run('get_spec')
+  async ({ nodeId, depth }) => run('get_spec', { nodeId, depth })
 );
 
 server.registerTool(
@@ -830,21 +837,6 @@ server.registerTool(
   async ({ nodeId, label, suggestion }) => run('annotate', { nodeId, label, suggestion })
 );
 
-server.registerTool(
-  'apply_fix',
-  {
-    description:
-      'Apply a DesignAgent auto-fix to a Figma node. "auto-layout" converts a manual frame to Auto Layout; "absolute-positioning" returns an absolutely-positioned child to normal flow.',
-    inputSchema: {
-      nodeId: z.string().describe('The Figma node id to fix.'),
-      fix: z
-        .enum(['auto-layout', 'absolute-positioning'])
-        .describe('Which fix to apply.')
-    }
-  },
-  async ({ nodeId, fix }) => run('apply_fix', { nodeId, fix })
-);
-
 // ---- Create / edit tools (design from Claude into Figma) ----
 
 const COLOR = z.string().describe('Hex color, e.g. "#3366ff" (optional 8-digit for alpha).');
@@ -957,7 +949,7 @@ server.registerTool(
   'set_text_style',
   {
     description:
-      'Style an existing text node: font size, weight, color, and alignment. Weight resolves against the font family’s available styles.',
+      'Style an existing text node: font size, weight, color, alignment, wrapping, and variable-font axes. Weight resolves against the font family’s available styles.',
     inputSchema: {
       nodeId: z.string(),
       fontSize: z.number().optional(),
@@ -967,10 +959,81 @@ server.registerTool(
         .describe('A number (400, 600, 700) or a style name ("Medium", "Semi Bold", "Bold").'),
       color: COLOR.optional(),
       align: z.enum(['LEFT', 'CENTER', 'RIGHT', 'JUSTIFIED']).optional(),
-      valign: z.enum(['TOP', 'CENTER', 'BOTTOM']).optional()
+      valign: z.enum(['TOP', 'CENTER', 'BOTTOM']).optional(),
+      wrap: z
+        .enum(['AUTO', 'BALANCE', 'PRETTY'])
+        .optional()
+        .describe('Line-wrapping style for multi-line text (CSS text-wrap equivalent).'),
+      variation: z
+        .record(z.number())
+        .optional()
+        .describe('Variable-font axes, e.g. { "wght": 550, "slnt": -5 }. Ignored for static families.')
     }
   },
   async (args) => run('set_text_style', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'rename',
+  {
+    description: 'Rename a node (layer name in the Figma layers panel).',
+    inputSchema: { nodeId: z.string(), name: z.string() }
+  },
+  async ({ nodeId, name }) => run('rename', { nodeId, name })
+);
+
+server.registerTool(
+  'set_auto_layout',
+  {
+    description:
+      'Add, change, or remove Auto Layout on an existing frame/component/instance. Omit layoutMode on a plain frame to infer the axis, gap, and padding from where its children already sit (the old "convert to Auto Layout" fix). "NONE" removes Auto Layout.',
+    inputSchema: {
+      nodeId: z.string(),
+      layoutMode: z.enum(['HORIZONTAL', 'VERTICAL', 'NONE']).optional(),
+      itemSpacing: z.number().optional().describe('Gap between children in px.'),
+      padding: z
+        .union([z.number(), z.object({ top: z.number().optional(), right: z.number().optional(), bottom: z.number().optional(), left: z.number().optional() })])
+        .optional()
+        .describe('Uniform px, or per-side.'),
+      primaryAxisAlign: z.enum(['MIN', 'CENTER', 'MAX', 'SPACE_BETWEEN', 'SPACE_AROUND', 'SPACE_EVENLY']).optional(),
+      counterAxisAlign: z.enum(['MIN', 'CENTER', 'MAX', 'BASELINE']).optional(),
+      sizing: z.enum(['HUG', 'FIXED']).optional().describe('HUG = size to content on both axes; FIXED = keep the current size.')
+    }
+  },
+  async (args) => run('set_auto_layout', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'set_instance_property',
+  {
+    description:
+      'Set component properties on an instance (boolean toggles, text, and variant properties). Keys are the clean names get_spec reports (e.g. "Label", "Show icon", "Size"); values are strings or booleans. Instance-swap properties are not supported.',
+    inputSchema: {
+      nodeId: z.string().describe('The instance node id.'),
+      properties: z.record(z.union([z.string(), z.boolean(), z.number()])).describe('{ propertyName: value }')
+    }
+  },
+  async ({ nodeId, properties }) => run('set_instance_property', { nodeId, properties })
+);
+
+server.registerTool(
+  'create_component',
+  {
+    description:
+      'Turn an existing frame (or other node) into a component in place. Returns the component id (use it as instantiate_component componentId) and its key (only importable by key once the component is published to a library).',
+    inputSchema: { nodeId: z.string(), name: z.string().optional() }
+  },
+  async ({ nodeId, name }) => run('create_component', { nodeId, name })
+);
+
+server.registerTool(
+  'list_variables_and_styles',
+  {
+    description:
+      "List the file's local variable collections (with modes and variable names/types) and local paint, text, and effect styles — the design-system vocabulary to reuse before creating raw values. Read-only; capped at 500 entries per list.",
+    inputSchema: {}
+  },
+  async () => run('list_variables_and_styles')
 );
 
 server.registerTool(
@@ -1030,6 +1093,111 @@ server.registerTool(
   async (args) => run('set_shadow', args as Record<string, unknown>)
 );
 
+// ---- Gradients, noise, patterns & effects (native Figma paints/effects) ----
+
+server.registerTool(
+  'set_gradient',
+  {
+    description:
+      'Fill a node with a native, editable Figma gradient. Multi-stop; linear/radial/angular/diamond. For linear, set `angle` (deg, 0=up, 180=down). For radial/angular/diamond, set `centerX`/`centerY` (0–1) and `radius` (0–1). No native mesh gradient exists — for a mesh look use the figma-effects skill (raster PNG via set_image).',
+    inputSchema: {
+      nodeId: z.string(),
+      type: z
+        .enum(['linear', 'radial', 'angular', 'diamond'])
+        .optional()
+        .describe('Gradient type (default linear).'),
+      stops: z
+        .array(
+          z.object({
+            position: z.number().optional().describe('0–1 along the gradient; evenly spread if omitted.'),
+            color: COLOR
+          })
+        )
+        .min(2)
+        .describe('At least 2 color stops.'),
+      angle: z.number().optional().describe('Linear only: CSS angle in deg (default 180 = to bottom).'),
+      centerX: z.number().optional().describe('Radial/angular/diamond center X, 0–1 (default 0.5).'),
+      centerY: z.number().optional().describe('Radial/angular/diamond center Y, 0–1 (default 0.5).'),
+      radius: z.number().optional().describe('Radial/angular/diamond radius, 0–1 (default 0.5 = fills box).')
+    }
+  },
+  async (args) => run('set_gradient', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'set_noise',
+  {
+    description:
+      'Add a native Figma noise/grain effect to a node. monotone (one color), duotone (two colors), or multitone (color + opacity). Requires a recent Figma version.',
+    inputSchema: {
+      nodeId: z.string(),
+      noiseType: z.enum(['monotone', 'duotone', 'multitone']).optional().describe('Default monotone.'),
+      noiseSize: z.number().optional().describe('Grain size, >0 (default 1.5). Smaller = finer.'),
+      density: z.number().optional().describe('Coverage 0–1 (default 0.4).'),
+      color: COLOR.optional().describe('Primary noise color (default #000000).'),
+      secondaryColor: COLOR.optional().describe('Duotone: the second color (default #ffffff).'),
+      opacity: z.number().optional().describe('Multitone: noise opacity 0–1 (default 0.5).'),
+      append: z.boolean().optional().describe('Keep existing effects and add this (default false = replace).')
+    }
+  },
+  async (args) => run('set_noise', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'set_pattern',
+  {
+    description:
+      'Fill a node by tiling another node (sourceNodeId) as a repeating pattern. The source must be a separate node, not an ancestor/descendant of the target.',
+    inputSchema: {
+      nodeId: z.string(),
+      sourceNodeId: z.string().describe('The node to tile as the pattern cell.'),
+      tileType: z
+        .enum(['RECTANGULAR', 'HORIZONTAL_HEXAGONAL', 'VERTICAL_HEXAGONAL'])
+        .optional()
+        .describe('Tiling arrangement (default RECTANGULAR).'),
+      scalingFactor: z.number().optional().describe('Scale of each tile (default 1).'),
+      spacing: z.array(z.number()).optional().describe('[x, y] gap between tiles (default [0,0]).'),
+      horizontalAlignment: z.enum(['START', 'CENTER', 'END']).optional().describe('Default CENTER.')
+    }
+  },
+  async (args) => run('set_pattern', args as Record<string, unknown>)
+);
+
+server.registerTool(
+  'set_effect',
+  {
+    description:
+      'Add a native Figma effect to a node: inner-shadow, blur (layer or background), texture (grain), or glass (frost + refraction). Drop shadows use set_shadow; noise uses set_noise. Texture/glass require a recent Figma version.',
+    inputSchema: {
+      nodeId: z.string(),
+      type: z
+        .enum(['inner-shadow', 'blur', 'texture', 'glass'])
+        .describe('Which effect to add.'),
+      append: z.boolean().optional().describe('Keep existing effects and add this (default false = replace).'),
+      // blur
+      radius: z.number().optional().describe('blur/texture/glass: radius (blur default 8).'),
+      blurType: z.enum(['LAYER', 'BACKGROUND']).optional().describe('blur: default LAYER. BACKGROUND needs a translucent fill.'),
+      // inner-shadow (mirrors set_shadow)
+      color: COLOR.optional().describe('inner-shadow: shadow color, 8-digit hex ok (default #00000040).'),
+      offsetX: z.number().optional().describe('inner-shadow: horizontal offset (default 0).'),
+      offsetY: z.number().optional().describe('inner-shadow: vertical offset (default 4).'),
+      blur: z.number().optional().describe('inner-shadow: blur radius (default 8).'),
+      spread: z.number().optional().describe('inner-shadow: spread (default 0).'),
+      opacity: z.number().optional().describe('inner-shadow: override alpha 0–1.'),
+      // texture
+      noiseSize: z.number().optional().describe('texture: grain size, >0 (default 0.5).'),
+      clipToShape: z.boolean().optional().describe('texture: clip to the node shape (default true).'),
+      // glass
+      lightIntensity: z.number().optional().describe('glass: specular highlight 0–1 (default 0.5).'),
+      lightAngle: z.number().optional().describe('glass: light direction in deg (default 130).'),
+      refraction: z.number().optional().describe('glass: distortion 0–1 (default 0.3).'),
+      depth: z.number().optional().describe('glass: refraction depth, >=1 (default 10).'),
+      dispersion: z.number().optional().describe('glass: chromatic aberration 0–1 (default 0.2).')
+    }
+  },
+  async (args) => run('set_effect', args as Record<string, unknown>)
+);
+
 server.registerTool(
   'set_image',
   {
@@ -1082,55 +1250,6 @@ server.registerTool(
 );
 
 // ---- Grid layout (Figma API Update 126) ----
-
-server.registerTool(
-  'set_grid',
-  {
-    description:
-      'Turn an existing frame/component into a native Figma grid layout (or update its grid). Children flow into the grid automatically.',
-    inputSchema: {
-      nodeId: z.string(),
-      rows: z.number().optional().describe('Number of grid rows.'),
-      columns: z.number().optional().describe('Number of grid columns.'),
-      rowGap: z.number().optional().describe('Gap between rows in px.'),
-      columnGap: z.number().optional().describe('Gap between columns in px.')
-    }
-  },
-  async (args) => run('set_grid', args as Record<string, unknown>)
-);
-
-// ---- Shaders (Figma API Update 127) ----
-
-server.registerTool(
-  'list_shaders',
-  {
-    description:
-      'List shaders available to the current file (in-file, subscribed libraries, and owned). Returns an empty list when none exist. Use a returned id with set_shader.',
-    inputSchema: {}
-  },
-  async () => run('list_shaders')
-);
-
-server.registerTool(
-  'set_shader',
-  {
-    description:
-      'Apply a shader (from list_shaders) to a node as a fill, stroke, or effect. The shader is imported automatically if needed.',
-    inputSchema: {
-      nodeId: z.string(),
-      shaderId: z.string().describe('Shader id from list_shaders.'),
-      target: z
-        .enum(['fill', 'stroke', 'effect'])
-        .optional()
-        .describe("Where to apply it; defaults to the shader's native surface (fill or effect)."),
-      properties: z
-        .record(z.string(), z.unknown())
-        .optional()
-        .describe('Optional property assignments keyed by the shader\'s property-definition ids.')
-    }
-  },
-  async (args) => run('set_shader', args as Record<string, unknown>)
-);
 
 // ---- Motion (Figma API Update 127, Beta — API may change) ----
 
@@ -1303,7 +1422,7 @@ server.registerTool(
   'batch',
   {
     description:
-      'Run multiple bridge operations in one call (e.g. delete or restyle many nodes). Each item is { command, params } using any other tool name. Returns per-op results; one failure does not stop the rest.',
+      'Run multiple bridge operations in one call (e.g. delete or restyle many nodes). Each item is { command, params } using any other tool name. Returns per-op results; one failure does not stop the rest. Pass screenshot to get a PNG of the result in the same call instead of a separate take_screenshot.',
     inputSchema: {
       operations: z
         .array(
@@ -1312,7 +1431,12 @@ server.registerTool(
             params: z.record(z.any()).optional()
           })
         )
-        .describe('Operations to run in order.')
+        .describe('Operations to run in order.'),
+      screenshot: z
+        .union([z.boolean(), z.string()])
+        .optional()
+        .describe('true = screenshot the first node an op touched; or a node id (e.g. the parent frame) to capture.'),
+      screenshotScale: z.number().optional().describe('Screenshot export scale (default 1 — cheap; use 2 for detail).')
     }
   },
   async (args) => {
@@ -1329,7 +1453,22 @@ server.registerTool(
         }
         operations.push({ command: op.command, params });
       }
-      return run('batch', { operations });
+      const result = (await callPlugin(
+        'batch',
+        { operations, screenshot: args.screenshot, screenshotScale: args.screenshotScale },
+        60_000
+      )) as { image?: { base64: string; mimeType: string; name?: string; width?: number; height?: number } } & Record<string, unknown>;
+      if (result?.image?.base64) {
+        const { image, ...rest } = result;
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify(rest) },
+            { type: 'text', text: `${image.name ?? 'node'} — ${Math.round(image.width ?? 0)}×${Math.round(image.height ?? 0)}` },
+            { type: 'image', data: image.base64, mimeType: image.mimeType }
+          ]
+        };
+      }
+      return ok(result);
     } catch (error) {
       return fail(error);
     }
@@ -1340,7 +1479,7 @@ server.registerTool(
   'html_to_design',
   {
     description:
-      'Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project (e.g. one you just generated). Fonts must exist in the Figma file; external images are inlined. The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset — staying inside it avoids silent re-renders):\n- Reliable: vertical flex columns; solid fills, border, border-radius, box-shadow; fixed-width rows with a few px of trailing slack; Google fonts.\n- Avoid for now: exact-fit flex rows (`flex:1`, `width:fit-content`, or `space-between` whose children fill the row can silently drop/overlap a child — give items fixed widths with slack); CSS gradients (currently render near-white — use solid fills); inline styled `<span>` inside wrapping text (overlaps — split into separate text blocks); negative margins (scramble — use positive `gap`).\n- Returns the new frame\'s id immediately and finishes painting in the background — take a screenshot to verify completion. Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.',
+      'Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project (e.g. one you just generated). Fonts must exist in the Figma file; external images are inlined. The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset — staying inside it avoids silent re-renders):\n- Reliable: flex rows/columns (justify-content incl. space-between/around/evenly, gap, flex-grow); CSS grid (display:grid → native Figma grid, column count from grid-template-columns, gaps; rows auto-flow); solid fills, linear gradients, border, border-radius, box-shadow; text-wrap: balance/pretty; variable-font axes via font-variation-settings; Google fonts.\n- Known limits: radial/conic and multi-layer gradients flatten to their first stop; grid rows auto-flow (row spans and grid-areas are ignored); children inset on both sides inside a flex parent are pinned absolutely; only fonts installed in Figma render (others fall back).\n- Returns the new frame\'s id immediately and finishes painting in the background — take a screenshot to verify completion. Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.',
     inputSchema: {
       html: z.string().optional().describe('Raw HTML to render.'),
       path: z.string().optional().describe('Path to an .html file in the project.'),
@@ -1389,7 +1528,7 @@ server.registerTool(
       'Pass a nodeId to capture a specific node. Exports the design geometry, not the Figma app UI.',
     inputSchema: {
       nodeId: z.string().optional().describe('Node id to capture. Defaults to the selection, else the page.'),
-      scale: z.number().optional().describe('Export scale (0.5–4, default 2). Lowered automatically if the image is large.')
+      scale: z.number().optional().describe('Export scale (0.5–4, default 2). Use 0.5–1 for quick layout checks; 2 only when you need to read small text. Lowered automatically if the image is large.')
     }
   },
   async (args) => {

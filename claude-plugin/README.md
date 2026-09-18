@@ -13,7 +13,7 @@ to build production UI from it the design-system-faithful way.
 - **`designagent` MCP server** — a live two-way bridge so Claude Code can read,
   fix, and create on the open Figma file:
   - read: `status`, `get_design_md`, `get_spec`
-  - act: `focus`, `select`, `annotate`, `apply_fix`
+  - act: `focus`, `select`, `annotate`, `set_auto_layout`
   - create: `create_frame`, `create_text`, `create_rectangle`, `create_ellipse`,
     `place_image`
   - images: `place_image` (new node) / `set_image` (fill an existing node) — from a
@@ -77,7 +77,7 @@ DesignAgent plugin's UI connects to it.
 1. Open the **DesignAgent** plugin in Figma and click **Enable** on the "Claude bridge"
    bar — the dot turns green when connected.
 2. In Claude Code, the bridge tools are available immediately (`status`,
-   `get_design_md`, `get_spec`, `focus`, `annotate`, `apply_fix`, …). Try: *"Use
+   `get_design_md`, `get_spec`, `focus`, `annotate`, `set_auto_layout`, …). Try: *"Use
    DesignAgent to read my current Figma selection and build it."*
 
 Notes:

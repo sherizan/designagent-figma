@@ -62,14 +62,14 @@ lives in the sandbox (`src/code.ts`) and is exposed to Claude by the MCP server 
 
 ## Versioning
 
-Three version strings, **all bumped together** (keep them identical to avoid the Figma plugin
+Two version strings, **all bumped together** (keep them identical to avoid the Figma plugin
 and the Claude plugin drifting apart):
 - Figma plugin version → `package.json` `version`
-- UI version tag → hardcoded in `src/ui_components.tsx` (the `version-tag` div in the footer)
+- UI footer tag → derived from `package.json` at build time (`__PLUGIN_VERSION__` in `scripts/build.mjs`), nothing to edit
 - Claude plugin bundle → `claude-plugin/.claude-plugin/plugin.json` `version`
 
-The UI tag uses a `v1.x.y` form; the two JSON versions use `0.x.y` and should match each
-other. Even when a change only touches one side, bump all three so installed versions stay in sync.
+Both use `0.x.y` and must match. Even when a change only touches one side, bump both so
+installed versions stay in sync.
 
 This repo is **not** a marketplace — the canonical marketplace lives in the `sherizan/designagent`
 (website) repo, which pins this plugin to a released tag. After bumping the version here, tag the
@@ -96,7 +96,7 @@ There are no automated tests — verification is visual, in Figma Desktop.
    - `status` — confirm the bridge; see the file / page / current selection
    - `get_spec`, `get_score`, `get_design_md`, `list_issues` — inspect what the plugin extracts
    - `focus` / `select` — drive the Figma selection
-   - `annotate`, `apply_fix`, plus the create/style/layout tools — act on the design
+   - `annotate`, `set_auto_layout`, plus the create/style/layout tools — act on the design
    - `take_screenshot` — render the selection/page to a PNG you can see; `console_logs` — read the
      plugin's captured console (sandbox + UI) for debugging
 4. To load a fresh build, **re-run the DesignAgent plugin** in Figma (there's no programmatic

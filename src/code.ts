@@ -1037,6 +1037,16 @@ async function buildDesignNode(
     if (node.lineHeight && node.lineHeight > 0) {
       text.lineHeight = { value: node.lineHeight, unit: 'PIXELS' };
     }
+    if (node.textWrap) {
+      try {
+        text.textWrapStyle = node.textWrap;
+      } catch {
+        // older Figma runtime without textWrapStyle
+      }
+    }
+    if (node.fontVariation) {
+      await applyFontVariation(text, node.fontVariation).catch(() => {});
+    }
     const align = normalizeTextAlign(node.textAlign);
     if (align) {
       text.textAlignHorizontal = align;
@@ -1170,7 +1180,24 @@ function buildFrameShell(
   }
   let resizeW = node.width;
   let resizeH = node.height;
-  if (node.layout) {
+  if (node.layout === 'GRID') {
+    frame.paddingTop = node.paddingTop ?? 0;
+    frame.paddingRight = node.paddingRight ?? 0;
+    frame.paddingBottom = node.paddingBottom ?? 0;
+    frame.paddingLeft = node.paddingLeft ?? 0;
+    applyGridLayout(frame, {
+      columns: node.gridColumns ?? 1,
+      columnGap: node.gridColumnGap,
+      rowGap: node.gridRowGap
+    });
+    try {
+      // Rows are created as children flow in, row-major — matches CSS grid auto-placement.
+      frame.gridAutoTracks = 'ROWS';
+      frame.gridItemsPositioning = 'ROW_AUTO_FLOW';
+    } catch {
+      // older Figma runtime: children still land in the fixed grid, just without auto rows
+    }
+  } else if (node.layout) {
     frame.layoutMode = node.layout;
     frame.itemSpacing = node.itemSpacing ?? 0;
     frame.paddingTop = node.paddingTop ?? 0;
@@ -1196,7 +1223,7 @@ function buildFrameShell(
     // Stay FIXED when children must distribute into a width (grow / SPACE_BETWEEN)
     // or when there is slack (a full-width row whose content doesn't fill it) — that
     // keeps full-width rows full-width. The clamp then prevents any exact-fit drop.
-    const mustFill = kids.some((c) => c.grow) || node.primaryAxisAlign === 'SPACE_BETWEEN';
+    const mustFill = kids.some((c) => c.grow) || (node.primaryAxisAlign ?? '').startsWith('SPACE_');
     const contentFills = contentMain >= measuredMain - 1;
     const hug = !mustFill && contentFills;
     frame.primaryAxisSizingMode = hug ? 'AUTO' : 'FIXED';
@@ -1221,6 +1248,15 @@ function buildFrameShell(
 
 // Build and append a frame's children (recurses into buildDesignNode per child).
 async function appendDesignChildren(frame: FrameNode, node: DesignTreeNode): Promise<void> {
+  await appendDesignChildrenInner(frame, node);
+  if (node.layout === 'GRID') {
+    // Auto-added grid rows grow the frame past the measured box; snap it back so the
+    // FLEX rows distribute inside the CSS-measured height.
+    frame.resize(Math.max(1, node.width), Math.max(1, node.height));
+  }
+}
+
+async function appendDesignChildrenInner(frame: FrameNode, node: DesignTreeNode): Promise<void> {
   for (const child of node.children ?? []) {
     const created = await buildDesignNode(child, frame);
     if (!node.layout) {
@@ -1564,10 +1600,18 @@ function applyStroke(node: SceneNode, params: Record<string, unknown>): void {
   }
 }
 
-function buildDropShadow(params: Record<string, unknown>): DropShadowEffect {
+function clamp01(value: unknown, fallback: number): number {
+  return Math.max(0, Math.min(1, toNumber(value, fallback)));
+}
+
+// Drop and inner shadows share every field except the type discriminant.
+function buildShadowEffect(
+  kind: 'DROP_SHADOW' | 'INNER_SHADOW',
+  params: Record<string, unknown>
+): DropShadowEffect | InnerShadowEffect {
   const { color, opacity } = parseHexColor(params.color ?? '#00000040');
   return {
-    type: 'DROP_SHADOW',
+    type: kind,
     color: {
       r: color.r,
       g: color.g,
@@ -1579,7 +1623,150 @@ function buildDropShadow(params: Record<string, unknown>): DropShadowEffect {
     spread: toNumber(params.spread, 0),
     visible: true,
     blendMode: 'NORMAL'
+  } as DropShadowEffect | InnerShadowEffect;
+}
+
+function buildDropShadow(params: Record<string, unknown>): DropShadowEffect {
+  return buildShadowEffect('DROP_SHADOW', params) as DropShadowEffect;
+}
+
+const GRADIENT_TYPES = {
+  linear: 'GRADIENT_LINEAR',
+  radial: 'GRADIENT_RADIAL',
+  angular: 'GRADIENT_ANGULAR',
+  diamond: 'GRADIENT_DIAMOND'
+} as const;
+
+// Build ColorStops from structured {position, color} input (hex, optional 8-digit alpha).
+// Positions default to an even spread when omitted.
+function buildGradientStops(input: unknown): ColorStop[] {
+  const arr = Array.isArray(input) ? input : [];
+  const stops = arr.map((entry, i) => {
+    const o = (entry ?? {}) as Record<string, unknown>;
+    const { color, opacity } = parseHexColor(o.color);
+    const position =
+      o.position != null
+        ? clamp01(o.position, i)
+        : arr.length <= 1
+          ? 0
+          : i / (arr.length - 1);
+    return { position, color: { r: color.r, g: color.g, b: color.b, a: opacity } };
+  });
+  if (stops.length < 2) {
+    throw new Error('set_gradient needs at least 2 stops.');
+  }
+  return stops;
+}
+
+// Position a gradient within the layer. Linear reuses the CSS-angle helper. Radial/
+// angular/diamond map the layer's unit space so `center` sits at gradient-space (0.5,0.5)
+// and `radius` reaches gradient-space 0.5 (the edge). Defaults center (0.5,0.5), radius 0.5
+// = identity = a gradient that fills the box. Uniform scale, so angular/diamond keep center.
+function gradientPaintTransform(
+  gradType: (typeof GRADIENT_TYPES)[keyof typeof GRADIENT_TYPES],
+  params: Record<string, unknown>
+): Transform {
+  if (gradType === 'GRADIENT_LINEAR') {
+    return linearGradientTransform(toNumber(params.angle, 180));
+  }
+  const cx = toNumber(params.centerX, 0.5);
+  const cy = toNumber(params.centerY, 0.5);
+  const r = Math.max(0.0001, toNumber(params.radius, 0.5));
+  const s = 0.5 / r;
+  return [
+    [s, 0, 0.5 - s * cx],
+    [0, s, 0.5 - s * cy]
+  ];
+}
+
+// ponytail: no blendMode. plugin-typings 1.130 and the docs both list blendMode on
+// NoiseEffectBase, but shipped Figma runtimes reject the key outright ("Unrecognized
+// key(s) in object: 'blendMode'") — their noise schema predates it. NORMAL is the
+// default, so omitting it costs nothing. The casts exist only to satisfy the typings,
+// which are ahead of the runtime. Drop them (and restore blendMode) once the runtime
+// catches up and a noise effect with blendMode applies cleanly.
+function buildNoiseEffect(params: Record<string, unknown>): NoiseEffect {
+  const { color, opacity } = parseHexColor(params.color ?? '#000000');
+  const base = {
+    type: 'NOISE' as const,
+    color: { r: color.r, g: color.g, b: color.b, a: opacity },
+    visible: true,
+    noiseSize: Math.max(0.01, toNumber(params.noiseSize, 1.5)),
+    density: clamp01(params.density, 0.4)
   };
+  const noiseType = String(params.noiseType ?? 'monotone').toUpperCase();
+  if (noiseType === 'DUOTONE') {
+    const sec = parseHexColor(params.secondaryColor ?? '#ffffff');
+    return {
+      ...base,
+      noiseType: 'DUOTONE',
+      secondaryColor: { r: sec.color.r, g: sec.color.g, b: sec.color.b, a: sec.opacity }
+    } as NoiseEffect;
+  }
+  if (noiseType === 'MULTITONE') {
+    return { ...base, noiseType: 'MULTITONE', opacity: clamp01(params.opacity, 0.5) } as NoiseEffect;
+  }
+  return { ...base, noiseType: 'MONOTONE' } as NoiseEffect;
+}
+
+function buildPatternPaint(params: Record<string, unknown>): PatternPaint {
+  const tt = String(params.tileType ?? 'RECTANGULAR').toUpperCase();
+  const tileType =
+    tt === 'HORIZONTAL_HEXAGONAL' || tt === 'VERTICAL_HEXAGONAL' ? tt : 'RECTANGULAR';
+  const align = String(params.horizontalAlignment ?? 'CENTER').toUpperCase();
+  const horizontalAlignment = align === 'START' || align === 'END' ? align : 'CENTER';
+  const spacing = Array.isArray(params.spacing) ? params.spacing : [];
+  return {
+    type: 'PATTERN',
+    sourceNodeId: String(params.sourceNodeId ?? ''),
+    tileType,
+    scalingFactor: Math.max(0.01, toNumber(params.scalingFactor, 1)),
+    spacing: { x: toNumber(spacing[0], 0), y: toNumber(spacing[1], 0) },
+    horizontalAlignment
+  };
+}
+
+// Build one native effect for set_effect: inner-shadow | blur | texture | glass.
+// (Drop shadow keeps its own tool; noise has its own richer tool.)
+function buildEffect(params: Record<string, unknown>): Effect {
+  const kind = String(params.type ?? '').toLowerCase().replace(/_/g, '-');
+  switch (kind) {
+    case 'inner-shadow':
+      return buildShadowEffect('INNER_SHADOW', params);
+    case 'blur': {
+      const bt = String(params.blurType ?? 'LAYER').toUpperCase();
+      const type = bt.indexOf('BACKGROUND') === 0 ? 'BACKGROUND_BLUR' : 'LAYER_BLUR';
+      return {
+        type,
+        blurType: 'NORMAL',
+        radius: Math.max(0, toNumber(params.radius, 8)),
+        visible: true
+      } as BlurEffect;
+    }
+    case 'texture':
+      return {
+        type: 'TEXTURE',
+        visible: true,
+        noiseSize: Math.max(0.01, toNumber(params.noiseSize, 0.5)),
+        radius: Math.max(0, toNumber(params.radius, 20)),
+        clipToShape: params.clipToShape != null ? Boolean(params.clipToShape) : true
+      } as TextureEffect;
+    case 'glass':
+      return {
+        type: 'GLASS',
+        visible: true,
+        lightIntensity: clamp01(params.lightIntensity, 0.5),
+        lightAngle: toNumber(params.lightAngle, 130),
+        refraction: clamp01(params.refraction, 0.3),
+        depth: Math.max(1, toNumber(params.depth, 10)),
+        dispersion: clamp01(params.dispersion, 0.2),
+        radius: Math.max(0, toNumber(params.radius, 10))
+      } as GlassEffect;
+    default:
+      throw new Error(
+        `Unknown effect type "${kind}". Use inner-shadow | blur | texture | glass.`
+      );
+  }
 }
 
 // Apply native Figma grid layout (Update 126) to a frame-like node.
@@ -1605,35 +1792,6 @@ function applyGridLayout(frame: FrameNode, params: Record<string, unknown>): voi
   if (params.rowGap != null) {
     frame.gridRowGap = toNumber(params.rowGap, 0);
   }
-}
-
-// Resolve a shader by id, importing it into the file if needed (mirrors loadFontAsync).
-async function resolveShader(shaderId: string): Promise<Shader> {
-  if (!shaderId) {
-    throw new Error('A shaderId is required. Call list_shaders to discover available shaders.');
-  }
-  const available = await figma.listAvailableShaders();
-  const match = available.find((s) => s.id === shaderId);
-  if (!match) {
-    throw new Error(`Shader ${shaderId} not found. Call list_shaders for valid ids.`);
-  }
-  if (match.imported) {
-    return match;
-  }
-  try {
-    return await figma.importShaderById(shaderId);
-  } catch (error) {
-    throw new Error(
-      `Could not import shader ${shaderId}: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-}
-
-function shaderProperties(input: unknown): { [defId: string]: ShaderPropertyValue } | undefined {
-  if (!input || typeof input !== 'object') {
-    return undefined;
-  }
-  return input as { [defId: string]: ShaderPropertyValue };
 }
 
 async function resolveParentContainer(parentId: unknown): Promise<BaseNode & ChildrenMixin> {
@@ -1738,6 +1896,31 @@ async function applyTextWeight(node: TextNode, weight: unknown): Promise<void> {
   node.fontName = await resolveWeightFontName(node, weight);
 }
 
+// Apply variable-font axes (e.g. { wght: 550 }) on top of the node's current family/style.
+// Static families and unknown axes are skipped; throws only when Figma rejects the font.
+async function applyFontVariation(node: TextNode, variation: Record<string, number>): Promise<void> {
+  const current = node.fontName === figma.mixed ? node.getRangeFontName(0, 1) : node.fontName;
+  if (current === figma.mixed || typeof figma.getFontFamilyVariationAxes !== 'function') {
+    return;
+  }
+  const axes = figma.getFontFamilyVariationAxes(current.family);
+  if (!axes) {
+    return;
+  }
+  const variationSettings: Record<string, number> = {};
+  for (const [axis, value] of Object.entries(variation)) {
+    if (axes.includes(axis) && Number.isFinite(value)) {
+      variationSettings[axis] = value;
+    }
+  }
+  if (Object.keys(variationSettings).length === 0) {
+    return;
+  }
+  const fontName = { family: current.family, style: current.style, variationSettings };
+  await figma.loadFontAsync(fontName);
+  node.fontName = fontName;
+}
+
 function normalizeTextAlign(
   value: unknown
 ): 'LEFT' | 'CENTER' | 'RIGHT' | 'JUSTIFIED' | null {
@@ -1794,6 +1977,17 @@ async function runBridgeCommand(
     case 'get_design_md':
       return collectDesignMd();
     case 'get_spec': {
+      const maxDepth = params.depth != null ? Math.max(0, Math.round(toNumber(params.depth, 0))) : undefined;
+      if (params.nodeId != null || maxDepth !== undefined) {
+        const target = params.nodeId != null
+          ? await getNodeByIdGuarded(String(params.nodeId))
+          : resolvePrimaryNode(figma.currentPage.selection);
+        if (!isSceneNode(target)) {
+          throw new Error('get_spec: pass a scene node id, or select a frame in Figma.');
+        }
+        const scoped = await analyzeNodeCoreAsync(target, { linkBase: fallbackLinkBase, maxDepth });
+        return { selectedNode: scoped.selectedNode, intent: scoped.intent, uiSpec: scoped.uiSpec };
+      }
       const core = await analyzePrimaryForBridge();
       return { selectedNode: core.selectedNode, intent: core.intent, uiSpec: core.uiSpec };
     }
@@ -1867,29 +2061,6 @@ async function runBridgeCommand(
         suggestion: String(params.suggestion ?? '')
       });
       return { annotated: { id: node.id, name: node.name }, label };
-    }
-    case 'apply_fix': {
-      const nodeId = String(params.nodeId ?? '');
-      const fix = String(params.fix ?? '');
-      const node = await getNodeByIdGuarded(nodeId);
-      if (!isSceneNode(node)) {
-        throw new Error(`Node not found: ${nodeId}`);
-      }
-      let result: { ok: boolean; message: string };
-      if (fix === 'auto-layout') {
-        result = applyAutoLayoutFix(node);
-      } else if (fix === 'absolute-positioning') {
-        result = applyAbsolutePositioningFix(node);
-      } else {
-        throw new Error(`Unknown fix "${fix}". Use "auto-layout" or "absolute-positioning".`);
-      }
-      if (result.ok) {
-        figma.currentPage.selection = [node];
-        figma.viewport.scrollAndZoomIntoView([node]);
-        invalidateCache();
-        void computeAndPostAnalysis();
-      }
-      return { ok: result.ok, message: result.message };
     }
     case 'create_frame': {
       const parent = await resolveParentContainer(params.parentId);
@@ -2046,6 +2217,54 @@ async function runBridgeCommand(
       (node as BlendMixin).effects = [buildDropShadow(params)];
       return { id: node.id, name: node.name };
     }
+    case 'set_gradient': {
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('fills' in node)) {
+        throw new Error('set_gradient requires a node that supports fills.');
+      }
+      const kind = String(params.type ?? 'linear').toLowerCase();
+      const gradType = GRADIENT_TYPES[kind as keyof typeof GRADIENT_TYPES];
+      if (!gradType) {
+        throw new Error(`Unknown gradient type "${kind}". Use linear | radial | angular | diamond.`);
+      }
+      const paint: GradientPaint = {
+        type: gradType,
+        gradientTransform: gradientPaintTransform(gradType, params),
+        gradientStops: buildGradientStops(params.stops)
+      };
+      (node as GeometryMixin).fills = [paint];
+      return { id: node.id, name: node.name };
+    }
+    case 'set_noise': {
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('effects' in node)) {
+        throw new Error('set_noise requires a node that supports effects.');
+      }
+      const existing = params.append ? (node as BlendMixin).effects : [];
+      (node as BlendMixin).effects = [...existing, buildNoiseEffect(params)];
+      return { id: node.id, name: node.name };
+    }
+    case 'set_pattern': {
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('fills' in node)) {
+        throw new Error('set_pattern requires a node that supports fills.');
+      }
+      const source = await getNodeByIdGuarded(String(params.sourceNodeId ?? ''));
+      if (!isSceneNode(source)) {
+        throw new Error('set_pattern requires a valid sourceNodeId to tile as the pattern.');
+      }
+      (node as GeometryMixin).fills = [buildPatternPaint(params)];
+      return { id: node.id, name: node.name };
+    }
+    case 'set_effect': {
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('effects' in node)) {
+        throw new Error('set_effect requires a node that supports effects.');
+      }
+      const existing = params.append ? (node as BlendMixin).effects : [];
+      (node as BlendMixin).effects = [...existing, buildEffect(params)];
+      return { id: node.id, name: node.name };
+    }
     case 'set_text_style': {
       const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!node || node.type !== 'TEXT') {
@@ -2070,7 +2289,149 @@ async function runBridgeCommand(
       if (alignV) {
         node.textAlignVertical = alignV;
       }
+      const wrap = String(params.wrap ?? '').toUpperCase();
+      if (wrap === 'AUTO' || wrap === 'BALANCE' || wrap === 'PRETTY') {
+        node.textWrapStyle = wrap;
+      }
+      if (params.variation && typeof params.variation === 'object') {
+        await loadFontForExistingText(node);
+        await applyFontVariation(node, params.variation as Record<string, number>);
+      }
       return { id: node.id, name: node.name };
+    }
+    case 'rename': {
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+      if (!node || node.type === 'DOCUMENT') {
+        throw new Error('rename requires a node id.');
+      }
+      node.name = String(params.name ?? '').trim() || node.name;
+      return { id: node.id, name: node.name };
+    }
+    case 'set_auto_layout': {
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+      if (!isSceneNode(node) || !('layoutMode' in node)) {
+        throw new Error('set_auto_layout requires a frame, component, or instance node.');
+      }
+      const frame = node as FrameNode;
+      const mode = String(params.layoutMode ?? '').toUpperCase();
+      if (mode === 'NONE') {
+        frame.layoutMode = 'NONE';
+        return { id: frame.id, name: frame.name, layoutMode: 'NONE' };
+      }
+      if (mode === 'HORIZONTAL' || mode === 'VERTICAL') {
+        frame.layoutMode = mode;
+      } else if (frame.layoutMode === 'NONE' || frame.layoutMode === 'GRID') {
+        // No axis given: infer axis, spacing and padding from the children's positions.
+        const inferred = applyAutoLayoutFix(frame);
+        if (!inferred.ok) {
+          throw new Error(inferred.message);
+        }
+      }
+      if (params.itemSpacing != null) {
+        frame.itemSpacing = toNumber(params.itemSpacing, 0);
+      }
+      if (params.padding != null) {
+        const pad = params.padding;
+        if (typeof pad === 'object') {
+          const p = pad as Record<string, unknown>;
+          if (p.top != null) frame.paddingTop = toNumber(p.top, 0);
+          if (p.right != null) frame.paddingRight = toNumber(p.right, 0);
+          if (p.bottom != null) frame.paddingBottom = toNumber(p.bottom, 0);
+          if (p.left != null) frame.paddingLeft = toNumber(p.left, 0);
+        } else {
+          const n = toNumber(pad, 0);
+          frame.paddingTop = n;
+          frame.paddingRight = n;
+          frame.paddingBottom = n;
+          frame.paddingLeft = n;
+        }
+      }
+      const primary = String(params.primaryAxisAlign ?? '').toUpperCase();
+      if (['MIN', 'CENTER', 'MAX', 'SPACE_BETWEEN', 'SPACE_AROUND', 'SPACE_EVENLY'].includes(primary)) {
+        frame.primaryAxisAlignItems = primary as FrameNode['primaryAxisAlignItems'];
+      }
+      const counter = String(params.counterAxisAlign ?? '').toUpperCase();
+      if (['MIN', 'CENTER', 'MAX', 'BASELINE'].includes(counter)) {
+        frame.counterAxisAlignItems = counter as FrameNode['counterAxisAlignItems'];
+      }
+      const sizing = String(params.sizing ?? '').toUpperCase();
+      if (sizing === 'HUG' || sizing === 'FIXED') {
+        frame.primaryAxisSizingMode = sizing === 'HUG' ? 'AUTO' : 'FIXED';
+        frame.counterAxisSizingMode = sizing === 'HUG' ? 'AUTO' : 'FIXED';
+      }
+      return {
+        id: frame.id,
+        name: frame.name,
+        layoutMode: frame.layoutMode,
+        itemSpacing: frame.itemSpacing,
+        padding: [frame.paddingTop, frame.paddingRight, frame.paddingBottom, frame.paddingLeft]
+      };
+    }
+    case 'set_instance_property': {
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+      if (!node || node.type !== 'INSTANCE') {
+        throw new Error('set_instance_property requires the id of a component instance.');
+      }
+      const input =
+        params.properties && typeof params.properties === 'object'
+          ? (params.properties as Record<string, unknown>)
+          : {};
+      const defs = node.componentProperties;
+      const available = Object.keys(defs);
+      const resolved: Record<string, string | boolean> = {};
+      for (const [key, value] of Object.entries(input)) {
+        // Accept the clean label ("Label") or the full key ("Label#123:0").
+        const full = key in defs ? key : available.find((d) => d.split('#')[0] === key);
+        if (!full) {
+          throw new Error(
+            `Instance has no property "${key}". Available: ${available.map((d) => d.split('#')[0]).join(', ') || 'none'}.`
+          );
+        }
+        resolved[full] = typeof value === 'boolean' ? value : String(value);
+      }
+      if (Object.keys(resolved).length === 0) {
+        throw new Error('Pass properties: { name: value } to set.');
+      }
+      node.setProperties(resolved);
+      return { id: node.id, name: node.name, set: Object.keys(resolved).map((k) => k.split('#')[0]) };
+    }
+    case 'create_component': {
+      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+      if (!isSceneNode(node)) {
+        throw new Error('create_component requires a scene node id (usually a frame).');
+      }
+      const component = figma.createComponentFromNode(node);
+      if (params.name) {
+        component.name = String(params.name);
+      }
+      return { ...selectAndReturn(component), key: component.key };
+    }
+    case 'list_variables_and_styles': {
+      const LIMIT = 500;
+      const [collections, variables, paintStyles, textStyles, effectStyles] = await Promise.all([
+        figma.variables.getLocalVariableCollectionsAsync(),
+        figma.variables.getLocalVariablesAsync(),
+        figma.getLocalPaintStylesAsync(),
+        figma.getLocalTextStylesAsync(),
+        figma.getLocalEffectStylesAsync()
+      ]);
+      const byCollection = new Map<string, { id: string; name: string; modes: string[]; variables: Array<{ id: string; name: string; type: string }> }>();
+      for (const c of collections) {
+        byCollection.set(c.id, { id: c.id, name: c.name, modes: c.modes.map((m) => m.name), variables: [] });
+      }
+      for (const v of variables.slice(0, LIMIT)) {
+        byCollection.get(v.variableCollectionId)?.variables.push({ id: v.id, name: v.name, type: v.resolvedType });
+      }
+      const brief = (s: BaseStyle) => ({ id: s.id, name: s.name });
+      return {
+        collections: Array.from(byCollection.values()),
+        variablesTruncated: variables.length > LIMIT,
+        styles: {
+          paint: paintStyles.slice(0, LIMIT).map(brief),
+          text: textStyles.slice(0, LIMIT).map((s) => ({ ...brief(s), fontSize: s.fontSize, fontName: s.fontName })),
+          effect: effectStyles.slice(0, LIMIT).map(brief)
+        }
+      };
     }
     case 'set_image': {
       const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
@@ -2245,54 +2606,6 @@ async function runBridgeCommand(
       }
       return selectAndReturn(instance);
     }
-    case 'set_grid': {
-      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
-      if (!isSceneNode(node) || !('layoutMode' in node)) {
-        throw new Error('set_grid requires a frame, component, or instance node.');
-      }
-      applyGridLayout(node as FrameNode, params);
-      return { id: node.id, name: node.name };
-    }
-    case 'list_shaders': {
-      const shaders = await figma.listAvailableShaders();
-      return {
-        shaders: shaders.map((s) => ({
-          id: s.id,
-          name: s.name,
-          type: s.type,
-          imported: s.imported
-        }))
-      };
-    }
-    case 'set_shader': {
-      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
-      if (!isSceneNode(node)) {
-        throw new Error('set_shader requires a scene node.');
-      }
-      const shader = await resolveShader(String(params.shaderId ?? ''));
-      const properties = shaderProperties(params.properties);
-      const target = String(params.target ?? (shader.type === 'effect' ? 'effect' : 'fill'));
-      if (target === 'effect') {
-        if (!('effects' in node)) {
-          throw new Error('This node does not support effects.');
-        }
-        const effect: ShaderEffect = { type: 'SHADER', visible: true, id: shader.id, properties };
-        (node as BlendMixin).effects = [effect];
-      } else if (target === 'stroke') {
-        if (!('strokes' in node)) {
-          throw new Error('This node does not support strokes.');
-        }
-        const paint: ShaderPaint = { type: 'SHADER', id: shader.id, properties };
-        (node as GeometryMixin).strokes = [paint];
-      } else {
-        if (!('fills' in node)) {
-          throw new Error('This node does not support fills.');
-        }
-        const paint: ShaderPaint = { type: 'SHADER', id: shader.id, properties };
-        (node as GeometryMixin).fills = [paint];
-      }
-      return { id: node.id, name: node.name, shaderId: shader.id, target };
-    }
     case 'list_animation_styles': {
       const styles = figma.motion.figmaAnimationStyles();
       return {
@@ -2372,6 +2685,44 @@ async function runBridgeCommand(
             command: subCommand,
             error: error instanceof Error ? error.message : String(error)
           });
+        }
+      }
+      // Optional trailing screenshot so the caller sees the result without a second round trip.
+      // true → the first node an op returned/targeted; a string → that node id.
+      const shot = params.screenshot;
+      if (shot) {
+        let targetId = typeof shot === 'string' ? shot : '';
+        if (!targetId) {
+          for (const r of results) {
+            const id = r.ok && r.result && typeof r.result === 'object' ? (r.result as { id?: unknown }).id : undefined;
+            if (typeof id === 'string') {
+              targetId = id;
+              break;
+            }
+          }
+        }
+        if (!targetId) {
+          for (const entry of ops) {
+            const p = (entry as { params?: { nodeId?: unknown } } | null)?.params;
+            if (p && typeof p.nodeId === 'string') {
+              targetId = p.nodeId;
+              break;
+            }
+          }
+        }
+        if (targetId) {
+          try {
+            const image = await enqueueExport(() =>
+              takeScreenshot({ nodeId: targetId, scale: params.screenshotScale ?? 1 })
+            );
+            return { count: results.length, results, image };
+          } catch (error) {
+            return {
+              count: results.length,
+              results,
+              screenshotError: error instanceof Error ? error.message : String(error)
+            };
+          }
         }
       }
       return { count: results.length, results };
