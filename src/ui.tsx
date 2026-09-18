@@ -449,7 +449,8 @@ function App(): JSX.Element {
                 x: typeof params.x === 'number' ? params.x : undefined,
                 y: typeof params.y === 'number' ? params.y : undefined,
                 parentId: typeof params.parentId === 'string' ? params.parentId : undefined,
-                replaceId: typeof params.replaceId === 'string' ? params.replaceId : undefined
+                replaceId: typeof params.replaceId === 'string' ? params.replaceId : undefined,
+                useDesignSystem: params.useDesignSystem === false ? false : undefined
               });
             } catch (renderError) {
               try {

@@ -55,6 +55,7 @@ export type ToPluginMessage =
       y?: number;
       parentId?: string;
       replaceId?: string;
+      useDesignSystem?: boolean;
     }
   | { type: 'REFRESH_REQUEST' }
   | { type: 'RESIZE'; height: number };

@@ -6,7 +6,7 @@ import {
 import { generateDesignDoc, type DesignDocFrame } from './core/designdoc';
 import { parseDesignMd } from './core/parsedesignmd';
 import { generateHtml, type HtmlNode } from './core/htmldoc';
-import { loadAnnotationCategories } from './core/extract';
+import { formatVariableValue, loadAnnotationCategories, solidHex } from './core/extract';
 import { exportTokens, type TokenFormat } from './core/tokens';
 import type { DesignTreeNode, TextRun } from './shared/designtree';
 import { isScreenLikeNode } from './core/intent';
@@ -999,7 +999,7 @@ async function applyRuns(text: TextNode, runs: TextRun[]): Promise<void> {
       const paint = cssSolidPaint(run.color);
       if (paint) {
         try {
-          text.setRangeFills(start, end, [paint]);
+          text.setRangeFills(start, end, [bindSolid(paint)]);
         } catch {
           // keep the base fill for this range
         }
@@ -1029,7 +1029,8 @@ async function buildDesignNode(
     }
     const fill = cssSolidPaint(node.textColor);
     if (fill) {
-      text.fills = [fill];
+      text.fills = [bindSolid(fill)];
+      await applyFillStyle(text);
     }
     if (node.letterSpacing) {
       text.letterSpacing = { value: node.letterSpacing, unit: 'PIXELS' };
@@ -1066,6 +1067,8 @@ async function buildDesignNode(
     if (node.runs && node.runs.length > 0) {
       await applyRuns(text, node.runs);
     }
+    // Last: applying a text style after every other text prop keeps it attached.
+    await applyTextStyle(text, node.lineHeight && node.lineHeight > 0 ? node.lineHeight : undefined);
     text.x = node.x;
     text.y = node.y;
     return text;
@@ -1119,13 +1122,15 @@ async function buildDesignNode(
 // Resolve a frame's paint(s). CSS paints background-image OVER background-color, so a
 // visible solid base sits beneath the gradient. Falls back: flatten (never white) → solid → [].
 function resolveFrameFill(node: DesignTreeNode): Paint[] {
-  const base = cssSolidPaint(node.fill); // visible background-color, if any (else null)
+  const literal = cssSolidPaint(node.fill); // visible background-color, if any (else null)
+  const base = literal ? bindSolid(literal) : null;
   if (node.gradient) {
     const gradient = cssGradientPaint(node.gradient);
     if (gradient) {
       return base ? [base, gradient] : [gradient];
     }
-    const flat = cssSolidPaint(firstGradientStopColor(node.gradient));
+    const flatLiteral = cssSolidPaint(firstGradientStopColor(node.gradient));
+    const flat = flatLiteral ? bindSolid(flatLiteral) : null;
     if (flat) {
       console.warn('html_to_design: gradient flattened (unsupported/unparseable):', node.gradient);
       return base ? [base, flat] : [flat];
@@ -1146,7 +1151,7 @@ function buildFrameShell(
   frame.fills = resolveFrameFill(node);
   const stroke = cssSolidPaint(node.stroke);
   if (stroke) {
-    frame.strokes = [stroke];
+    frame.strokes = [bindSolid(stroke)];
     if (node.strokeWidth && node.strokeWidth > 0) {
       frame.strokeWeight = node.strokeWidth;
     }
@@ -1283,6 +1288,7 @@ async function buildFrameNode(
   parent: BaseNode & ChildrenMixin
 ): Promise<SceneNode> {
   const frame = buildFrameShell(node, parent);
+  await applyFillStyle(frame);
   await appendDesignChildren(frame, node);
   return frame;
 }
@@ -1324,6 +1330,23 @@ async function createDesignTree(message: {
   y?: number;
   parentId?: string;
   replaceId?: string;
+  useDesignSystem?: boolean;
+}): Promise<void> {
+  dsLookup = message.useDesignSystem === false ? null : await buildDsLookup().catch(() => null);
+  try {
+    await createDesignTreeInner(message);
+  } finally {
+    dsLookup = null;
+  }
+}
+
+async function createDesignTreeInner(message: {
+  id: string;
+  tree: DesignTreeNode;
+  x?: number;
+  y?: number;
+  parentId?: string;
+  replaceId?: string;
 }): Promise<void> {
   try {
     // If replacing a prior/orphan node, render into its slot (same parent + position).
@@ -1350,6 +1373,7 @@ async function createDesignTree(message: {
     if (tree.kind === 'frame') {
       // Create the root frame shell first so its id is available immediately.
       const frame = buildFrameShell(tree, parent);
+      await applyFillStyle(frame);
       if (replaceSlot) {
         frame.x = replaceSlot.x;
         frame.y = replaceSlot.y;
@@ -1477,6 +1501,106 @@ function parseCssColor(input: unknown): { color: RGB; opacity: number } | null {
     }
   }
   return null;
+}
+
+// ---- Design-system binding for html_to_design ----
+// Built once per render from the file's LOCAL color variables, paint styles and text
+// styles; exact matches only, so a render is never worse than the literal values.
+// ponytail: exact hex/font match. Nearest-color matching is the upgrade if people ask.
+interface DsLookup {
+  colors: Map<string, Variable>;
+  paints: Map<string, PaintStyle>;
+  texts: Map<string, TextStyle>;
+}
+let dsLookup: DsLookup | null = null; // ponytail: one render at a time; renders don't overlap in practice
+
+function isSolidRgba(value: unknown): value is RGBA {
+  return !!value && typeof value === 'object' && 'r' in value && 'g' in value && 'b' in value;
+}
+
+async function buildDsLookup(): Promise<DsLookup> {
+  const LIMIT = 2000;
+  const [variables, collections, paintStyles, textStyles] = await Promise.all([
+    figma.variables.getLocalVariablesAsync('COLOR'),
+    figma.variables.getLocalVariableCollectionsAsync(),
+    figma.getLocalPaintStylesAsync(),
+    figma.getLocalTextStylesAsync()
+  ]);
+  const defaultMode = new Map(collections.map((c) => [c.id, c.defaultModeId]));
+  const colors = new Map<string, Variable>();
+  for (const v of variables.slice(0, LIMIT)) {
+    const modeId = defaultMode.get(v.variableCollectionId);
+    let value: VariableValue | undefined = modeId ? v.valuesByMode[modeId] : undefined;
+    if (value && typeof value === 'object' && 'type' in value && value.type === 'VARIABLE_ALIAS') {
+      // one alias hop (semantic → primitive); deeper chains stay unbound
+      const aliased = await figma.variables.getVariableByIdAsync(value.id).catch(() => null);
+      const aliasMode = aliased ? defaultMode.get(aliased.variableCollectionId) : undefined;
+      value = aliased && aliasMode ? aliased.valuesByMode[aliasMode] : undefined;
+    }
+    if (isSolidRgba(value) && (!('a' in value) || value.a === 1)) {
+      const hex = solidHex(value);
+      if (!colors.has(hex)) colors.set(hex, v);
+    }
+  }
+  const paints = new Map<string, PaintStyle>();
+  for (const s of paintStyles.slice(0, LIMIT)) {
+    const p = s.paints[0];
+    if (s.paints.length === 1 && p && p.type === 'SOLID' && (p.opacity ?? 1) === 1) {
+      const hex = solidHex(p.color);
+      if (!paints.has(hex)) paints.set(hex, s);
+    }
+  }
+  const texts = new Map<string, TextStyle>();
+  for (const s of textStyles.slice(0, LIMIT)) {
+    const key = `${s.fontName.family}|${s.fontName.style}|${s.fontSize}`;
+    if (!texts.has(key)) texts.set(key, s);
+  }
+  return { colors, paints, texts };
+}
+
+// Solid paint → the same paint bound to the matching color variable (or unchanged).
+function bindSolid(paint: SolidPaint): SolidPaint {
+  if (!dsLookup || (paint.opacity ?? 1) !== 1) return paint;
+  const variable = dsLookup.colors.get(solidHex(paint.color));
+  if (!variable) return paint;
+  try {
+    return figma.variables.setBoundVariableForPaint(paint, 'color', variable);
+  } catch {
+    return paint;
+  }
+}
+
+// Paint-style fallback for a single literal solid fill that matched no variable.
+async function applyFillStyle(node: SceneNode & MinimalFillsMixin): Promise<void> {
+  if (!dsLookup || node.fills === figma.mixed || node.fills.length !== 1) return;
+  const paint = node.fills[0];
+  if (!paint || paint.type !== 'SOLID' || (paint.opacity ?? 1) !== 1 || paint.boundVariables?.color) return;
+  const style = dsLookup.paints.get(solidHex(paint.color));
+  if (!style) return;
+  try {
+    await node.setFillStyleIdAsync(style.id);
+  } catch {
+    // keep the literal fill
+  }
+}
+
+// Text style: family + style + size must match; a px line-height must match too, or the
+// style would re-wrap the measured text.
+async function applyTextStyle(text: TextNode, lineHeightPx: number | undefined): Promise<void> {
+  if (!dsLookup || text.fontName === figma.mixed || text.fontSize === figma.mixed) return;
+  const style = dsLookup.texts.get(`${text.fontName.family}|${text.fontName.style}|${text.fontSize}`);
+  if (!style) return;
+  const lh = style.lineHeight;
+  const lhOk =
+    lh.unit === 'AUTO'
+      ? !lineHeightPx
+      : lh.unit === 'PIXELS' && lineHeightPx !== undefined && Math.abs(lh.value - lineHeightPx) < 0.6;
+  if (!lhOk) return;
+  try {
+    await text.setTextStyleIdAsync(style.id);
+  } catch {
+    // keep literal text props
+  }
 }
 
 function cssSolidPaint(input: unknown): SolidPaint | null {
@@ -2415,12 +2539,23 @@ async function runBridgeCommand(
         figma.getLocalTextStylesAsync(),
         figma.getLocalEffectStylesAsync()
       ]);
-      const byCollection = new Map<string, { id: string; name: string; modes: string[]; variables: Array<{ id: string; name: string; type: string }> }>();
+      const byCollection = new Map<string, { id: string; name: string; modes: string[]; variables: Array<{ id: string; name: string; type: string; value?: string }> }>();
+      const defaultModeOf = new Map<string, string>();
       for (const c of collections) {
         byCollection.set(c.id, { id: c.id, name: c.name, modes: c.modes.map((m) => m.name), variables: [] });
+        defaultModeOf.set(c.id, c.defaultModeId);
       }
       for (const v of variables.slice(0, LIMIT)) {
-        byCollection.get(v.variableCollectionId)?.variables.push({ id: v.id, name: v.name, type: v.resolvedType });
+        // Default-mode value so an agent can pick the token that matches a hex; aliases show as "→ id".
+        const modeId = defaultModeOf.get(v.variableCollectionId);
+        const raw = modeId ? v.valuesByMode[modeId] : undefined;
+        const value =
+          raw === undefined
+            ? undefined
+            : typeof raw === 'object' && 'type' in raw && raw.type === 'VARIABLE_ALIAS'
+              ? `→ ${raw.id}`
+              : formatVariableValue(raw, v.resolvedType);
+        byCollection.get(v.variableCollectionId)?.variables.push({ id: v.id, name: v.name, type: v.resolvedType, value });
       }
       const brief = (s: BaseStyle) => ({ id: s.id, name: s.name });
       return {

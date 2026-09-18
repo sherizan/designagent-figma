@@ -82,7 +82,7 @@ function summarizeStrokes(
 }
 
 // Plain #rrggbb (no alpha suffix) — DESIGN.md / parseColor consume clean hex.
-function solidHex(color: RGB | RGBA): string {
+export function solidHex(color: RGB | RGBA): string {
   const toHex = (value: number): string =>
     Math.max(0, Math.min(255, Math.round(value * 255))).toString(16).padStart(2, '0');
   return `#${toHex(color.r)}${toHex(color.g)}${toHex(color.b)}`;
@@ -661,7 +661,7 @@ function rgbToHex(color: RGB | RGBA): string {
   return hex;
 }
 
-function formatVariableValue(value: VariableValue, resolvedType: string): string {
+export function formatVariableValue(value: VariableValue, resolvedType: string): string {
   if (value == null) {
     return 'null';
   }

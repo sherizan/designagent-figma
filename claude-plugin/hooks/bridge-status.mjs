@@ -22,7 +22,9 @@ const nudge = () => {
   socket.destroy();
   process.stdout.write(
     "DesignAgent: the Figma bridge isn't running yet. To let Claude read and edit the " +
-      'canvas, open the DesignAgent plugin in Figma and click Start on the Claude bridge bar.\n'
+      'canvas: install DesignAgent from Figma Community ' +
+      '(https://www.figma.com/community/plugin/1604428052675393154), run it in your file, ' +
+      'and click Start on the Claude bridge bar.\n'
   );
   process.exit(0);
 };

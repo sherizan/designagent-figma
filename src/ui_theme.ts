@@ -473,6 +473,39 @@ export const UI_STYLES = `
     color: var(--text-muted);
   }
 
+  .bridge-setup-lead {
+    margin: 10px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-muted, inherit);
+  }
+
+  .bridge-cmd {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .bridge-cmd code {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 4px 7px;
+  }
+
+  .btn-xs {
+    padding: 3px 9px;
+    font-size: 11px;
+  }
+
   .bridge-steps code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 11.5px;
