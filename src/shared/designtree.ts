@@ -28,6 +28,8 @@ export interface DesignTreeNode {
   height: number;
   fill?: string;
   gradient?: string; // raw CSS background-image gradient string, parsed sandbox-side
+  bgImage?: string; // data: URL from CSS background-image: url(...), layered over the fill
+  bgImageMode?: 'FILL' | 'FIT' | 'TILE'; // from background-size / background-repeat
   stroke?: string;
   strokeWidth?: number;
   cornerRadius?: number;

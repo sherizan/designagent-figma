@@ -230,6 +230,17 @@ function applyBoxStyles(node: DesignTreeNode, cs: CSSStyleDeclaration): void {
   const bgImage = cs.backgroundImage;
   if (bgImage && /gradient\(/i.test(bgImage)) {
     node.gradient = bgImage;
+  } else {
+    // url(data:…) only — the MCP server inlines local/remote images before rendering.
+    const m = /url\(["']?(data:image\/[^"')]+)["']?\)/i.exec(bgImage ?? '');
+    if (m && m[1]) {
+      node.bgImage = m[1];
+      node.bgImageMode = /^repeat/.test(cs.backgroundRepeat) && !/no-repeat/.test(cs.backgroundRepeat)
+        ? 'TILE'
+        : cs.backgroundSize === 'contain'
+          ? 'FIT'
+          : 'FILL';
+    }
   }
   const borderWidth = px(cs.borderTopWidth);
   if (borderWidth > 0 && cs.borderTopStyle !== 'none' && isVisibleColor(cs.borderTopColor)) {

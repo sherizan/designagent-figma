@@ -1104,6 +1104,9 @@ async function buildDesignNode(
     rect.resize(Math.max(1, node.width), Math.max(1, node.height));
     rect.x = node.x;
     rect.y = node.y;
+    if (node.cornerRadius) {
+      rect.cornerRadius = node.cornerRadius;
+    }
     try {
       const base64 = node.dataUrl.replace(/^data:[^;]+;base64,/, '');
       const image = figma.createImage(figma.base64Decode(base64));
@@ -1149,6 +1152,20 @@ function buildFrameShell(
   parent.appendChild(frame);
   frame.clipsContent = false;
   frame.fills = resolveFrameFill(node);
+  if (node.bgImage) {
+    try {
+      const image = figma.createImage(figma.base64Decode(node.bgImage.replace(/^data:[^;]+;base64,/, '')));
+      const mode = node.bgImageMode ?? 'FILL';
+      const paint: ImagePaint =
+        mode === 'TILE'
+          ? { type: 'IMAGE', scaleMode: 'TILE', imageHash: image.hash, scalingFactor: 1 }
+          : { type: 'IMAGE', scaleMode: mode, imageHash: image.hash };
+      frame.fills = [...frame.fills, paint];
+      frame.clipsContent = true; // a background never paints outside its box
+    } catch {
+      // undecodable image: keep the color fill
+    }
+  }
   const stroke = cssSolidPaint(node.stroke);
   if (stroke) {
     frame.strokes = [bindSolid(stroke)];
