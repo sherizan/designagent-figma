@@ -352,12 +352,16 @@ function buildInlineTextNode(
   const multiline = range.getClientRects().length > 1;
   const letterSpacing = cs.letterSpacing && cs.letterSpacing !== 'normal' ? px(cs.letterSpacing) : 0;
   const lineHeight = cs.lineHeight && cs.lineHeight !== 'normal' ? px(cs.lineHeight) : 0;
+  // Wrapped text fills its container: the Range rect is only the widest line (and with
+  // text-wrap: balance, much narrower), which would make Figma re-wrap at the wrong width.
+  const padL = px(cs.paddingLeft);
+  const contentW = rect.width - padL - px(cs.paddingRight);
 
   return {
     kind: 'text',
-    x: tr.left - rect.left,
+    x: multiline && contentW > tr.width ? padL : tr.left - rect.left,
     y: tr.top - rect.top,
-    width: tr.width,
+    width: multiline ? Math.max(tr.width, contentW) : tr.width,
     height: tr.height,
     text,
     fontSize: px(cs.fontSize),
@@ -496,11 +500,14 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
           : raw;
       const letterSpacing = cs.letterSpacing && cs.letterSpacing !== 'normal' ? px(cs.letterSpacing) : 0;
       const lineHeight = cs.lineHeight && cs.lineHeight !== 'normal' ? px(cs.lineHeight) : 0;
+      // Same rule as buildInlineTextNode: wrapped text takes the parent's content width.
+      const padL = px(cs.paddingLeft);
+      const contentW = rect.width - padL - px(cs.paddingRight);
       node.children.push({
         kind: 'text',
-        x: tr.left - rect.left,
+        x: multiline && contentW > tr.width ? padL : tr.left - rect.left,
         y: tr.top - rect.top,
-        width: tr.width,
+        width: multiline ? Math.max(tr.width, contentW) : tr.width,
         height: tr.height,
         text,
         fontSize: px(cs.fontSize),

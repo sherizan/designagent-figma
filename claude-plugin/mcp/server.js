@@ -25938,7 +25938,7 @@ server.registerTool(
 server.registerTool(
   "create_component",
   {
-    description: "Turn an existing frame (or other node) into a component in place. Returns the component id and key, which instantiate_component accepts.",
+    description: "Turn an existing frame (or other node) into a component in place. Returns the component id (use it as instantiate_component componentId) and its key (only importable by key once the component is published to a library).",
     inputSchema: { nodeId: external_exports.string(), name: external_exports.string().optional() }
   },
   async ({ nodeId, name }) => run("create_component", { nodeId, name })

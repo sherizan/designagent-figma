@@ -1248,6 +1248,15 @@ function buildFrameShell(
 
 // Build and append a frame's children (recurses into buildDesignNode per child).
 async function appendDesignChildren(frame: FrameNode, node: DesignTreeNode): Promise<void> {
+  await appendDesignChildrenInner(frame, node);
+  if (node.layout === 'GRID') {
+    // Auto-added grid rows grow the frame past the measured box; snap it back so the
+    // FLEX rows distribute inside the CSS-measured height.
+    frame.resize(Math.max(1, node.width), Math.max(1, node.height));
+  }
+}
+
+async function appendDesignChildrenInner(frame: FrameNode, node: DesignTreeNode): Promise<void> {
   for (const child of node.children ?? []) {
     const created = await buildDesignNode(child, frame);
     if (!node.layout) {
