@@ -43,17 +43,23 @@ export interface DesignTreeNode {
   lineHeight?: number;
   multiline?: boolean;
   runs?: TextRun[]; // per-character style runs for a merged inline-text node (I4)
+  textWrap?: 'BALANCE' | 'PRETTY'; // CSS text-wrap → Figma textWrapStyle
+  fontVariation?: Record<string, number>; // CSS font-variation-settings axes (variable fonts)
   // image / svg
   dataUrl?: string;
   svg?: string;
   // auto layout (when set, children flow instead of being absolutely placed)
-  layout?: 'HORIZONTAL' | 'VERTICAL';
+  layout?: 'HORIZONTAL' | 'VERTICAL' | 'GRID';
   itemSpacing?: number;
+  // GRID only: column count + gaps; rows are auto-created as children flow in (row-major).
+  gridColumns?: number;
+  gridColumnGap?: number;
+  gridRowGap?: number;
   paddingTop?: number;
   paddingRight?: number;
   paddingBottom?: number;
   paddingLeft?: number;
-  primaryAxisAlign?: 'MIN' | 'CENTER' | 'MAX' | 'SPACE_BETWEEN';
+  primaryAxisAlign?: 'MIN' | 'CENTER' | 'MAX' | 'SPACE_BETWEEN' | 'SPACE_AROUND' | 'SPACE_EVENLY';
   counterAxisAlign?: 'MIN' | 'CENTER' | 'MAX';
   stretch?: boolean; // fill the parent's counter axis (e.g. full-width in a column)
   absolute?: boolean; // pin at x/y inside an auto-layout parent (margin-inset children)

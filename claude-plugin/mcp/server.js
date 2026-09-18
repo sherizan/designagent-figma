@@ -25266,6 +25266,7 @@ function connectToBroker() {
       if (msg.ok) {
         entry.resolve(msg.result);
       } else {
+        countToolCall(`${entry.command}_err`);
         entry.reject(new Error(msg.error || "DesignAgent plugin reported an error."));
       }
       return;
@@ -25311,9 +25312,10 @@ function callPlugin(command, params = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
     const id = (0, import_node_crypto.randomUUID)();
     const timer = setTimeout(() => {
       pending.delete(id);
+      countToolCall(`${command}_err`);
       reject(new Error(`DesignAgent plugin did not respond within ${timeoutMs / 1e3}s.`));
     }, timeoutMs);
-    pending.set(id, { resolve: resolve3, reject, timer });
+    pending.set(id, { resolve: resolve3, reject, timer, command });
     try {
       brokerSocket.send(JSON.stringify({ type: "request", id, command, params }));
       countToolCall(command);
@@ -25612,9 +25614,13 @@ server.registerTool(
 server.registerTool(
   "get_spec",
   {
-    description: "Get the structured UI spec (hierarchy, tokens, layout, text, components) for the current Figma selection as JSON."
+    description: "Get the structured UI spec (hierarchy, tokens, layout, text, components) for the current Figma selection as JSON. Pass nodeId to spec a specific node instead of the selection, and depth to cap the hierarchy (0 = the node only, 1 = direct children) \u2014 use a shallow depth first on big frames, then drill into a child id.",
+    inputSchema: {
+      nodeId: external_exports.string().optional().describe("Node id to spec (default: the current selection)."),
+      depth: external_exports.number().optional().describe("Max hierarchy depth; 0 = root only, 1 = direct children. Omit for the full tree.")
+    }
   },
-  async () => run("get_spec")
+  async ({ nodeId, depth }) => run("get_spec", { nodeId, depth })
 );
 server.registerTool(
   "export_tokens",
@@ -25781,17 +25787,6 @@ server.registerTool(
   },
   async ({ nodeId, label, suggestion }) => run("annotate", { nodeId, label, suggestion })
 );
-server.registerTool(
-  "apply_fix",
-  {
-    description: 'Apply a DesignAgent auto-fix to a Figma node. "auto-layout" converts a manual frame to Auto Layout; "absolute-positioning" returns an absolutely-positioned child to normal flow.',
-    inputSchema: {
-      nodeId: external_exports.string().describe("The Figma node id to fix."),
-      fix: external_exports.enum(["auto-layout", "absolute-positioning"]).describe("Which fix to apply.")
-    }
-  },
-  async ({ nodeId, fix }) => run("apply_fix", { nodeId, fix })
-);
 var COLOR = external_exports.string().describe('Hex color, e.g. "#3366ff" (optional 8-digit for alpha).');
 server.registerTool(
   "create_frame",
@@ -25891,17 +25886,70 @@ server.registerTool(
 server.registerTool(
   "set_text_style",
   {
-    description: "Style an existing text node: font size, weight, color, and alignment. Weight resolves against the font family\u2019s available styles.",
+    description: "Style an existing text node: font size, weight, color, alignment, wrapping, and variable-font axes. Weight resolves against the font family\u2019s available styles.",
     inputSchema: {
       nodeId: external_exports.string(),
       fontSize: external_exports.number().optional(),
       weight: external_exports.union([external_exports.string(), external_exports.number()]).optional().describe('A number (400, 600, 700) or a style name ("Medium", "Semi Bold", "Bold").'),
       color: COLOR.optional(),
       align: external_exports.enum(["LEFT", "CENTER", "RIGHT", "JUSTIFIED"]).optional(),
-      valign: external_exports.enum(["TOP", "CENTER", "BOTTOM"]).optional()
+      valign: external_exports.enum(["TOP", "CENTER", "BOTTOM"]).optional(),
+      wrap: external_exports.enum(["AUTO", "BALANCE", "PRETTY"]).optional().describe("Line-wrapping style for multi-line text (CSS text-wrap equivalent)."),
+      variation: external_exports.record(external_exports.number()).optional().describe('Variable-font axes, e.g. { "wght": 550, "slnt": -5 }. Ignored for static families.')
     }
   },
   async (args) => run("set_text_style", args)
+);
+server.registerTool(
+  "rename",
+  {
+    description: "Rename a node (layer name in the Figma layers panel).",
+    inputSchema: { nodeId: external_exports.string(), name: external_exports.string() }
+  },
+  async ({ nodeId, name }) => run("rename", { nodeId, name })
+);
+server.registerTool(
+  "set_auto_layout",
+  {
+    description: 'Add, change, or remove Auto Layout on an existing frame/component/instance. Omit layoutMode on a plain frame to infer the axis, gap, and padding from where its children already sit (the old "convert to Auto Layout" fix). "NONE" removes Auto Layout.',
+    inputSchema: {
+      nodeId: external_exports.string(),
+      layoutMode: external_exports.enum(["HORIZONTAL", "VERTICAL", "NONE"]).optional(),
+      itemSpacing: external_exports.number().optional().describe("Gap between children in px."),
+      padding: external_exports.union([external_exports.number(), external_exports.object({ top: external_exports.number().optional(), right: external_exports.number().optional(), bottom: external_exports.number().optional(), left: external_exports.number().optional() })]).optional().describe("Uniform px, or per-side."),
+      primaryAxisAlign: external_exports.enum(["MIN", "CENTER", "MAX", "SPACE_BETWEEN", "SPACE_AROUND", "SPACE_EVENLY"]).optional(),
+      counterAxisAlign: external_exports.enum(["MIN", "CENTER", "MAX", "BASELINE"]).optional(),
+      sizing: external_exports.enum(["HUG", "FIXED"]).optional().describe("HUG = size to content on both axes; FIXED = keep the current size.")
+    }
+  },
+  async (args) => run("set_auto_layout", args)
+);
+server.registerTool(
+  "set_instance_property",
+  {
+    description: 'Set component properties on an instance (boolean toggles, text, and variant properties). Keys are the clean names get_spec reports (e.g. "Label", "Show icon", "Size"); values are strings or booleans. Instance-swap properties are not supported.',
+    inputSchema: {
+      nodeId: external_exports.string().describe("The instance node id."),
+      properties: external_exports.record(external_exports.union([external_exports.string(), external_exports.boolean(), external_exports.number()])).describe("{ propertyName: value }")
+    }
+  },
+  async ({ nodeId, properties }) => run("set_instance_property", { nodeId, properties })
+);
+server.registerTool(
+  "create_component",
+  {
+    description: "Turn an existing frame (or other node) into a component in place. Returns the component id and key, which instantiate_component accepts.",
+    inputSchema: { nodeId: external_exports.string(), name: external_exports.string().optional() }
+  },
+  async ({ nodeId, name }) => run("create_component", { nodeId, name })
+);
+server.registerTool(
+  "list_variables_and_styles",
+  {
+    description: "List the file's local variable collections (with modes and variable names/types) and local paint, text, and effect styles \u2014 the design-system vocabulary to reuse before creating raw values. Read-only; capped at 500 entries per list.",
+    inputSchema: {}
+  },
+  async () => run("list_variables_and_styles")
 );
 server.registerTool(
   "set_fill",
@@ -26087,41 +26135,6 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "set_grid",
-  {
-    description: "Turn an existing frame/component into a native Figma grid layout (or update its grid). Children flow into the grid automatically.",
-    inputSchema: {
-      nodeId: external_exports.string(),
-      rows: external_exports.number().optional().describe("Number of grid rows."),
-      columns: external_exports.number().optional().describe("Number of grid columns."),
-      rowGap: external_exports.number().optional().describe("Gap between rows in px."),
-      columnGap: external_exports.number().optional().describe("Gap between columns in px.")
-    }
-  },
-  async (args) => run("set_grid", args)
-);
-server.registerTool(
-  "list_shaders",
-  {
-    description: "List shaders available to the current file (in-file, subscribed libraries, and owned). Returns an empty list when none exist. Use a returned id with set_shader.",
-    inputSchema: {}
-  },
-  async () => run("list_shaders")
-);
-server.registerTool(
-  "set_shader",
-  {
-    description: "Apply a shader (from list_shaders) to a node as a fill, stroke, or effect. The shader is imported automatically if needed.",
-    inputSchema: {
-      nodeId: external_exports.string(),
-      shaderId: external_exports.string().describe("Shader id from list_shaders."),
-      target: external_exports.enum(["fill", "stroke", "effect"]).optional().describe("Where to apply it; defaults to the shader's native surface (fill or effect)."),
-      properties: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Optional property assignments keyed by the shader's property-definition ids.")
-    }
-  },
-  async (args) => run("set_shader", args)
-);
-server.registerTool(
   "list_animation_styles",
   {
     description: "(Beta) List the Figma Motion animation styles available in the current document. Use a returned styleId with apply_animation.",
@@ -26262,14 +26275,16 @@ server.registerTool(
 server.registerTool(
   "batch",
   {
-    description: "Run multiple bridge operations in one call (e.g. delete or restyle many nodes). Each item is { command, params } using any other tool name. Returns per-op results; one failure does not stop the rest.",
+    description: "Run multiple bridge operations in one call (e.g. delete or restyle many nodes). Each item is { command, params } using any other tool name. Returns per-op results; one failure does not stop the rest. Pass screenshot to get a PNG of the result in the same call instead of a separate take_screenshot.",
     inputSchema: {
       operations: external_exports.array(
         external_exports.object({
           command: external_exports.string().describe('A bridge command name, e.g. "set_fill", "delete", "move".'),
           params: external_exports.record(external_exports.any()).optional()
         })
-      ).describe("Operations to run in order.")
+      ).describe("Operations to run in order."),
+      screenshot: external_exports.union([external_exports.boolean(), external_exports.string()]).optional().describe("true = screenshot the first node an op touched; or a node id (e.g. the parent frame) to capture."),
+      screenshotScale: external_exports.number().optional().describe("Screenshot export scale (default 1 \u2014 cheap; use 2 for detail).")
     }
   },
   async (args) => {
@@ -26282,7 +26297,22 @@ server.registerTool(
         }
         operations.push({ command: op.command, params });
       }
-      return run("batch", { operations });
+      const result = await callPlugin(
+        "batch",
+        { operations, screenshot: args.screenshot, screenshotScale: args.screenshotScale },
+        6e4
+      );
+      if (result?.image?.base64) {
+        const { image, ...rest } = result;
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(rest) },
+            { type: "text", text: `${image.name ?? "node"} \u2014 ${Math.round(image.width ?? 0)}\xD7${Math.round(image.height ?? 0)}` },
+            { type: "image", data: image.base64, mimeType: image.mimeType }
+          ]
+        };
+      }
+      return ok(result);
     } catch (error2) {
       return fail(error2);
     }
@@ -26291,7 +26321,7 @@ server.registerTool(
 server.registerTool(
   "html_to_design",
   {
-    description: "Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project (e.g. one you just generated). Fonts must exist in the Figma file; external images are inlined. The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset \u2014 staying inside it avoids silent re-renders):\n- Reliable: vertical flex columns; solid fills, border, border-radius, box-shadow; fixed-width rows with a few px of trailing slack; Google fonts.\n- Avoid for now: exact-fit flex rows (`flex:1`, `width:fit-content`, or `space-between` whose children fill the row can silently drop/overlap a child \u2014 give items fixed widths with slack); CSS gradients (currently render near-white \u2014 use solid fills); inline styled `<span>` inside wrapping text (overlaps \u2014 split into separate text blocks); negative margins (scramble \u2014 use positive `gap`).\n- Returns the new frame's id immediately and finishes painting in the background \u2014 take a screenshot to verify completion. Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.",
+    description: "Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project (e.g. one you just generated). Fonts must exist in the Figma file; external images are inlined. The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset \u2014 staying inside it avoids silent re-renders):\n- Reliable: flex rows/columns (justify-content incl. space-between/around/evenly, gap, flex-grow); CSS grid (display:grid \u2192 native Figma grid, column count from grid-template-columns, gaps; rows auto-flow); solid fills, linear gradients, border, border-radius, box-shadow; text-wrap: balance/pretty; variable-font axes via font-variation-settings; Google fonts.\n- Known limits: radial/conic and multi-layer gradients flatten to their first stop; grid rows auto-flow (row spans and grid-areas are ignored); children inset on both sides inside a flex parent are pinned absolutely; only fonts installed in Figma render (others fall back).\n- Returns the new frame's id immediately and finishes painting in the background \u2014 take a screenshot to verify completion. Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.",
     inputSchema: {
       html: external_exports.string().optional().describe("Raw HTML to render."),
       path: external_exports.string().optional().describe("Path to an .html file in the project."),
@@ -26333,7 +26363,7 @@ server.registerTool(
     description: "Render the current design to a PNG and return it as an image so you can see the result. With no arguments it captures the current selection (or the whole page if nothing is selected). Pass a nodeId to capture a specific node. Exports the design geometry, not the Figma app UI.",
     inputSchema: {
       nodeId: external_exports.string().optional().describe("Node id to capture. Defaults to the selection, else the page."),
-      scale: external_exports.number().optional().describe("Export scale (0.5\u20134, default 2). Lowered automatically if the image is large.")
+      scale: external_exports.number().optional().describe("Export scale (0.5\u20134, default 2). Use 0.5\u20131 for quick layout checks; 2 only when you need to read small text. Lowered automatically if the image is large.")
     }
   },
   async (args) => {

@@ -28,7 +28,6 @@ create tools. After applying anything, call `take_screenshot` to confirm the pix
 | Frosted **glass**, **blur**, **inner shadow**, **texture** grain | `set_effect` | ✅ editable |
 | Drop shadow | `set_shadow` | ✅ editable |
 | Repeat/tile a node as a fill | `set_pattern` | ✅ editable |
-| A shader already in the file/library | `set_shader` (ids from `list_shaders`) | ✅ |
 | **Mesh gradient** (smooth multi-point blend) | raster → `set_image` | ❌ no native paint |
 | **Halftone** / dot-screen | raster → `set_image` | ❌ no native paint |
 | **Holographic / iridescent foil** | raster → `set_image`, or native — see below | ❌ no native paint |

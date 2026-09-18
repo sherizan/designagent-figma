@@ -65,11 +65,42 @@ function median(nums: number[]): number {
   return s.length % 2 ? s[m] ?? 0 : ((s[m - 1] ?? 0) + (s[m] ?? 0)) / 2;
 }
 
-function primaryFromJustify(j: string): 'MIN' | 'CENTER' | 'MAX' | 'SPACE_BETWEEN' {
+type PrimaryAlign = NonNullable<DesignTreeNode['primaryAxisAlign']>;
+
+function primaryFromJustify(j: string): PrimaryAlign {
   if (j.includes('center')) return 'CENTER';
+  if (j.includes('space-around')) return 'SPACE_AROUND';
+  if (j.includes('space-evenly')) return 'SPACE_EVENLY';
   if (j.includes('space-')) return 'SPACE_BETWEEN';
   if (j.includes('end')) return 'MAX';
   return 'MIN';
+}
+
+// CSS gap value → px, treating 'normal' (the unset computed value) as 0.
+function gapPx(value: string): number {
+  return value && value !== 'normal' ? px(value) : 0;
+}
+
+// `text-wrap: balance | pretty` → Figma textWrapStyle. Reads the longhand first
+// (Chromium ≥130 exposes text-wrap-style), then the shorthand.
+function textWrapFrom(cs: CSSStyleDeclaration): DesignTreeNode['textWrap'] {
+  const v = cs.getPropertyValue('text-wrap-style') || cs.getPropertyValue('text-wrap');
+  if (v.includes('balance')) return 'BALANCE';
+  if (v.includes('pretty')) return 'PRETTY';
+  return undefined;
+}
+
+// `font-variation-settings: "wght" 550, "slnt" -5` → { wght: 550, slnt: -5 }.
+function fontVariationFrom(cs: CSSStyleDeclaration): Record<string, number> | undefined {
+  const v = cs.getPropertyValue('font-variation-settings');
+  if (!v || v === 'normal') return undefined;
+  const out: Record<string, number> = {};
+  for (const m of v.matchAll(/["']([a-zA-Z0-9]{4})["']\s+(-?[\d.]+)/g)) {
+    const axis = m[1];
+    const n = parseFloat(m[2] ?? '');
+    if (axis && Number.isFinite(n)) out[axis] = n;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function counterFromItems(a: string): 'MIN' | 'CENTER' | 'MAX' {
@@ -79,11 +110,14 @@ function counterFromItems(a: string): 'MIN' | 'CENTER' | 'MAX' {
 }
 
 interface LayoutInfo {
-  layout: 'HORIZONTAL' | 'VERTICAL';
+  layout: 'HORIZONTAL' | 'VERTICAL' | 'GRID';
   itemSpacing: number;
   padding: { t: number; r: number; b: number; l: number };
-  primary: 'MIN' | 'CENTER' | 'MAX' | 'SPACE_BETWEEN';
+  primary: PrimaryAlign;
   counter: 'MIN' | 'CENTER' | 'MAX';
+  gridColumns?: number;
+  gridColumnGap?: number;
+  gridRowGap?: number;
 }
 
 // Map an element's CSS layout to Figma Auto Layout, or null for absolute fallback.
@@ -108,6 +142,22 @@ function computeLayout(el: Element, cs: CSSStyleDeclaration, win: Window): Layou
       padding,
       primary: primaryFromJustify(cs.justifyContent),
       counter: counterFromItems(cs.alignItems)
+    };
+  }
+
+  if (display === 'grid' || display === 'inline-grid') {
+    // Computed grid-template-columns is a resolved px track list ("200px 200px 200px"),
+    // so the token count is the column count. Rows are left to Figma's auto-flow.
+    const cols = cs.gridTemplateColumns.split(/\s+/).filter((t) => t && t !== 'none').length;
+    return {
+      layout: 'GRID',
+      itemSpacing: 0,
+      padding,
+      primary: 'MIN',
+      counter: 'MIN',
+      gridColumns: Math.max(1, cols),
+      gridColumnGap: gapPx(cs.columnGap),
+      gridRowGap: gapPx(cs.rowGap)
     };
   }
 
@@ -318,6 +368,8 @@ function buildInlineTextNode(
     lineHeight,
     multiline,
     runs: runs.length > 0 ? runs : undefined,
+    textWrap: textWrapFrom(cs),
+    fontVariation: fontVariationFrom(cs),
     children: []
   };
 }
@@ -378,7 +430,13 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
     node.paddingLeft = lay.padding.l;
     node.primaryAxisAlign = lay.primary;
     node.counterAxisAlign = lay.counter;
+    if (lay.layout === 'GRID') {
+      node.gridColumns = lay.gridColumns;
+      node.gridColumnGap = lay.gridColumnGap;
+      node.gridRowGap = lay.gridRowGap;
+    }
   }
+  const isGrid = lay?.layout === 'GRID';
   // For a vertical Auto Layout, a child as wide as the content box should fill width.
   const isVertical = lay?.layout === 'VERTICAL';
   const contentWidth = isVertical ? rect.width - lay!.padding.l - lay!.padding.r : 0;
@@ -396,7 +454,9 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
       const cr = childEl.getBoundingClientRect();
       if (cr.width <= 0 || cr.height <= 0) continue;
       const childNode = buildNode(childEl, win, rect);
-      if (contentWidth > 0 && cr.width >= contentWidth - 2) {
+      if (isGrid) {
+        // grid cells flow into Figma's grid; never pin or stretch them
+      } else if (contentWidth > 0 && cr.width >= contentWidth - 2) {
         childNode.stretch = true;
       } else if (lay) {
         // Auto Layout ignores child margins, so a child inset on BOTH sides
@@ -450,12 +510,14 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
         letterSpacing,
         lineHeight,
         multiline,
+        textWrap: textWrapFrom(cs),
+        fontVariation: fontVariationFrom(cs),
         children: []
       });
     }
   }
 
-  if (lay) {
+  if (lay && lay.layout !== 'GRID') {
     applyOverlap(node, lay.layout, flowChildren);
   }
 

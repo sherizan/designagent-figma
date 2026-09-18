@@ -528,7 +528,7 @@ function updateGlobalStats(node: SceneNode, stats: MutableStats, tokenHints: Tok
 // (PERF-REPORT: 30 of 121 nodes in a real frame were raw VECTORs).
 const VECTOR_LEAF_TYPES = new Set(['VECTOR', 'BOOLEAN_OPERATION', 'STAR', 'POLYGON', 'LINE']);
 
-function extractNode(node: SceneNode, stats: MutableStats): UiNodeSpec {
+function extractNode(node: SceneNode, stats: MutableStats, depth = Infinity): UiNodeSpec {
   const tokenHints: TokenHints = shouldIgnoreForTokenScoring(node)
     ? { styleRefs: 0, variableRefs: 0, rawValueHints: 0 }
     : {
@@ -580,12 +580,12 @@ function extractNode(node: SceneNode, stats: MutableStats): UiNodeSpec {
     spec.animations = animations;
   }
 
-  if ('children' in node && !VECTOR_LEAF_TYPES.has(node.type)) {
+  if ('children' in node && !VECTOR_LEAF_TYPES.has(node.type) && depth > 0) {
     // hidden subtrees aren't buildable UI — don't ship them (PERF-REPORT: 12
     // of 121 nodes in a real frame were visible: false)
     spec.children = node.children
       .filter((child) => child.visible !== false)
-      .map((child) => extractNode(child, stats));
+      .map((child) => extractNode(child, stats, depth - 1));
   }
 
   return spec;
@@ -1057,7 +1057,7 @@ export async function enrichUiSpec(
 }
 
 
-export function extractUiSpec(root: SceneNode): UiSpec {
+export function extractUiSpec(root: SceneNode, maxDepth = Infinity): UiSpec {
   const stats: MutableStats = {
     totalNodes: 0,
     frames: 0,
@@ -1070,7 +1070,7 @@ export function extractUiSpec(root: SceneNode): UiSpec {
     rawValueCandidates: 0
   };
 
-  const rootSpec = extractNode(root, stats);
+  const rootSpec = extractNode(root, stats, maxDepth);
 
   const tokenRefs = stats.styleRefs + stats.variableRefs;
   const totalTokenSignals = tokenRefs + stats.rawValueCandidates;

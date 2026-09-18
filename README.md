@@ -41,7 +41,8 @@ The MCP server (the Claude Code side, not the Figma plugin) sends anonymous usag
 `designagent.dev` so we know which bridge tools are actually used. Each batch contains only:
 tool names with call counts, the plugin version, and a random install id (a UUID stored in
 `~/.designagent-id`). It never includes tool parameters, node names, file names, or any design
-content. Opt out by setting `DESIGNAGENT_TELEMETRY=0` in your environment.
+content. Failed calls are counted the same way under `<tool>_err` (still just the name, never
+the error text). Opt out by setting `DESIGNAGENT_TELEMETRY=0` in your environment.
 
 ## Development
 

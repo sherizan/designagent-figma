@@ -5,6 +5,7 @@ import type { AnalysisPayload, Intent, Mode, SelectedNodeInfo, UiSpec } from './
 interface AnalyzeOptions {
   linkBase?: string;
   annotationCategories?: Map<string, string>;
+  maxDepth?: number; // cap the spec hierarchy (0 = root only); undefined = full tree
 }
 
 export interface AnalysisCore {
@@ -59,7 +60,7 @@ function getSelectedNodeInfo(node: SceneNode, linkBase?: string): SelectedNodeIn
 export function analyzeNodeCore(node: SceneNode, options?: AnalyzeOptions): AnalysisCore {
   const selectedNode = getSelectedNodeInfo(node, options?.linkBase);
   const intent = classifyIntent(node);
-  const uiSpec = extractUiSpec(node);
+  const uiSpec = extractUiSpec(node, options?.maxDepth);
 
   return {
     selectedNode,
