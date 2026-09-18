@@ -39,6 +39,55 @@ function HeartbeatReadout({ at }: { at: number }): JSX.Element {
   return <span className="bridge-heartbeat">heartbeat {formatAgo(at, now)}</span>;
 }
 
+const INSTALL_COMMANDS = [
+  '/plugin marketplace add sherizan/designagent',
+  '/plugin install designagent@designagent'
+];
+
+// Figma's UI iframe sometimes denies the async clipboard API; fall back to execCommand.
+function copyText(text: string): void {
+  const legacy = (): void => {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    try {
+      document.execCommand('copy');
+    } catch {
+      // nothing else to try
+    }
+    document.body.removeChild(area);
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(legacy);
+  } else {
+    legacy();
+  }
+}
+
+function CopyCommand({ command }: { command: string }): JSX.Element {
+  const [copied, setCopied] = React.useState(false);
+  return (
+    <div className="bridge-cmd">
+      <code>{command}</code>
+      <button
+        type="button"
+        className="btn btn-xs"
+        onClick={() => {
+          copyText(command);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        }}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+  );
+}
+
 // The app's top bar — styled like a header (flat, no card). It's the Claude
 // Bridge title + live status, with Start/Stop and a Setup disclosure.
 export function BridgeBar({
@@ -93,17 +142,18 @@ export function BridgeBar({
       {showSetup ? (
         <details className="bridge-setup" open>
           <summary>Setup</summary>
-          <ol className="bridge-steps">
-            <li>
-              In Claude Code: <code>/plugin marketplace add sherizan/designagent</code>
-            </li>
-            <li>
-              <code>/plugin install designagent@designagent</code>, then restart Claude Code.
-            </li>
-            <li>
-              Click <strong>Start</strong> above — the dot turns green when connected.
-            </li>
-          </ol>
+          <p className="bridge-setup-lead">
+            {status === 'off'
+              ? 'Click Start. First time? Claude Code needs the DesignAgent plugin — run these once in Claude Code:'
+              : "Claude Code isn't running with the DesignAgent plugin. Install it once in Claude Code:"}
+          </p>
+          {INSTALL_COMMANDS.map((command) => (
+            <CopyCommand key={command} command={command} />
+          ))}
+          <p className="bridge-setup-lead">
+            Then run <code>claude</code> inside your project folder — the dot turns green when Claude
+            is connected.
+          </p>
         </details>
       ) : null}
 

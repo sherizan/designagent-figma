@@ -4,7 +4,7 @@ import { lookup } from 'node:dns/promises';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -45,6 +45,8 @@ const pending = new Map<
   string,
   { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; command: string }
 >();
+// Funnel: the first successful plugin reply proves a paired bridge (counted once per process).
+let bridgeCounted = false;
 
 let brokerSocket: WebSocket | null = null;
 let brokerReady = false;
@@ -187,6 +189,10 @@ function connectToBroker(): void {
       pending.delete(msg.id);
       clearTimeout(entry.timer);
       if (msg.ok) {
+        if (!bridgeCounted) {
+          bridgeCounted = true;
+          countToolCall('bridge_connect');
+        }
         entry.resolve(msg.result);
       } else {
         countToolCall(`${entry.command}_err`);
@@ -501,6 +507,46 @@ async function inlineExternalImages(html: string): Promise<string> {
       budget -= 1;
     } catch {
       // skip unreachable / blocked images
+    }
+  }
+  return result;
+}
+
+// Inline relative <img src> / CSS url() assets from disk, resolved against the HTML
+// file's own folder (a Claude Design export ships assets/ next to artifact.html).
+// The plugin UI can only load localhost, so everything must travel as data URLs.
+const LOCAL_ASSET_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.svg': 'image/svg+xml'
+};
+
+async function inlineLocalAssets(html: string, htmlPath: string): Promise<string> {
+  const baseDir = dirname(resolveInProject(htmlPath));
+  const refs = new Set<string>();
+  for (const m of html.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["']/gi)) refs.add(m[1]!);
+  for (const m of html.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) refs.add(m[1]!);
+  let result = html;
+  let budget = 40;
+  for (const ref of refs) {
+    if (budget <= 0) break;
+    if (/^(https?:|data:|blob:|#)/i.test(ref)) continue;
+    const clean = ref.split(/[?#]/)[0] ?? '';
+    const mime = LOCAL_ASSET_MIME[extname(clean).toLowerCase()];
+    if (!mime) continue;
+    try {
+      const abs = resolve(baseDir, clean);
+      if (relative(PROJECT_ROOT, abs).startsWith('..')) continue; // never read outside the project
+      const buf = await readFile(abs);
+      if (buf.length > MAX_IMAGE_BYTES) continue;
+      result = result.split(ref).join(`data:${mime};base64,${buf.toString('base64')}`);
+      budget -= 1;
+    } catch {
+      // missing file: leave the reference as-is (renders as a broken image, like a browser)
     }
   }
   return result;
@@ -1479,7 +1525,7 @@ server.registerTool(
   'html_to_design',
   {
     description:
-      'Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project (e.g. one you just generated). Fonts must exist in the Figma file; external images are inlined. The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset — staying inside it avoids silent re-renders):\n- Reliable: flex rows/columns (justify-content incl. space-between/around/evenly, gap, flex-grow); CSS grid (display:grid → native Figma grid, column count from grid-template-columns, gaps; rows auto-flow); solid fills, linear gradients, border, border-radius, box-shadow; text-wrap: balance/pretty; variable-font axes via font-variation-settings; Google fonts.\n- Known limits: radial/conic and multi-layer gradients flatten to their first stop; grid rows auto-flow (row spans and grid-areas are ignored); children inset on both sides inside a flex parent are pinned absolutely; only fonts installed in Figma render (others fall back).\n- Returns the new frame\'s id immediately and finishes painting in the background — take a screenshot to verify completion. Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.',
+      'Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project (e.g. one you just generated). With `path`, relative image paths (`<img src>`, CSS `url()`) resolve against that file\'s folder and are inlined; external http(s) images are inlined too. Fonts must exist in the Figma file. Solid colors and text that exactly match a local color variable, paint style, or text style get bound to it (see useDesignSystem). The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset — staying inside it avoids silent re-renders):\n- Reliable: flex rows/columns (justify-content incl. space-between/around/evenly, gap, flex-grow); CSS grid (display:grid → native Figma grid, column count from grid-template-columns, gaps; rows auto-flow); solid fills, linear gradients, border, border-radius, box-shadow; text-wrap: balance/pretty; variable-font axes via font-variation-settings; Google fonts.\n- Known limits: radial/conic and multi-layer gradients flatten to their first stop; grid rows auto-flow (row spans and grid-areas are ignored); children inset on both sides inside a flex parent are pinned absolutely; only fonts installed in Figma render (others fall back).\n- Returns the new frame\'s id immediately and finishes painting in the background — take a screenshot to verify completion. Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.',
     inputSchema: {
       html: z.string().optional().describe('Raw HTML to render.'),
       path: z.string().optional().describe('Path to an .html file in the project.'),
@@ -1492,6 +1538,12 @@ server.registerTool(
         .optional()
         .describe(
           'Replace an existing node (e.g. a prior or orphaned render) in place instead of adding a new frame — pass the id returned by an earlier html_to_design call.'
+        ),
+      useDesignSystem: z
+        .boolean()
+        .optional()
+        .describe(
+          "Default true: solid colors and text that exactly match one of the file's local color variables, paint styles, or text styles are bound to it, so the render uses the file's tokens. false renders literal values only."
         )
     }
   },
@@ -1504,6 +1556,9 @@ server.registerTool(
       if (!html) {
         return fail(new Error('Provide "html" or "path".'));
       }
+      if (args.path) {
+        html = await inlineLocalAssets(html, args.path);
+      }
       html = await inlineExternalImages(html);
       return run('html_to_design', {
         html,
@@ -1511,7 +1566,8 @@ server.registerTool(
         y: args.y,
         parentId: args.parentId,
         width: args.width,
-        replaceId: args.replaceId
+        replaceId: args.replaceId,
+        useDesignSystem: args.useDesignSystem
       });
     } catch (error) {
       return fail(error);
@@ -1633,6 +1689,7 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log(`DesignAgent MCP server ready (stdio). instance=${SERVER_INSTANCE_ID} pid=${process.pid}`);
+  countToolCall('server_start'); // funnel: Claude plugin installed + session started
 
   // Connect to the bridge broker (spawning it if needed) once we're up.
   connectToBroker();
