@@ -742,7 +742,7 @@ async function exportDesignMd(): Promise<void> {
 // Resolve a requested family + weight to an installed font style, loading it.
 // Falls back to Inter Regular when the family/weight isn't available.
 async function resolveAndLoadFont(family: string, weight?: number): Promise<FontName> {
-  const fonts = await figma.listAvailableFontsAsync();
+  const fonts = await availableFonts();
   const styles = fonts.filter((f) => f.fontName.family === family).map((f) => f.fontName.style);
   if (styles.length > 0) {
     const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, '');
@@ -1128,9 +1128,15 @@ function resolveFrameFill(node: DesignTreeNode): Paint[] {
   const literal = cssSolidPaint(node.fill); // visible background-color, if any (else null)
   const base = literal ? bindSolid(literal) : null;
   if (node.gradient) {
-    const gradient = cssGradientPaint(node.gradient);
-    if (gradient) {
-      return base ? [base, gradient] : [gradient];
+    // CSS lists background layers top-first; Figma paints the last fill on top.
+    const layers = splitTopLevelCommas(node.gradient).filter((l) => /gradient\(/i.test(l));
+    const paints = layers.map(cssGradientPaint).filter((g): g is GradientPaint => g !== null);
+    if (paints.length > 0) {
+      if (paints.length < layers.length) {
+        console.warn('html_to_design: some gradient layers dropped (unsupported):', node.gradient);
+      }
+      paints.reverse();
+      return base ? [base, ...paints] : paints;
     }
     const flatLiteral = cssSolidPaint(firstGradientStopColor(node.gradient));
     const flat = flatLiteral ? bindSolid(flatLiteral) : null;
@@ -1150,6 +1156,9 @@ function buildFrameShell(
 ): FrameNode {
   const frame = figma.createFrame();
   parent.appendChild(frame);
+  if (node.name) {
+    frame.name = node.name;
+  }
   frame.clipsContent = false;
   frame.fills = resolveFrameFill(node);
   if (node.bgImage) {
@@ -1179,10 +1188,11 @@ function buildFrameShell(
   if (typeof node.opacity === 'number' && node.opacity < 1) {
     frame.opacity = node.opacity;
   }
+  const effects: Effect[] = [];
   if (node.shadow) {
     const shadowColor = parseCssColor(node.shadow.color);
     if (shadowColor) {
-      frame.effects = [
+      effects.push(
         {
           type: 'DROP_SHADOW',
           color: {
@@ -1197,8 +1207,14 @@ function buildFrameShell(
           visible: true,
           blendMode: 'NORMAL'
         }
-      ];
+      );
     }
+  }
+  if (node.backdropBlur && node.backdropBlur > 0) {
+    effects.push({ type: 'BACKGROUND_BLUR', blurType: 'NORMAL', radius: node.backdropBlur, visible: true });
+  }
+  if (effects.length > 0) {
+    frame.effects = effects;
   }
   let resizeW = node.width;
   let resizeH = node.height;
@@ -1315,10 +1331,13 @@ async function buildFrameNode(
 // in a row instead of stacking at the origin and overlapping prior work.
 const CANVAS_GUTTER = 80;
 
-function nextCanvasPosition(excludeId?: string): { x: number; y: number } {
+function nextCanvasPosition(
+  container: BaseNode & ChildrenMixin,
+  excludeId?: string
+): { x: number; y: number } {
   let maxRight = -Infinity;
   let minTop = Infinity;
-  for (const child of figma.currentPage.children) {
+  for (const child of container.children) {
     if (child.id === excludeId || !('x' in child) || !('width' in child)) continue;
     const node = child as SceneNode & LayoutMixin;
     maxRight = Math.max(maxRight, node.x + node.width);
@@ -1329,9 +1348,19 @@ function nextCanvasPosition(excludeId?: string): { x: number; y: number } {
 }
 
 // Honor an explicit x/y from the caller; otherwise auto-place tidily.
-function placeOnPage(node: SceneNode & LayoutMixin, x: unknown, y: unknown): void {
+// Only pages and sections are free canvases; inside a frame the parent's layout rules.
+function isCanvas(parent: BaseNode): boolean {
+  return parent.type === 'PAGE' || parent.type === 'SECTION';
+}
+
+function placeOnPage(
+  node: SceneNode & LayoutMixin,
+  x: unknown,
+  y: unknown,
+  container: BaseNode & ChildrenMixin = figma.currentPage
+): void {
   if (x == null && y == null) {
-    const pos = nextCanvasPosition(node.id);
+    const pos = nextCanvasPosition(container, node.id);
     node.x = pos.x;
     node.y = pos.y;
   } else {
@@ -1355,6 +1384,16 @@ async function createDesignTree(message: {
   } finally {
     dsLookup = null;
   }
+}
+
+// html_to_design answers before its children are painted; take_screenshot awaits these
+// so a caller never captures a half-painted frame.
+const pendingPaints = new Map<string, Promise<void>>();
+
+async function awaitPaint(nodeId: string | undefined, maxMs = 15000): Promise<void> {
+  const waits = nodeId ? [pendingPaints.get(nodeId)] : Array.from(pendingPaints.values());
+  if (!waits.some(Boolean)) return;
+  await Promise.race([Promise.all(waits), new Promise((r) => setTimeout(r, maxMs))]);
 }
 
 async function createDesignTreeInner(message: {
@@ -1397,8 +1436,8 @@ async function createDesignTreeInner(message: {
         if (replaceIndex >= 0 && replaceIndex < parent.children.length) {
           parent.insertChild(replaceIndex, frame);
         }
-      } else if (parent.type === 'PAGE') {
-        placeOnPage(frame, message.x, message.y);
+      } else if (isCanvas(parent)) {
+        placeOnPage(frame, message.x, message.y, parent);
       }
       figma.currentPage.selection = [frame];
       figma.viewport.scrollAndZoomIntoView([frame]);
@@ -1411,14 +1450,20 @@ async function createDesignTreeInner(message: {
       });
       // Paint children in the background; a failure here leaves a partial but
       // targetable frame (the caller already has its id) — surface via console.
-      try {
-        await appendDesignChildren(frame, tree);
-      } catch (error) {
+      const t0 = Date.now();
+      const paint = appendDesignChildren(frame, tree).catch((error) => {
         console.error(
           'html_to_design: background paint failed:',
           error instanceof Error ? error.message : String(error)
         );
-      }
+      });
+      pendingPaints.set(frame.id, paint);
+      const done = (): void => {
+        pendingPaints.delete(frame.id);
+        console.log(`html_to_design: painted ${frame.name} in ${Date.now() - t0}ms`);
+      };
+      paint.then(done, done);
+      await paint;
       return;
     }
 
@@ -1430,8 +1475,8 @@ async function createDesignTreeInner(message: {
       if (replaceIndex >= 0 && replaceIndex < parent.children.length) {
         parent.insertChild(replaceIndex, root);
       }
-    } else if (parent.type === 'PAGE' && 'x' in root) {
-      placeOnPage(root as SceneNode & LayoutMixin, message.x, message.y);
+    } else if (isCanvas(parent) && 'x' in root) {
+      placeOnPage(root as SceneNode & LayoutMixin, message.x, message.y, parent);
     }
     figma.currentPage.selection = [root];
     figma.viewport.scrollAndZoomIntoView([root]);
@@ -1690,9 +1735,11 @@ function parseGradientStops(segments: string[]): ColorStop[] {
   }));
 }
 
-// Parse a CSS linear-gradient into a Figma GRADIENT_LINEAR paint. Returns null for
-// radial/conic/repeating/unparseable (caller flattens).
+// Parse one CSS linear-/radial-gradient layer into a Figma gradient paint. Returns null
+// for conic/repeating/unparseable (caller flattens or drops the layer).
 function cssGradientPaint(input: string): GradientPaint | null {
+  const radial = /^\s*radial-gradient\(([\s\S]*)\)\s*$/i.exec(input.trim());
+  if (radial && radial[1]) return cssRadialGradientPaint(radial[1]);
   const m = /^\s*linear-gradient\(([\s\S]*)\)\s*$/i.exec(input.trim());
   if (!m || !m[1]) return null;
   const parts = splitTopLevelCommas(m[1]);
@@ -1711,6 +1758,47 @@ function cssGradientPaint(input: string): GradientPaint | null {
   const stops = parseGradientStops(stopParts);
   if (stops.length < 2) return null;
   return { type: 'GRADIENT_LINEAR', gradientTransform: linearGradientTransform(angle), gradientStops: stops };
+}
+
+// radial-gradient([shape size] [at x y], stops) → GRADIENT_RADIAL centred at x/y.
+// ponytail: uniform radius 0.5 (box edge); ellipse axes and farthest-corner sizing are
+// not modelled — add a non-uniform transform if a render visibly needs it.
+function cssRadialGradientPaint(body: string): GradientPaint | null {
+  const parts = splitTopLevelCommas(body);
+  let stopParts = parts;
+  let cx = 0.5;
+  let cy = 0.5;
+  const first = parts[0] ?? '';
+  const isPrelude = /^(circle|ellipse|closest-|farthest-|at\s)/i.test(first) && !parseCssColor(first);
+  if (isPrelude) {
+    stopParts = parts.slice(1);
+    const at = /\bat\s+([^\s]+)(?:\s+([^\s]+))?/i.exec(first);
+    if (at) {
+      cx = cssPositionToUnit(at[1] ?? '', 'x');
+      cy = cssPositionToUnit(at[2] ?? at[1] ?? '', 'y');
+    }
+  }
+  const stops = parseGradientStops(stopParts);
+  if (stops.length < 2) return null;
+  const s = 1; // 0.5 / radius(0.5)
+  return {
+    type: 'GRADIENT_RADIAL',
+    gradientTransform: [
+      [s, 0, 0.5 - s * cx],
+      [0, s, 0.5 - s * cy]
+    ],
+    gradientStops: stops
+  };
+}
+
+// "50%" | "left" | "center" | "bottom" → 0–1 along the given axis (px values → 0.5).
+function cssPositionToUnit(token: string, axis: 'x' | 'y'): number {
+  const t = token.trim().toLowerCase();
+  const pct = /^(-?[\d.]+)%$/.exec(t);
+  if (pct) return Math.max(0, Math.min(1, Number(pct[1]) / 100));
+  if (t === 'center') return 0.5;
+  if (axis === 'x') return t === 'left' ? 0 : t === 'right' ? 1 : 0.5;
+  return t === 'top' ? 0 : t === 'bottom' ? 1 : 0.5;
 }
 
 // First parseable color in any gradient string — for the flatten fallback (radial/conic/etc.).
@@ -1946,6 +2034,19 @@ async function resolveParentContainer(parentId: unknown): Promise<BaseNode & Chi
   return figma.currentPage;
 }
 
+// The full font list is a slow scan of the machine's library; every text node used to
+// re-run it to resolve its weight, which made html_to_design paints take tens of seconds.
+let fontListCache: Promise<Font[]> | null = null;
+function availableFonts(): Promise<Font[]> {
+  if (!fontListCache) {
+    fontListCache = figma.listAvailableFontsAsync().catch((e) => {
+      fontListCache = null;
+      throw e;
+    });
+  }
+  return fontListCache;
+}
+
 async function loadFontForNewText(node: TextNode): Promise<void> {
   const fontName = node.fontName;
   if (fontName !== figma.mixed) {
@@ -1956,7 +2057,7 @@ async function loadFontForNewText(node: TextNode): Promise<void> {
       // fall through to a fallback font below
     }
   }
-  const fonts = await figma.listAvailableFontsAsync();
+  const fonts = await availableFonts();
   const fallback = fonts[0]?.fontName ?? { family: 'Inter', style: 'Regular' };
   await figma.loadFontAsync(fallback);
   node.fontName = fallback;
@@ -1972,7 +2073,7 @@ async function loadFontForExistingText(node: TextNode): Promise<void> {
     await figma.loadFontAsync(fontName);
     node.fontName = fontName;
   } catch {
-    const fonts = await figma.listAvailableFontsAsync();
+    const fonts = await availableFonts();
     const fallback = fonts[0]?.fontName ?? { family: 'Inter', style: 'Regular' };
     await figma.loadFontAsync(fallback);
     node.fontName = fallback;
@@ -2009,7 +2110,7 @@ async function resolveWeightFontName(node: TextNode, weight: unknown): Promise<F
     : [raw, ...(WEIGHT_ALIASES[raw] ?? [])];
 
   const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, '');
-  const fonts = await figma.listAvailableFontsAsync();
+  const fonts = await availableFonts();
   const familyStyles = fonts
     .filter((f) => f.fontName.family === family)
     .map((f) => f.fontName.style);
@@ -2234,8 +2335,8 @@ async function runBridgeCommand(
       }
       applyStroke(frame, params);
       parent.appendChild(frame);
-      if (parent.type === 'PAGE') {
-        placeOnPage(frame, params.x, params.y);
+      if (isCanvas(parent)) {
+        placeOnPage(frame, params.x, params.y, parent);
       }
       return selectAndReturn(frame);
     }
@@ -2255,8 +2356,8 @@ async function runBridgeCommand(
       }
       applyStroke(node, params);
       parent.appendChild(node);
-      if (parent.type === 'PAGE') {
-        placeOnPage(node, params.x, params.y);
+      if (isCanvas(parent)) {
+        placeOnPage(node, params.x, params.y, parent);
       }
       return selectAndReturn(node);
     }
@@ -2286,8 +2387,8 @@ async function runBridgeCommand(
       if (params.name) {
         text.name = String(params.name);
       }
-      if (parent.type === 'PAGE') {
-        placeOnPage(text, params.x, params.y);
+      if (isCanvas(parent)) {
+        placeOnPage(text, params.x, params.y, parent);
       }
       return selectAndReturn(text);
     }
@@ -2607,8 +2708,8 @@ async function runBridgeCommand(
       rect.resize(Math.max(1, width), Math.max(1, height));
       rect.fills = [paint];
       parent.appendChild(rect);
-      if (parent.type === 'PAGE') {
-        placeOnPage(rect, params.x, params.y);
+      if (isCanvas(parent)) {
+        placeOnPage(rect, params.x, params.y, parent);
       }
       return { ...selectAndReturn(rect), width, height };
     }
@@ -2753,8 +2854,8 @@ async function runBridgeCommand(
       const instance = component.createInstance();
       const parent = await resolveParentContainer(params.parentId);
       parent.appendChild(instance);
-      if (parent.type === 'PAGE') {
-        placeOnPage(instance, params.x, params.y);
+      if (isCanvas(parent)) {
+        placeOnPage(instance, params.x, params.y, parent);
       }
       return selectAndReturn(instance);
     }
@@ -2880,6 +2981,10 @@ async function runBridgeCommand(
       return { count: results.length, results };
     }
     case 'take_screenshot':
+      // Wait for a running html_to_design paint on the target first — outside the export
+      // queue so a slow paint can't block other exports — and never past the bridge's 20s
+      // call timeout: a partial capture beats an error.
+      await awaitPaint(typeof params.nodeId === 'string' ? params.nodeId : figma.currentPage.selection[0]?.id);
       return enqueueExport(() => takeScreenshot(params));
     case 'export_asset':
       return enqueueExport(() => exportAssets(params));

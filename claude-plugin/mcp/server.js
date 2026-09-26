@@ -10572,6 +10572,7 @@ var import_promises = require("node:dns/promises");
 var import_promises2 = require("node:fs/promises");
 var import_node_net = require("node:net");
 var import_node_os2 = require("node:os");
+var import_node_util = require("node:util");
 var import_node_path3 = require("node:path");
 
 // node_modules/zod/v3/external.js
@@ -25446,8 +25447,22 @@ function resolveInProject(path) {
   }
   return abs;
 }
+var READABLE_ROOTS = [PROJECT_ROOT, (0, import_node_os2.tmpdir)(), "/tmp", "/private/tmp"].map((r) => (0, import_node_path3.resolve)(r));
+function isReadable(abs) {
+  return READABLE_ROOTS.some((root) => {
+    const rel = (0, import_node_path3.relative)(root, abs);
+    return rel === "" || !rel.startsWith("..") && !(0, import_node_path3.isAbsolute)(rel);
+  });
+}
+function resolveReadable(path) {
+  const abs = (0, import_node_path3.resolve)(PROJECT_ROOT, path);
+  if (!isReadable(abs)) {
+    throw new Error("Path is outside the project directory (or the OS temp folder).");
+  }
+  return abs;
+}
 async function readHtmlFile(path) {
-  return (0, import_promises2.readFile)(resolveInProject(path), "utf8");
+  return (0, import_promises2.readFile)(resolveReadable(path), "utf8");
 }
 function isPrivateAddress(ip) {
   const family = (0, import_node_net.isIP)(ip);
@@ -25522,7 +25537,7 @@ var LOCAL_ASSET_MIME = {
   ".svg": "image/svg+xml"
 };
 async function inlineLocalAssets(html, htmlPath) {
-  const baseDir = (0, import_node_path3.dirname)(resolveInProject(htmlPath));
+  const baseDir = (0, import_node_path3.dirname)(resolveReadable(htmlPath));
   const refs = /* @__PURE__ */ new Set();
   for (const m of html.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["']/gi)) refs.add(m[1]);
   for (const m of html.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) refs.add(m[1]);
@@ -25536,7 +25551,7 @@ async function inlineLocalAssets(html, htmlPath) {
     if (!mime) continue;
     try {
       const abs = (0, import_node_path3.resolve)(baseDir, clean);
-      if ((0, import_node_path3.relative)(PROJECT_ROOT, abs).startsWith("..")) continue;
+      if (!isReadable(abs)) continue;
       const buf = await (0, import_promises2.readFile)(abs);
       if (buf.length > MAX_IMAGE_BYTES) continue;
       result = result.split(ref).join(`data:${mime};base64,${buf.toString("base64")}`);
@@ -26173,6 +26188,52 @@ server.registerTool(
     }
   }
 );
+var execFileAsync = (0, import_node_util.promisify)(import_node_child_process.execFile);
+server.registerTool(
+  "capture_simulator",
+  {
+    description: 'macOS only: screenshot the booted iOS Simulator (xcrun simctl) and place it in Figma as an image frame at logical point size. One call replaces "screenshot \u2192 save \u2192 place_image". Flat image, not editable layers \u2014 for editable screens write HTML and use html_to_design.',
+    inputSchema: {
+      device: external_exports.string().optional().describe("Simulator UDID or name. Default: the booted device."),
+      scale: external_exports.number().optional().describe("Device pixel ratio used to size the frame in points (default 3; use 2 for @2x devices)."),
+      name: external_exports.string().optional().describe('Layer name. Default "Simulator <time>".'),
+      parentId: external_exports.string().optional().describe("Container (page / section / frame). Auto-placed to the right of existing content when x/y are omitted."),
+      x: external_exports.number().optional(),
+      y: external_exports.number().optional()
+    }
+  },
+  async (args) => {
+    try {
+      if (process.platform !== "darwin") {
+        throw new Error("capture_simulator needs macOS with Xcode command-line tools.");
+      }
+      const file = (0, import_node_path3.join)((0, import_node_os2.tmpdir)(), `designagent-sim-${(0, import_node_crypto.randomUUID)()}.png`);
+      await execFileAsync("xcrun", ["simctl", "io", args.device ?? "booted", "screenshot", file]);
+      let buf = await (0, import_promises2.readFile)(file);
+      const pxW = buf.readUInt32BE(16);
+      const pxH = buf.readUInt32BE(20);
+      if (buf.length > MAX_IMAGE_BYTES) {
+        await execFileAsync("sips", ["-Z", String(Math.round(Math.max(pxW, pxH) / 2)), file]);
+        buf = await (0, import_promises2.readFile)(file);
+        if (buf.length > MAX_IMAGE_BYTES) {
+          throw new Error(`Screenshot is ${(buf.length / 1024 / 1024).toFixed(1)} MB even at half size; max is 4 MB.`);
+        }
+      }
+      return run("place_image", {
+        imageBase64: buf.toString("base64"),
+        scaleMode: "FILL",
+        name: args.name ?? `Simulator ${(/* @__PURE__ */ new Date()).toISOString().slice(11, 19)}`,
+        parentId: args.parentId,
+        x: args.x,
+        y: args.y,
+        width: Math.round(pxW / Math.max(1, args.scale ?? 3)),
+        height: Math.round(pxH / Math.max(1, args.scale ?? 3))
+      });
+    } catch (error2) {
+      return fail(error2);
+    }
+  }
+);
 server.registerTool(
   "list_animation_styles",
   {
@@ -26360,7 +26421,7 @@ server.registerTool(
 server.registerTool(
   "html_to_design",
   {
-    description: "Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project (e.g. one you just generated). With `path`, relative image paths (`<img src>`, CSS `url()`) resolve against that file's folder and are inlined; external http(s) images are inlined too. Fonts must exist in the Figma file. Solid colors and text that exactly match a local color variable, paint style, or text style get bound to it (see useDesignSystem). The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset \u2014 staying inside it avoids silent re-renders):\n- Reliable: flex rows/columns (justify-content incl. space-between/around/evenly, gap, flex-grow); CSS grid (display:grid \u2192 native Figma grid, column count from grid-template-columns, gaps; rows auto-flow); solid fills, linear gradients, border, border-radius, box-shadow; text-wrap: balance/pretty; variable-font axes via font-variation-settings; Google fonts.\n- Known limits: radial/conic and multi-layer gradients flatten to their first stop; grid rows auto-flow (row spans and grid-areas are ignored); children inset on both sides inside a flex parent are pinned absolutely; only fonts installed in Figma render (others fall back).\n- Returns the new frame's id immediately and finishes painting in the background \u2014 take a screenshot to verify completion. Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.",
+    description: "Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project or in temp space (your scratchpad / the OS temp dir are fine \u2014 no need to copy into the project). With `path`, relative image paths (`<img src>`, CSS `url()`) resolve against that file's folder and are inlined; external http(s) images are inlined too. Fonts must exist in the Figma file. Solid colors and text that exactly match a local color variable, paint style, or text style get bound to it (see useDesignSystem). The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset \u2014 staying inside it avoids silent re-renders):\n- Reliable: flex rows/columns (justify-content incl. space-between/around/evenly, gap, flex-grow); CSS grid (display:grid \u2192 native Figma grid, column count from grid-template-columns, gaps; rows auto-flow); position:absolute/fixed children (pinned at their measured x/y, in any document order); solid fills, linear + radial gradients, multi-layer backgrounds (each layer a fill), background-image url(), border, border-radius, box-shadow, backdrop-filter: blur() (\u2192 background blur; add `set_effect glass` afterwards for frosted glass); inline <svg> \u2192 native vectors; text-wrap: balance/pretty; variable-font axes via font-variation-settings; Google fonts.\n- Layer names come from data-name \u2192 id \u2192 aria-label \u2192 first class \u2192 tag; the top frame is named after <title>. Set these in the HTML to get a readable layer tree.\n- Wrapped text sits in a hugging Auto Layout wrapper so it grows (and pushes siblings) when Figma breaks lines differently from the browser; single-line text hugs its content.\n- Known limits: conic gradients flatten to their first stop; ellipse radial shapes render as circles; grid rows auto-flow (row spans and grid-areas are ignored); only fonts installed in Figma render (others fall back).\n- Returns the new frame's id immediately and finishes painting in the background; take_screenshot on that id waits for the paint to finish. Omit x/y to auto-place to the right of existing content (works inside a SECTION `parentId` too). Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.",
     inputSchema: {
       html: external_exports.string().optional().describe("Raw HTML to render."),
       path: external_exports.string().optional().describe("Path to an .html file in the project."),
@@ -26406,7 +26467,7 @@ server.registerTool(
 server.registerTool(
   "take_screenshot",
   {
-    description: "Render the current design to a PNG and return it as an image so you can see the result. With no arguments it captures the current selection (or the whole page if nothing is selected). Pass a nodeId to capture a specific node. Exports the design geometry, not the Figma app UI.",
+    description: "Render the current design to a PNG and return it as an image so you can see the result. With no arguments it captures the current selection (or the whole page if nothing is selected). Pass a nodeId to capture a specific node. Exports the design geometry, not the Figma app UI. Waits for any html_to_design paint still running on the target, so the capture is never half-painted.",
     inputSchema: {
       nodeId: external_exports.string().optional().describe("Node id to capture. Defaults to the selection, else the page."),
       scale: external_exports.number().optional().describe("Export scale (0.5\u20134, default 2). Use 0.5\u20131 for quick layout checks; 2 only when you need to read small text. Lowered automatically if the image is large.")
