@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { WebSocket } from 'ws';
 import { runBroker, BROKER_PROTOCOL_VERSION, BUILD_MTIME } from './broker';
 import { resolveProjectRoot, deriveProjectLabel } from './project-root';
+import { lottieFrameToSvg, type LottieRoot } from './lottie';
 
 // DesignAgent MCP server.
 //
@@ -1361,6 +1362,120 @@ server.registerTool(
         width: Math.round(pxW / Math.max(1, args.scale ?? 3)),
         height: Math.round(pxH / Math.max(1, args.scale ?? 3))
       });
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+// ---- Vectors: SVG, icons, Lottie ----
+
+server.registerTool(
+  'place_svg',
+  {
+    description:
+      'Place SVG markup in Figma as native, editable vectors. Provide `svg` inline or a `path` to an .svg file (project or temp space). This is the drop-in for any icon you already have as SVG (an SF Symbol exported from Xcode/SF Symbols app, a Figma export, a brand mark).',
+    inputSchema: {
+      svg: z.string().optional().describe('SVG markup.'),
+      path: z.string().optional().describe('Path to an .svg file.'),
+      name: z.string().optional(),
+      width: z.number().optional().describe('Target width in px; height follows the aspect ratio unless given.'),
+      height: z.number().optional(),
+      parentId: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional()
+    }
+  },
+  async (args) => {
+    try {
+      const svg = args.svg ?? (args.path ? await readFile(resolveReadable(args.path), 'utf8') : '');
+      if (!svg) return fail(new Error('Provide "svg" or "path".'));
+      return run('place_svg', { ...args, svg });
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+const ICON_SETS = {
+  lucide: (name: string) => `https://cdn.jsdelivr.net/npm/lucide-static@latest/icons/${name}.svg`,
+  material: (name: string, filled: boolean) =>
+    `https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/${name}/${filled ? 'fill1' : 'default'}/24px.svg`
+} as const;
+
+server.registerTool(
+  'place_icon',
+  {
+    description:
+      'Place an icon from an open icon set as native vectors: `set` lucide (e.g. "house", "settings", "chevron-right") or material (Material Symbols, e.g. "home", "settings", "info"). Fetched from the set\'s CDN, recolored, sized, then placed like place_svg. SF Symbols are not redistributable — export one as SVG and use place_svg instead.',
+    inputSchema: {
+      set: z.enum(['lucide', 'material']),
+      name: z.string().describe('Icon name in the set\'s own naming (lucide: kebab-case; material: snake_case).'),
+      size: z.number().optional().describe('Icon size in px (default 24).'),
+      color: z.string().optional().describe('Hex color (default #000000).'),
+      strokeWidth: z.number().optional().describe('lucide only: stroke width (default 2).'),
+      filled: z.boolean().optional().describe('material only: filled variant.'),
+      parentId: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional()
+    }
+  },
+  async (args) => {
+    try {
+      const name = args.name.trim().toLowerCase();
+      if (!/^[a-z0-9_-]+$/.test(name)) throw new Error('Icon names are letters, digits, "-" or "_".');
+      const url = args.set === 'lucide' ? ICON_SETS.lucide(name) : ICON_SETS.material(name, args.filled ?? false);
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`No "${name}" in ${args.set} (HTTP ${res.status}). Check the name on the set's site.`);
+      let svg = await res.text();
+      const color = args.color ?? '#000000';
+      const size = String(args.size ?? 24);
+      svg = svg.replace(/<!--[\s\S]*?-->/g, '').replace(/currentColor/g, color);
+      if (args.set === 'material' && !/<svg[^>]*\sfill=/.test(svg)) svg = svg.replace(/<svg\b/, `<svg fill="${color}"`);
+      if (args.set === 'lucide' && args.strokeWidth != null) svg = svg.replace(/stroke-width="[^"]*"/, `stroke-width="${args.strokeWidth}"`);
+      svg = svg.replace(/\swidth="[^"]*"/, ` width="${size}"`).replace(/\sheight="[^"]*"/, ` height="${size}"`);
+      return run('place_svg', {
+        svg,
+        name: `${args.set}/${name}`,
+        width: args.size ?? 24,
+        parentId: args.parentId,
+        x: args.x,
+        y: args.y
+      });
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.registerTool(
+  'place_lottie',
+  {
+    description:
+      'Render one frame of a Lottie animation (.json) as native, editable vectors. Supports shape layers (groups, rectangles, ellipses, paths, solid fills/strokes, transforms) and solid layers, with animated values resolved at the chosen frame. Precomps, masks, mattes, trim paths, text and gradient fills (kept as their first color) are skipped and listed in the result.',
+    inputSchema: {
+      path: z.string().describe('Path to the Lottie .json (project or temp space).'),
+      frame: z.union([z.number(), z.literal('last')]).optional().describe('Frame to render (default "last").'),
+      name: z.string().optional(),
+      width: z.number().optional().describe('Target width in px (default the composition width).'),
+      parentId: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional()
+    }
+  },
+  async (args) => {
+    try {
+      const raw = JSON.parse(await readFile(resolveReadable(args.path), 'utf8')) as LottieRoot;
+      const { svg, skipped } = lottieFrameToSvg(raw, args.frame ?? 'last');
+      const result = await callPlugin('place_svg', {
+        svg,
+        name: args.name ?? raw.nm ?? 'Lottie',
+        width: args.width ?? raw.w,
+        parentId: args.parentId,
+        x: args.x,
+        y: args.y
+      });
+      return ok({ ...(result as object), skipped });
     } catch (error) {
       return fail(error);
     }

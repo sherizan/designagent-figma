@@ -4,18 +4,20 @@
 This session's file had no instances; only the fast-error path ran. Exercise the
 clone → isolate → export → remove chain on the botim playground's nested components.
 
-## Next spike: editable simulator import (from the 2026-09-26 Prototo → Figma session)
+## Blocked: editable simulator import (from the 2026-09-26 Prototo → Figma session)
 Question: does an Expo web route, captured through the Playwright MCP with computed styles
-inlined into the DOM, render acceptably through html_to_design? Probe on one Prototo screen
-with a throwaway script. Yes → a bounded `url_to_design` tool in the MCP server. No → design
-the native route (React DevTools / Hermes view tree → design tree), which belongs at least half
-in Prototo. `capture_simulator` (flat screenshot) shipped in 0.23.0 as the interim.
+inlined into the DOM, render acceptably through html_to_design? Blocked on 2026-09-26: the
+Prototo app (`proto/apps/prototo-app`) has no web target (no react-native-web / react-dom).
+Unblock by adding web to the app, then probe one route with a throwaway script. Yes → a bounded
+`url_to_design` tool in the MCP server. No → design the native route (React DevTools / Hermes
+view tree → design tree), which belongs at least half in Prototo. `capture_simulator` (flat
+screenshot) shipped in 0.23.0 as the interim.
 
-## Parked (same session; not scheduled)
-- `place_icon` — Lucide is cheap (the `lucide` package → SVG → the existing svg path). SF Symbols
-  via SF Pro glyph matching is fragile and has redistribution questions; Material is another dep.
-- `place_lottie` — render one frame of a Lottie JSON as vectors (rect/ellipse/path layers only).
-  New subsystem; needs its own design.
+## Parked
+- SF Symbols in `place_icon` — Apple's license bars redistribution and they're on no CDN; the
+  supported path is export-as-SVG → `place_svg`. Lucide + Material shipped in 0.23.0.
+- `place_lottie` beyond the static shape subset (precomps, masks, trim paths, gradients, text) —
+  would need lottie-web in the plugin UI as a real renderer. Only if a real file needs it.
 
 ## Later (from the 2026-09-19 competitor survey; not scheduled)
 - `find` tool: search a subtree by name / type / text regex (list_page_nodes → drill-down gap).

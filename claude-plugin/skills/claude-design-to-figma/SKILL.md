@@ -74,7 +74,10 @@ Each of these cost a re-render in real sessions. Check the markup once, up front
 - **Glass.** `backdrop-filter: blur(Npx)` becomes a background blur. For iOS-style frosted glass
   run `set_effect { type: "glass" }` on the surface afterwards (figma-effects has the recipe).
 - **Icons.** Inline `<svg>` becomes native vectors; `<img>` stays a bitmap. Paste the SVG source
-  for anything that should stay editable.
+  for anything that should stay editable. To add icons afterwards: `place_icon { set: "lucide" |
+  "material", name }` fetches and places one as vectors; `place_svg` places any SVG you have
+  (an exported SF Symbol, a brand mark); `place_lottie { path, frame }` renders one frame of a
+  Lottie file as vectors.
 - **Fonts.** Only families installed in Figma render; others fall back silently.
 
 ## 3. Render, one artboard at a time

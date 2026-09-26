@@ -2713,6 +2713,32 @@ async function runBridgeCommand(
       }
       return { ...selectAndReturn(rect), width, height };
     }
+    case 'place_svg': {
+      const parent = await resolveParentContainer(params.parentId);
+      const svg = String(params.svg ?? '').trim();
+      if (!svg.startsWith('<')) {
+        throw new Error('place_svg needs SVG markup.');
+      }
+      const node = figma.createNodeFromSvg(svg);
+      if (params.name) {
+        node.name = String(params.name);
+      }
+      parent.appendChild(node);
+      // Size to width/height keeping the aspect ratio when only one is given.
+      const w = params.width != null ? toNumber(params.width, node.width) : null;
+      const h = params.height != null ? toNumber(params.height, node.height) : null;
+      if (w != null || h != null) {
+        const ratio = node.height > 0 ? node.width / node.height : 1;
+        const width = w ?? (h as number) * ratio;
+        const height = h ?? width / ratio;
+        node.rescale(Math.max(0.01, width / Math.max(1, node.width)));
+        node.resize(Math.max(1, width), Math.max(1, height));
+      }
+      if (isCanvas(parent)) {
+        placeOnPage(node, params.x, params.y, parent);
+      }
+      return { ...selectAndReturn(node), width: node.width, height: node.height };
+    }
     case 'move': {
       const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
       if (!isSceneNode(node) || !('x' in node)) {
