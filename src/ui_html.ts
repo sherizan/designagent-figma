@@ -120,6 +120,31 @@ interface LayoutInfo {
   gridRowGap?: number;
 }
 
+// Layer name for a rendered element: data-name → id → aria-label → first plain class → tag.
+function layerName(el: Element): string {
+  const cls = (el.getAttribute('class') ?? '').trim().split(/\s+/)[0] ?? '';
+  const pick =
+    el.getAttribute('data-name') ||
+    el.id ||
+    el.getAttribute('aria-label') ||
+    (/^[a-zA-Z][\w-]*$/.test(cls) ? cls : '');
+  return (pick || el.tagName.toLowerCase()).slice(0, 60);
+}
+
+// A wrapper whose only content is wrapped text becomes a vertical Auto Layout that hugs
+// its text, so when Figma breaks lines differently from the browser the wrapper grows
+// (and pushes its siblings) instead of letting the text spill over them.
+function growWithText(node: DesignTreeNode, cs: CSSStyleDeclaration): void {
+  node.layout = 'VERTICAL';
+  node.itemSpacing = 0;
+  node.paddingTop = px(cs.paddingTop);
+  node.paddingRight = px(cs.paddingRight);
+  node.paddingBottom = px(cs.paddingBottom);
+  node.paddingLeft = px(cs.paddingLeft);
+  node.primaryAxisAlign = 'MIN';
+  node.counterAxisAlign = cs.textAlign === 'center' ? 'CENTER' : cs.textAlign === 'right' ? 'MAX' : 'MIN';
+}
+
 // Map an element's CSS layout to Figma Auto Layout, or null for absolute fallback.
 function computeLayout(el: Element, cs: CSSStyleDeclaration, win: Window): LayoutInfo | null {
   const padding = {
@@ -168,7 +193,22 @@ function computeLayout(el: Element, cs: CSSStyleDeclaration, win: Window): Layou
       const r = c.getBoundingClientRect();
       return r.width > 0 && r.height > 0;
     });
-    if (kids.length < 2) return null;
+    if (kids.length === 0) return null;
+    if (kids.length === 1) {
+      // One child: an Auto Layout column whose padding is the measured inset on each side,
+      // so the frame hugs the child's height (wrapped text can grow) without moving it.
+      const r = el.getBoundingClientRect();
+      const c = kids[0]!.getBoundingClientRect();
+      const l = Math.max(0, c.left - r.left);
+      const rr = Math.max(0, r.right - c.right);
+      return {
+        layout: 'VERTICAL',
+        itemSpacing: 0,
+        padding: { t: Math.max(0, c.top - r.top), r: rr, b: Math.max(0, r.bottom - c.bottom), l },
+        primary: 'MIN',
+        counter: Math.abs(l - rr) <= 1.5 && l > 1.5 ? 'CENTER' : rr < 1.5 && l > 1.5 ? 'MAX' : 'MIN'
+      };
+    }
     const rects = kids.map((c) => c.getBoundingClientRect());
     const gaps: number[] = [];
     for (let i = 0; i < rects.length - 1; i += 1) {
@@ -229,8 +269,9 @@ function applyBoxStyles(node: DesignTreeNode, cs: CSSStyleDeclaration): void {
   }
   const bgImage = cs.backgroundImage;
   if (bgImage && /gradient\(/i.test(bgImage)) {
-    node.gradient = bgImage;
-  } else {
+    node.gradient = bgImage; // may hold several layers; the sandbox splits them
+  }
+  {
     // url(data:…) only — the MCP server inlines local/remote images before rendering.
     const m = /url\(["']?(data:image\/[^"')]+)["']?\)/i.exec(bgImage ?? '');
     if (m && m[1]) {
@@ -258,6 +299,10 @@ function applyBoxStyles(node: DesignTreeNode, cs: CSSStyleDeclaration): void {
   const shadow = parseBoxShadow(cs.boxShadow);
   if (shadow) {
     node.shadow = shadow;
+  }
+  const backdrop = /blur\(\s*([\d.]+)px\s*\)/i.exec(cs.backdropFilter ?? '');
+  if (backdrop && backdrop[1]) {
+    node.backdropBlur = parseFloat(backdrop[1]);
   }
 }
 
@@ -402,6 +447,7 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
     y: rect.top - parent.top,
     width: rect.width,
     height: rect.height,
+    name: layerName(el),
     children: []
   };
   applyBoxStyles(node, cs);
@@ -428,14 +474,15 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
     }
   }
 
-  const lay = computeLayout(el, cs, win);
-  if (!lay && isInlineTextContainer(el, win)) {
+  if (isInlineTextContainer(el, win)) {
     const merged = buildInlineTextNode(el, cs, win, rect);
     if (merged) {
       node.children.push(merged);
+      if (merged.multiline) growWithText(node, cs);
       return node;
     }
   }
+  const lay = computeLayout(el, cs, win);
   if (lay) {
     node.layout = lay.layout;
     node.itemSpacing = lay.itemSpacing;
@@ -469,17 +516,24 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
       const cr = childEl.getBoundingClientRect();
       if (cr.width <= 0 || cr.height <= 0) continue;
       const childNode = buildNode(childEl, win, rect);
-      if (isGrid) {
+      const pos = childCs.position;
+      if (pos === 'absolute' || pos === 'fixed') {
+        // Out of flow in CSS → out of flow in Figma, at its measured x/y, whatever
+        // its document position among flex siblings.
+        childNode.absolute = true;
+      } else if (isGrid) {
         // grid cells flow into Figma's grid; never pin or stretch them
       } else if (contentWidth > 0 && cr.width >= contentWidth - 2) {
         childNode.stretch = true;
-      } else if (lay) {
-        // Auto Layout ignores child margins, so a child inset on BOTH sides
+      } else if (isVertical) {
+        // Auto Layout ignores child margins, so a column child inset on BOTH sides
         // (e.g. a CTA with `margin: 0 28px`) would snap to the container edge.
-        // Pin it absolutely to keep its measured position.
+        // Pin it absolutely to keep its measured position — unless the column itself
+        // centers children (align-items: center), which Auto Layout reproduces.
         const leftInset = cr.left - contentLeft;
         const rightInset = contentRight - cr.right;
-        if (leftInset > 1.5 && rightInset > 1.5) {
+        const centered = lay!.counter === 'CENTER' && Math.abs(leftInset - rightInset) <= 1.5;
+        if (leftInset > 1.5 && rightInset > 1.5 && !centered) {
           childNode.absolute = true;
         }
       }
@@ -538,6 +592,10 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
   if (lay && lay.layout !== 'GRID') {
     applyOverlap(node, lay.layout, flowChildren);
   }
+  const only = node.children.length === 1 ? node.children[0] : undefined;
+  if (!lay && only?.kind === 'text' && only.multiline) {
+    growWithText(node, cs);
+  }
 
   return node;
 }
@@ -592,6 +650,7 @@ export function renderHtmlToTree(html: string, width = 1280): DesignTreeNode {
       y: 0,
       width: rootWidth,
       height: rootHeight,
+      name: doc.title.trim() || undefined,
       children: []
     };
 

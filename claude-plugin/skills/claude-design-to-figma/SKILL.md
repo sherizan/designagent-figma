@@ -18,8 +18,8 @@ frames, text, auto layout and grids. This skill is the walk from a Claude Design
 set of verified Figma frames.
 
 Requires the DesignAgent bridge (`status` returns `connected: true`; if not, ask the user to open
-the DesignAgent plugin in Figma and click Start). Work inside the project directory: `html_to_design
-{ path }` only reads files under it.
+the DesignAgent plugin in Figma and click Start). `html_to_design { path }` reads files under the
+project directory or the OS temp folder (your scratchpad is fine).
 
 ## 1. Find the input
 
@@ -55,6 +55,31 @@ Rendered exports (`artifact.html`, standalone HTML) need none of this. If an exp
 `https://claude.ai/...` images, they are fetched and inlined when public; otherwise download them
 into `assets/` and rewrite the `src` to the relative path first.
 
+## 2b. Pitfalls to fix in the HTML before rendering
+
+Each of these cost a re-render in real sessions. Check the markup once, up front:
+
+- **Name your layers.** Every frame is named from `data-name` → `id` → `aria-label` → first class
+  → tag, and the top frame from `<title>`. Add `data-name` to sections, cards, tab bars.
+- **Overlays.** A scrim, badge or floating button must be `position: absolute` (or `fixed`) with
+  explicit `top/left`; it then lands at that spot whatever its order among flex siblings. Do not
+  fake overlays with negative margins.
+- **Long text.** Give wrapped paragraphs their own block element (a `<p>` per paragraph); the
+  wrapper grows in Figma if the font breaks lines differently. Avoid fixed `height` on text wrappers.
+- **Tab bars / icon + label stacks.** A flex column with `align-items: center` renders as a
+  centred Auto Layout column; keep the icon and label as ordinary flow children.
+- **Backgrounds.** `linear-gradient` and `radial-gradient` come through natively, multi-layer
+  backgrounds become stacked fills. `conic-gradient` flattens; mesh/blob backgrounds need the
+  figma-effects skill's raster fallback.
+- **Glass.** `backdrop-filter: blur(Npx)` becomes a background blur. For iOS-style frosted glass
+  run `set_effect { type: "glass" }` on the surface afterwards (figma-effects has the recipe).
+- **Icons.** Inline `<svg>` becomes native vectors; `<img>` stays a bitmap. Paste the SVG source
+  for anything that should stay editable. To add icons afterwards: `place_icon { set: "lucide" |
+  "material", name }` fetches and places one as vectors; `place_svg` places any SVG you have
+  (an exported SF Symbol, a brand mark); `place_lottie { path, frame }` renders one frame of a
+  Lottie file as vectors.
+- **Fonts.** Only families installed in Figma render; others fall back silently.
+
 ## 3. Render, one artboard at a time
 
 ```
@@ -63,10 +88,11 @@ html_to_design { path: "design/app/Main.figma.html", width: <artboard w>, x, y }
 
 - `width` = the artboard's `w` from canvas.json, else the root element's fixed width, else 1280.
 - `x`/`y` from canvas.json so the Figma page mirrors the canvas; group frames by `page` if you
-  need order.
+  need order. Omit both to auto-place to the right of existing content; pass a SECTION as
+  `parentId` to fill a section the same way.
 - The tool returns the frame id immediately and paints in the background. Call
-  `take_screenshot { nodeId, scale: 1 }` on that id before judging it; retake once if it looks
-  half-painted.
+  `take_screenshot { nodeId, scale: 1 }` on that id before judging it; it waits for the paint
+  to finish.
 - Big pages: render section by section (split the twin at top-level sections) rather than one
   tall frame; `replaceId` re-renders one section in place.
 

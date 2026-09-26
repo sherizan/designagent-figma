@@ -68,6 +68,23 @@ them. A `glass` effect on top barely registers. Don't burn turns rediscovering t
 
 Effects can stack: e.g. `set_gradient` then `set_noise {append:true}` for a grainy gradient.
 
+## Recipe — iOS-style frosted glass (tab bar, card, button)
+
+Glass reads only against a busy background; over a flat colour it is invisible. Apply to the
+surface node, then verify with `take_screenshot` over real content. Use `batch` for many surfaces.
+
+- **Tab bar / floating bar**: fill white at 55–70 % (`set_fill { color: "#FFFFFFA6" }`), radius
+  the bar's height/2, then `set_effect { type: "glass", lightIntensity: 0.6, lightAngle: 135,
+  refraction: 0.35, depth: 0.4, dispersion: 0.1, radius: 24 }`; add a hairline stroke
+  `#FFFFFF66` for the edge highlight.
+- **Card / sheet**: fill white at 40–55 %, `set_effect { type: "glass", lightIntensity: 0.4,
+  refraction: 0.25, depth: 0.3, radius: 32 }`, plus `set_shadow { color: "#00000022", blur: 24,
+  offsetY: 8 }`.
+- **Pill button**: fill tinted 20–30 % (`#0A84FF40`), `set_effect { type: "glass",
+  lightIntensity: 0.7, refraction: 0.5, depth: 0.5, radius: 20 }`.
+- Older Figma runtime without glass: `set_effect { type: "blur", blurType: "BACKGROUND",
+  radius: 20 }` on the same translucent fill is the closest stand-in.
+
 ## Raster fallback — mesh / halftone / holographic
 
 Generators live at `${CLAUDE_PLUGIN_ROOT}/skills/figma-effects/assets/generators/` and are **pure

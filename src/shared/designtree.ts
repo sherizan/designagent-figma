@@ -22,6 +22,7 @@ export interface TextRun {
 
 export interface DesignTreeNode {
   kind: 'frame' | 'text' | 'image' | 'svg';
+  name?: string; // layer name: data-name / id / aria-label / first class / tag; root = <title>
   x: number;
   y: number;
   width: number;
@@ -35,6 +36,7 @@ export interface DesignTreeNode {
   cornerRadius?: number;
   opacity?: number;
   shadow?: DesignTreeShadow;
+  backdropBlur?: number; // CSS backdrop-filter: blur(Npx) → Figma BACKGROUND_BLUR
   // text
   text?: string;
   fontSize?: number;

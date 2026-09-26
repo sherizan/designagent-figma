@@ -1,9 +1,10 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
+import { promisify } from 'node:util';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -11,6 +12,7 @@ import { z } from 'zod';
 import { WebSocket } from 'ws';
 import { runBroker, BROKER_PROTOCOL_VERSION, BUILD_MTIME } from './broker';
 import { resolveProjectRoot, deriveProjectLabel } from './project-root';
+import { lottieFrameToSvg, type LottieRoot } from './lottie';
 
 // DesignAgent MCP server.
 //
@@ -433,9 +435,29 @@ function resolveInProject(path: string): string {
   return abs;
 }
 
-// Read an .html file from inside the project (the dir Claude Code launched in).
+// Read-only inputs (HTML to render + the images next to it) may also come from temp
+// space — the agent's scratchpad lives there, and copying into the project just to render
+// was a real papercut. Writes stay project-only (resolveInProject).
+const READABLE_ROOTS = [PROJECT_ROOT, tmpdir(), '/tmp', '/private/tmp'].map((r) => resolve(r));
+
+function isReadable(abs: string): boolean {
+  return READABLE_ROOTS.some((root) => {
+    const rel = relative(root, abs);
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  });
+}
+
+function resolveReadable(path: string): string {
+  const abs = resolve(PROJECT_ROOT, path);
+  if (!isReadable(abs)) {
+    throw new Error('Path is outside the project directory (or the OS temp folder).');
+  }
+  return abs;
+}
+
+// Read an .html file from the project or a temp folder (see resolveReadable).
 async function readHtmlFile(path: string): Promise<string> {
-  return readFile(resolveInProject(path), 'utf8');
+  return readFile(resolveReadable(path), 'utf8');
 }
 
 // SSRF guard: reject loopback / private / link-local / metadata addresses.
@@ -526,7 +548,7 @@ const LOCAL_ASSET_MIME: Record<string, string> = {
 };
 
 async function inlineLocalAssets(html: string, htmlPath: string): Promise<string> {
-  const baseDir = dirname(resolveInProject(htmlPath));
+  const baseDir = dirname(resolveReadable(htmlPath));
   const refs = new Set<string>();
   for (const m of html.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["']/gi)) refs.add(m[1]!);
   for (const m of html.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) refs.add(m[1]!);
@@ -540,7 +562,7 @@ async function inlineLocalAssets(html: string, htmlPath: string): Promise<string
     if (!mime) continue;
     try {
       const abs = resolve(baseDir, clean);
-      if (relative(PROJECT_ROOT, abs).startsWith('..')) continue; // never read outside the project
+      if (!isReadable(abs)) continue; // never read outside the project / temp space
       const buf = await readFile(abs);
       if (buf.length > MAX_IMAGE_BYTES) continue;
       result = result.split(ref).join(`data:${mime};base64,${buf.toString('base64')}`);
@@ -1295,6 +1317,171 @@ server.registerTool(
   }
 );
 
+const execFileAsync = promisify(execFile);
+
+server.registerTool(
+  'capture_simulator',
+  {
+    description:
+      'macOS only: screenshot the booted iOS Simulator (xcrun simctl) and place it in Figma as an image frame at logical point size. One call replaces "screenshot → save → place_image". Flat image, not editable layers — for editable screens write HTML and use html_to_design.',
+    inputSchema: {
+      device: z.string().optional().describe('Simulator UDID or name. Default: the booted device.'),
+      scale: z.number().optional().describe('Device pixel ratio used to size the frame in points (default 3; use 2 for @2x devices).'),
+      name: z.string().optional().describe('Layer name. Default "Simulator <time>".'),
+      parentId: z.string().optional().describe('Container (page / section / frame). Auto-placed to the right of existing content when x/y are omitted.'),
+      x: z.number().optional(),
+      y: z.number().optional()
+    }
+  },
+  async (args) => {
+    try {
+      if (process.platform !== 'darwin') {
+        throw new Error('capture_simulator needs macOS with Xcode command-line tools.');
+      }
+      const file = join(tmpdir(), `designagent-sim-${randomUUID()}.png`);
+      await execFileAsync('xcrun', ['simctl', 'io', args.device ?? 'booted', 'screenshot', file]);
+      let buf = await readFile(file);
+      // PNG IHDR: width/height are big-endian uint32 at bytes 16 and 20.
+      const pxW = buf.readUInt32BE(16);
+      const pxH = buf.readUInt32BE(20);
+      if (buf.length > MAX_IMAGE_BYTES) {
+        // A @3x capture of a busy screen tops 4 MB; halve it with the built-in sips.
+        await execFileAsync('sips', ['-Z', String(Math.round(Math.max(pxW, pxH) / 2)), file]);
+        buf = await readFile(file);
+        if (buf.length > MAX_IMAGE_BYTES) {
+          throw new Error(`Screenshot is ${(buf.length / 1024 / 1024).toFixed(1)} MB even at half size; max is 4 MB.`);
+        }
+      }
+      return run('place_image', {
+        imageBase64: buf.toString('base64'),
+        scaleMode: 'FILL',
+        name: args.name ?? `Simulator ${new Date().toISOString().slice(11, 19)}`,
+        parentId: args.parentId,
+        x: args.x,
+        y: args.y,
+        width: Math.round(pxW / Math.max(1, args.scale ?? 3)),
+        height: Math.round(pxH / Math.max(1, args.scale ?? 3))
+      });
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+// ---- Vectors: SVG, icons, Lottie ----
+
+server.registerTool(
+  'place_svg',
+  {
+    description:
+      'Place SVG markup in Figma as native, editable vectors. Provide `svg` inline or a `path` to an .svg file (project or temp space). This is the drop-in for any icon you already have as SVG (an SF Symbol exported from Xcode/SF Symbols app, a Figma export, a brand mark).',
+    inputSchema: {
+      svg: z.string().optional().describe('SVG markup.'),
+      path: z.string().optional().describe('Path to an .svg file.'),
+      name: z.string().optional(),
+      width: z.number().optional().describe('Target width in px; height follows the aspect ratio unless given.'),
+      height: z.number().optional(),
+      parentId: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional()
+    }
+  },
+  async (args) => {
+    try {
+      const svg = args.svg ?? (args.path ? await readFile(resolveReadable(args.path), 'utf8') : '');
+      if (!svg) return fail(new Error('Provide "svg" or "path".'));
+      return run('place_svg', { ...args, svg });
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+const ICON_SETS = {
+  lucide: (name: string) => `https://cdn.jsdelivr.net/npm/lucide-static@latest/icons/${name}.svg`,
+  material: (name: string, filled: boolean) =>
+    `https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/${name}/${filled ? 'fill1' : 'default'}/24px.svg`
+} as const;
+
+server.registerTool(
+  'place_icon',
+  {
+    description:
+      'Place an icon from an open icon set as native vectors: `set` lucide (e.g. "house", "settings", "chevron-right") or material (Material Symbols, e.g. "home", "settings", "info"). Fetched from the set\'s CDN, recolored, sized, then placed like place_svg. SF Symbols are not redistributable — export one as SVG and use place_svg instead.',
+    inputSchema: {
+      set: z.enum(['lucide', 'material']),
+      name: z.string().describe('Icon name in the set\'s own naming (lucide: kebab-case; material: snake_case).'),
+      size: z.number().optional().describe('Icon size in px (default 24).'),
+      color: z.string().optional().describe('Hex color (default #000000).'),
+      strokeWidth: z.number().optional().describe('lucide only: stroke width (default 2).'),
+      filled: z.boolean().optional().describe('material only: filled variant.'),
+      parentId: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional()
+    }
+  },
+  async (args) => {
+    try {
+      const name = args.name.trim().toLowerCase();
+      if (!/^[a-z0-9_-]+$/.test(name)) throw new Error('Icon names are letters, digits, "-" or "_".');
+      const url = args.set === 'lucide' ? ICON_SETS.lucide(name) : ICON_SETS.material(name, args.filled ?? false);
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`No "${name}" in ${args.set} (HTTP ${res.status}). Check the name on the set's site.`);
+      let svg = await res.text();
+      const color = args.color ?? '#000000';
+      const size = String(args.size ?? 24);
+      svg = svg.replace(/<!--[\s\S]*?-->/g, '').replace(/currentColor/g, color);
+      if (args.set === 'material' && !/<svg[^>]*\sfill=/.test(svg)) svg = svg.replace(/<svg\b/, `<svg fill="${color}"`);
+      if (args.set === 'lucide' && args.strokeWidth != null) svg = svg.replace(/stroke-width="[^"]*"/, `stroke-width="${args.strokeWidth}"`);
+      svg = svg.replace(/\swidth="[^"]*"/, ` width="${size}"`).replace(/\sheight="[^"]*"/, ` height="${size}"`);
+      return run('place_svg', {
+        svg,
+        name: `${args.set}/${name}`,
+        width: args.size ?? 24,
+        parentId: args.parentId,
+        x: args.x,
+        y: args.y
+      });
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.registerTool(
+  'place_lottie',
+  {
+    description:
+      'Render one frame of a Lottie animation (.json) as native, editable vectors. Supports shape layers (groups, rectangles, ellipses, paths, solid fills/strokes, transforms) and solid layers, with animated values resolved at the chosen frame. Precomps, masks, mattes, trim paths, text and gradient fills (kept as their first color) are skipped and listed in the result.',
+    inputSchema: {
+      path: z.string().describe('Path to the Lottie .json (project or temp space).'),
+      frame: z.union([z.number(), z.literal('last')]).optional().describe('Frame to render (default "last").'),
+      name: z.string().optional(),
+      width: z.number().optional().describe('Target width in px (default the composition width).'),
+      parentId: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional()
+    }
+  },
+  async (args) => {
+    try {
+      const raw = JSON.parse(await readFile(resolveReadable(args.path), 'utf8')) as LottieRoot;
+      const { svg, skipped } = lottieFrameToSvg(raw, args.frame ?? 'last');
+      const result = await callPlugin('place_svg', {
+        svg,
+        name: args.name ?? raw.nm ?? 'Lottie',
+        width: args.width ?? raw.w,
+        parentId: args.parentId,
+        x: args.x,
+        y: args.y
+      });
+      return ok({ ...(result as object), skipped });
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
 // ---- Grid layout (Figma API Update 126) ----
 
 // ---- Motion (Figma API Update 127, Beta — API may change) ----
@@ -1525,7 +1712,7 @@ server.registerTool(
   'html_to_design',
   {
     description:
-      'Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project (e.g. one you just generated). With `path`, relative image paths (`<img src>`, CSS `url()`) resolve against that file\'s folder and are inlined; external http(s) images are inlined too. Fonts must exist in the Figma file. Solid colors and text that exactly match a local color variable, paint style, or text style get bound to it (see useDesignSystem). The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset — staying inside it avoids silent re-renders):\n- Reliable: flex rows/columns (justify-content incl. space-between/around/evenly, gap, flex-grow); CSS grid (display:grid → native Figma grid, column count from grid-template-columns, gaps; rows auto-flow); solid fills, linear gradients, border, border-radius, box-shadow; text-wrap: balance/pretty; variable-font axes via font-variation-settings; Google fonts.\n- Known limits: radial/conic and multi-layer gradients flatten to their first stop; grid rows auto-flow (row spans and grid-areas are ignored); children inset on both sides inside a flex parent are pinned absolutely; only fonts installed in Figma render (others fall back).\n- Returns the new frame\'s id immediately and finishes painting in the background — take a screenshot to verify completion. Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.',
+      'Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project or in temp space (your scratchpad / the OS temp dir are fine — no need to copy into the project). With `path`, relative image paths (`<img src>`, CSS `url()`) resolve against that file\'s folder and are inlined; external http(s) images are inlined too. Fonts must exist in the Figma file. Solid colors and text that exactly match a local color variable, paint style, or text style get bound to it (see useDesignSystem). The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset — staying inside it avoids silent re-renders):\n- Reliable: flex rows/columns (justify-content incl. space-between/around/evenly, gap, flex-grow); CSS grid (display:grid → native Figma grid, column count from grid-template-columns, gaps; rows auto-flow); position:absolute/fixed children (pinned at their measured x/y, in any document order); solid fills, linear + radial gradients, multi-layer backgrounds (each layer a fill), background-image url(), border, border-radius, box-shadow, backdrop-filter: blur() (→ background blur; add `set_effect glass` afterwards for frosted glass); inline <svg> → native vectors; text-wrap: balance/pretty; variable-font axes via font-variation-settings; Google fonts.\n- Layer names come from data-name → id → aria-label → first class → tag; the top frame is named after <title>. Set these in the HTML to get a readable layer tree.\n- Wrapped text sits in a hugging Auto Layout wrapper so it grows (and pushes siblings) when Figma breaks lines differently from the browser; single-line text hugs its content.\n- Known limits: conic gradients flatten to their first stop; ellipse radial shapes render as circles; grid rows auto-flow (row spans and grid-areas are ignored); only fonts installed in Figma render (others fall back).\n- Returns the new frame\'s id immediately and finishes painting in the background; take_screenshot on that id waits for the paint to finish. Omit x/y to auto-place to the right of existing content (works inside a SECTION `parentId` too). Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.',
     inputSchema: {
       html: z.string().optional().describe('Raw HTML to render.'),
       path: z.string().optional().describe('Path to an .html file in the project.'),
@@ -1581,7 +1768,8 @@ server.registerTool(
     description:
       'Render the current design to a PNG and return it as an image so you can see the result. ' +
       'With no arguments it captures the current selection (or the whole page if nothing is selected). ' +
-      'Pass a nodeId to capture a specific node. Exports the design geometry, not the Figma app UI.',
+      'Pass a nodeId to capture a specific node. Exports the design geometry, not the Figma app UI. ' +
+      'Waits for any html_to_design paint still running on the target, so the capture is never half-painted.',
     inputSchema: {
       nodeId: z.string().optional().describe('Node id to capture. Defaults to the selection, else the page.'),
       scale: z.number().optional().describe('Export scale (0.5–4, default 2). Use 0.5–1 for quick layout checks; 2 only when you need to read small text. Lowered automatically if the image is large.')
