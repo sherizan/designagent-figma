@@ -25033,6 +25033,8 @@ function runBroker() {
               type: "response",
               id: msg.id,
               ok: false,
+              code: "not_connected",
+              // lets telemetry tell setup gaps from tool failures
               error: 'DesignAgent bridge is not connected. In Figma, open the DesignAgent plugin and click "Start" on the Claude bridge bar, then retry.'
             });
             return;
@@ -25437,7 +25439,7 @@ function connectToBroker() {
         }
         entry.resolve(msg.result);
       } else {
-        countToolCall(`${entry.command}_err`);
+        countToolCall(`${entry.command}${msg.code === "not_connected" ? "_nc" : "_err"}`);
         entry.reject(new Error(msg.error || "DesignAgent plugin reported an error."));
       }
       return;
@@ -25470,7 +25472,7 @@ function connectToBroker() {
   socket.on("error", () => {
   });
 }
-function callPlugin(command, params = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+function callPlugin(command, params = {}, timeoutMs = REQUEST_TIMEOUT_MS, label = command) {
   return new Promise((resolve3, reject) => {
     if (!brokerSocket || brokerSocket.readyState !== import_websocket.default.OPEN || !brokerReady) {
       reject(
@@ -25483,13 +25485,13 @@ function callPlugin(command, params = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
     const id = (0, import_node_crypto.randomUUID)();
     const timer = setTimeout(() => {
       pending.delete(id);
-      countToolCall(`${command}_err`);
+      countToolCall(`${label}_timeout`);
       reject(new Error(`DesignAgent plugin did not respond within ${timeoutMs / 1e3}s.`));
     }, timeoutMs);
-    pending.set(id, { resolve: resolve3, reject, timer, command });
+    pending.set(id, { resolve: resolve3, reject, timer, command: label });
     try {
       brokerSocket.send(JSON.stringify({ type: "request", id, command, params }));
-      countToolCall(command);
+      countToolCall(label);
     } catch (error2) {
       pending.delete(id);
       clearTimeout(timer);
@@ -25567,9 +25569,9 @@ function fail(error2) {
   const message = error2 instanceof Error ? error2.message : String(error2);
   return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
 }
-async function run(command, params = {}) {
+async function run(command, params = {}, label) {
   try {
-    return ok(await callPlugin(command, params));
+    return ok(await callPlugin(command, params, void 0, label));
   } catch (error2) {
     return fail(error2);
   }
@@ -26465,7 +26467,7 @@ server.registerTool(
         parentId: args.parentId,
         x: args.x,
         y: args.y
-      });
+      }, "place_icon");
     } catch (error2) {
       return fail(error2);
     }
@@ -26496,7 +26498,7 @@ server.registerTool(
         parentId: args.parentId,
         x: args.x,
         y: args.y
-      });
+      }, void 0, "place_lottie");
       return ok({ ...result, skipped });
     } catch (error2) {
       return fail(error2);
