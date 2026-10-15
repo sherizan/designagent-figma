@@ -347,6 +347,7 @@ export function runBroker(): void {
               type: 'response',
               id: msg.id,
               ok: false,
+              code: 'not_connected', // lets telemetry tell setup gaps from tool failures
               error:
                 'DesignAgent bridge is not connected. In Figma, open the DesignAgent plugin and click "Start" on the Claude bridge bar, then retry.'
             });

@@ -126,6 +126,7 @@ function connectToBroker(): void {
       ok?: boolean;
       result?: unknown;
       error?: string;
+      code?: string;
       brokerVersion?: number;
       brokerBuildMtime?: number;
     };
@@ -197,7 +198,8 @@ function connectToBroker(): void {
         }
         entry.resolve(msg.result);
       } else {
-        countToolCall(`${entry.command}_err`);
+        // `_nc` = plugin not attached (setup gap), `_err` = the tool itself failed.
+        countToolCall(`${entry.command}${msg.code === 'not_connected' ? '_nc' : '_err'}`);
         entry.reject(new Error(msg.error || 'DesignAgent plugin reported an error.'));
       }
       return;
@@ -247,7 +249,8 @@ function connectToBroker(): void {
 function callPlugin(
   command: string,
   params: Record<string, unknown> = {},
-  timeoutMs: number = REQUEST_TIMEOUT_MS
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+  label: string = command // telemetry name, for tools that ride another command (place_icon → place_svg)
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (!brokerSocket || brokerSocket.readyState !== WebSocket.OPEN || !brokerReady) {
@@ -261,13 +264,13 @@ function callPlugin(
     const id = randomUUID();
     const timer = setTimeout(() => {
       pending.delete(id);
-      countToolCall(`${command}_err`);
+      countToolCall(`${label}_timeout`);
       reject(new Error(`DesignAgent plugin did not respond within ${timeoutMs / 1000}s.`));
     }, timeoutMs);
-    pending.set(id, { resolve, reject, timer, command });
+    pending.set(id, { resolve, reject, timer, command: label });
     try {
       brokerSocket.send(JSON.stringify({ type: 'request', id, command, params }));
-      countToolCall(command);
+      countToolCall(label);
     } catch (error) {
       pending.delete(id);
       clearTimeout(timer);
@@ -280,7 +283,8 @@ function callPlugin(
 //
 // Counts tool-call *names* only — never params, node data, or design content —
 // and posts the tallies to designagent.dev so we know which bridge tools earn
-// their keep. A failed call also counts under `<tool>_err` (name only, no message).
+// their keep. A failed call also counts by reason (name only, no message): `<tool>_err`
+// (tool failed), `<tool>_nc` (plugin not attached), `<tool>_timeout` (no reply).
 // Opt out with DESIGNAGENT_TELEMETRY=0. See README "Telemetry".
 
 const TELEMETRY_ENABLED = process.env.DESIGNAGENT_TELEMETRY !== '0';
@@ -375,9 +379,9 @@ function fail(error: unknown): ToolResult {
   return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
 }
 
-async function run(command: string, params: Record<string, unknown> = {}): Promise<ToolResult> {
+async function run(command: string, params: Record<string, unknown> = {}, label?: string): Promise<ToolResult> {
   try {
-    return ok(await callPlugin(command, params));
+    return ok(await callPlugin(command, params, undefined, label));
   } catch (error) {
     return fail(error);
   }
@@ -1441,7 +1445,7 @@ server.registerTool(
         parentId: args.parentId,
         x: args.x,
         y: args.y
-      });
+      }, 'place_icon');
     } catch (error) {
       return fail(error);
     }
@@ -1474,7 +1478,7 @@ server.registerTool(
         parentId: args.parentId,
         x: args.x,
         y: args.y
-      });
+      }, undefined, 'place_lottie');
       return ok({ ...(result as object), skipped });
     } catch (error) {
       return fail(error);
