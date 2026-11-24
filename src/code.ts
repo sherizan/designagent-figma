@@ -2112,6 +2112,40 @@ function availableAnimationStyles(): AvailableAnimationStyle[] {
   return figma.motion.figmaAnimationStyles();
 }
 
+// Figma reports style names as translation keys ("motion.preset_name.text_stagger").
+// Show and match the readable tail instead: "text stagger".
+function animationStyleLabel(name: string): string {
+  const tail = name.slice(name.lastIndexOf('.') + 1);
+  return tail.replace(/_/g, ' ').trim() || name;
+}
+
+function looseKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// "Fade In" is not a style: it is the Opacity style with type 'fadeIn'. Each style lists
+// its type options in props.type ("'fadeIn' | 'fadeOut' | 'custom' // default…"), so a
+// request that names one of those options resolves to that style plus the type.
+function animationStyleByTypeOption(
+  styles: AvailableAnimationStyle[],
+  wanted: string
+): { style: AvailableAnimationStyle; type: string } | undefined {
+  const key = looseKey(wanted);
+  if (!key) return undefined;
+  for (const style of styles) {
+    const spec = style.props ? style.props['type'] : undefined;
+    if (typeof spec !== 'string') continue;
+    const options = spec.match(/'[^']+'/g) ?? [];
+    for (const quoted of options) {
+      const option = quoted.slice(1, -1);
+      if (option !== 'custom' && looseKey(option) === key) {
+        return { style, type: option };
+      }
+    }
+  }
+  return undefined;
+}
+
 function nonNegativeSeconds(value: unknown, fallback: number): number {
   const n = toNumber(value, fallback);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
@@ -2787,7 +2821,7 @@ async function runBridgeCommand(
       return {
         styles: availableAnimationStyles().map((s) => ({
           styleId: s.styleId,
-          name: s.name,
+          name: animationStyleLabel(s.name),
           description: s.description ?? null,
           props: s.props ?? null
         }))
@@ -2805,12 +2839,25 @@ async function runBridgeCommand(
       // Accept the id or the display name; models often pass "Fade in" rather than the id.
       const styles = availableAnimationStyles();
       const lower = wanted.toLowerCase();
-      const style =
+      let style =
         styles.find((s) => s.styleId === wanted) ??
-        styles.find((s) => s.name.toLowerCase() === lower || s.styleId.toLowerCase() === lower);
+        styles.find(
+          (s) =>
+            s.styleId.toLowerCase() === lower ||
+            s.name.toLowerCase() === lower ||
+            looseKey(animationStyleLabel(s.name)) === looseKey(wanted)
+        );
+      let impliedType: string | undefined;
       if (!style) {
-        const names = styles.map((s) => s.name).join(', ');
-        throw new Error(`No animation style "${wanted}". Available: ${names || 'none in this file'}.`);
+        const byOption = animationStyleByTypeOption(styles, wanted);
+        style = byOption?.style;
+        impliedType = byOption?.type;
+      }
+      if (!style) {
+        const names = styles.map((s) => s.styleId).join(', ');
+        throw new Error(
+          `No animation style "${wanted}". Available: ${names || 'none in this file'}. Variants such as fade in / slide in are the "type" prop of a style (see list_animation_styles).`
+        );
       }
       const config: { duration?: number; timelineOffset?: number; props?: Record<string, unknown> } = {};
       if (params.duration != null) {
@@ -2821,6 +2868,9 @@ async function runBridgeCommand(
       }
       if (params.props && typeof params.props === 'object') {
         config.props = params.props as Record<string, unknown>;
+      }
+      if (impliedType && !(config.props && 'type' in config.props)) {
+        config.props = { ...(config.props ?? {}), type: impliedType };
       }
       try {
         const appliedId = node.applyAnimationStyle(style.styleId, config as AnimationStyleConfiguration);
