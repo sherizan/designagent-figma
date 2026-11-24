@@ -458,7 +458,7 @@ function summarizeAnimations(node: SceneNode): AnimationSummary[] | undefined {
     if (!applied || applied.length === 0) {
       return undefined;
     }
-    return applied.map((a) => ({ name: a.name, styleId: a.styleId, duration: a.duration }));
+    return applied.map((a) => ({ name: a.name, styleId: a.styleId, duration: 'duration' in a ? a.duration : undefined }));
   } catch {
     // Motion is Beta; reading may fail on clients without it enabled.
     return undefined;

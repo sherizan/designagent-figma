@@ -7,7 +7,6 @@ import { generateDesignDoc, type DesignDocFrame } from './core/designdoc';
 import { parseDesignMd } from './core/parsedesignmd';
 import { generateHtml, type HtmlNode } from './core/htmldoc';
 import { formatVariableValue, loadAnnotationCategories, solidHex } from './core/extract';
-import { exportTokens, type TokenFormat } from './core/tokens';
 import type { DesignTreeNode, TextRun } from './shared/designtree';
 import { isScreenLikeNode } from './core/intent';
 import type { EmptyAnalysis, Mode } from './core/types';
@@ -436,88 +435,6 @@ function applyAutoLayoutFix(node: SceneNode): { ok: boolean; message: string } {
     ok: true,
     message: 'Auto Layout applied with inferred spacing and padding.'
   };
-}
-
-function applyAbsolutePositioningFix(node: SceneNode): { ok: boolean; message: string } {
-  if (!('layoutPositioning' in node)) {
-    return {
-      ok: false,
-      message: 'Absolute positioning fix skipped: node does not support layout positioning.'
-    };
-  }
-
-  const parent = node.parent;
-  if (!parent || parent.type === 'PAGE' || parent.type === 'DOCUMENT' || parent.type === 'SLICE') {
-    return {
-      ok: false,
-      message: 'Absolute positioning fix skipped: node is not inside an Auto Layout container.'
-    };
-  }
-
-  if (!('layoutMode' in parent) || parent.layoutMode === 'NONE') {
-    return {
-      ok: false,
-      message: 'Absolute positioning fix skipped: parent is not Auto Layout.'
-    };
-  }
-
-  if (node.layoutPositioning !== 'ABSOLUTE') {
-    return {
-      ok: true,
-      message: 'Node is already in Auto Layout flow.'
-    };
-  }
-
-  node.layoutPositioning = 'AUTO';
-  return {
-    ok: true,
-    message: 'Absolute positioning removed. Node now follows Auto Layout flow.'
-  };
-}
-
-async function tryFixIssue(message: {
-  nodeId: string;
-  nodeName: string;
-  category: string;
-  reason: string;
-  suggestion: string;
-}): Promise<void> {
-  const baseNode = await getNodeByIdGuarded(message.nodeId);
-  if (!isSceneNode(baseNode)) {
-    figma.notify('Fix failed: target node not found.');
-    return;
-  }
-
-  let result: { ok: boolean; message: string } = {
-    ok: false,
-    message: 'This issue type is not auto-fixable yet. Use Focus for manual correction.'
-  };
-
-  const reasonText = `${message.reason} ${message.suggestion}`.toLowerCase();
-  if (message.category === 'Layout Semantics') {
-    if (reasonText.includes('absolute positioning')) {
-      result = applyAbsolutePositioningFix(baseNode);
-    } else if (reasonText.includes('auto layout')) {
-      result = applyAutoLayoutFix(baseNode);
-    }
-  }
-
-  figma.currentPage.selection = [baseNode];
-  figma.viewport.scrollAndZoomIntoView([baseNode]);
-  figma.notify(result.message);
-
-  if (result.ok) {
-    postToUI({
-      type: 'ISSUE_FIX_RESULT',
-      nodeId: message.nodeId,
-      category: message.category,
-      reason: message.reason,
-      status: 'fixed',
-      detail: result.message
-    });
-    invalidateCache();
-    void computeAndPostAnalysis();
-  }
 }
 
 async function getOrCreateDesignAgentCategoryId(): Promise<string | undefined> {
@@ -1938,25 +1855,8 @@ function buildNoiseEffect(params: Record<string, unknown>): NoiseEffect {
   return { ...base, noiseType: 'MONOTONE' } as NoiseEffect;
 }
 
-function buildPatternPaint(params: Record<string, unknown>): PatternPaint {
-  const tt = String(params.tileType ?? 'RECTANGULAR').toUpperCase();
-  const tileType =
-    tt === 'HORIZONTAL_HEXAGONAL' || tt === 'VERTICAL_HEXAGONAL' ? tt : 'RECTANGULAR';
-  const align = String(params.horizontalAlignment ?? 'CENTER').toUpperCase();
-  const horizontalAlignment = align === 'START' || align === 'END' ? align : 'CENTER';
-  const spacing = Array.isArray(params.spacing) ? params.spacing : [];
-  return {
-    type: 'PATTERN',
-    sourceNodeId: String(params.sourceNodeId ?? ''),
-    tileType,
-    scalingFactor: Math.max(0.01, toNumber(params.scalingFactor, 1)),
-    spacing: { x: toNumber(spacing[0], 0), y: toNumber(spacing[1], 0) },
-    horizontalAlignment
-  };
-}
-
-// Build one native effect for set_effect: inner-shadow | blur | texture | glass.
-// (Drop shadow keeps its own tool; noise has its own richer tool.)
+// Build one native effect for set_effect: inner-shadow | blur | noise | texture | glass.
+// (Drop shadow keeps its own tool.)
 function buildEffect(params: Record<string, unknown>): Effect {
   const kind = String(params.type ?? '').toLowerCase().replace(/_/g, '-');
   switch (kind) {
@@ -1972,6 +1872,8 @@ function buildEffect(params: Record<string, unknown>): Effect {
         visible: true
       } as BlurEffect;
     }
+    case 'noise':
+      return buildNoiseEffect(params);
     case 'texture':
       return {
         type: 'TEXTURE',
@@ -1993,7 +1895,7 @@ function buildEffect(params: Record<string, unknown>): Effect {
       } as GlassEffect;
     default:
       throw new Error(
-        `Unknown effect type "${kind}". Use inner-shadow | blur | texture | glass.`
+        `Unknown effect type "${kind}". Use inner-shadow | blur | noise | texture | glass.`
       );
   }
 }
@@ -2187,16 +2089,77 @@ function imagePaintFromBase64(base64: unknown, scaleMode: unknown): { paint: Ima
   if (!data) {
     throw new Error('No image data received.');
   }
-  const image = figma.createImage(figma.base64Decode(data));
+  let image: Image;
+  try {
+    image = figma.createImage(figma.base64Decode(data));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Figma rejected the image (${detail}). It accepts PNG, JPEG or GIF up to 4096 px per side; convert or resize and retry. For SVG use place_svg.`
+    );
+  }
   return {
     image,
     paint: { type: 'IMAGE', scaleMode: normalizeScaleMode(scaleMode), imageHash: image.hash }
   };
 }
 
+// Figma Motion is Beta and missing on older desktop builds; fail with something actionable.
+function availableAnimationStyles(): AvailableAnimationStyle[] {
+  if (!figma.motion || typeof figma.motion.figmaAnimationStyles !== 'function') {
+    throw new Error('Figma Motion is not available in this Figma build or file. Update Figma Desktop and retry.');
+  }
+  return figma.motion.figmaAnimationStyles();
+}
+
+// Figma reports style names as translation keys ("motion.preset_name.text_stagger").
+// Show and match the readable tail instead: "text stagger".
+function animationStyleLabel(name: string): string {
+  const tail = name.slice(name.lastIndexOf('.') + 1);
+  return tail.replace(/_/g, ' ').trim() || name;
+}
+
+function looseKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// "Fade In" is not a style: it is the Opacity style with type 'fadeIn'. Each style lists
+// its type options in props.type ("'fadeIn' | 'fadeOut' | 'custom' // default…"), so a
+// request that names one of those options resolves to that style plus the type.
+function animationStyleByTypeOption(
+  styles: AvailableAnimationStyle[],
+  wanted: string
+): { style: AvailableAnimationStyle; type: string } | undefined {
+  const key = looseKey(wanted);
+  if (!key) return undefined;
+  for (const style of styles) {
+    const spec = style.props ? style.props['type'] : undefined;
+    if (typeof spec !== 'string') continue;
+    const options = spec.match(/'[^']+'/g) ?? [];
+    for (const quoted of options) {
+      const option = quoted.slice(1, -1);
+      if (option !== 'custom' && looseKey(option) === key) {
+        return { style, type: option };
+      }
+    }
+  }
+  return undefined;
+}
+
+function nonNegativeSeconds(value: unknown, fallback: number): number {
+  const n = toNumber(value, fallback);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 function selectAndReturn(node: SceneNode): { id: string; name: string; type: string } {
-  figma.currentPage.selection = [node];
-  figma.viewport.scrollAndZoomIntoView([node]);
+  // Selection only works on the current page. The node already exists by now, so a
+  // failure here must not surface as a tool error (the caller would retry and duplicate it).
+  try {
+    figma.currentPage.selection = [node];
+    figma.viewport.scrollAndZoomIntoView([node]);
+  } catch {
+    // node lives on another page: leave the selection alone
+  }
   return { id: node.id, name: node.name, type: node.type };
 }
 
@@ -2232,16 +2195,6 @@ async function runBridgeCommand(
       }
       const core = await analyzePrimaryForBridge();
       return { selectedNode: core.selectedNode, intent: core.intent, uiSpec: core.uiSpec };
-    }
-    case 'export_tokens': {
-      const allowed: TokenFormat[] = ['css', 'tailwind', 'sass', 'dtcg'];
-      const requested = String(params.format ?? 'css').toLowerCase();
-      const format = (allowed as string[]).includes(requested)
-        ? (requested as TokenFormat)
-        : 'css';
-      const core = await analyzePrimaryForBridge();
-      const vars = core.uiSpec.tokenization.resolvedVariables ?? [];
-      return { format, count: vars.length, content: exportTokens(vars, format) };
     }
     case 'list_page_nodes': {
       const nodes = figma.currentPage.children.map((child) => ({
@@ -2475,27 +2428,6 @@ async function runBridgeCommand(
         gradientStops: buildGradientStops(params.stops)
       };
       (node as GeometryMixin).fills = [paint];
-      return { id: node.id, name: node.name };
-    }
-    case 'set_noise': {
-      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
-      if (!isSceneNode(node) || !('effects' in node)) {
-        throw new Error('set_noise requires a node that supports effects.');
-      }
-      const existing = params.append ? (node as BlendMixin).effects : [];
-      (node as BlendMixin).effects = [...existing, buildNoiseEffect(params)];
-      return { id: node.id, name: node.name };
-    }
-    case 'set_pattern': {
-      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
-      if (!isSceneNode(node) || !('fills' in node)) {
-        throw new Error('set_pattern requires a node that supports fills.');
-      }
-      const source = await getNodeByIdGuarded(String(params.sourceNodeId ?? ''));
-      if (!isSceneNode(source)) {
-        throw new Error('set_pattern requires a valid sourceNodeId to tile as the pattern.');
-      }
-      (node as GeometryMixin).fills = [buildPatternPaint(params)];
       return { id: node.id, name: node.name };
     }
     case 'set_effect': {
@@ -2886,12 +2818,12 @@ async function runBridgeCommand(
       return selectAndReturn(instance);
     }
     case 'list_animation_styles': {
-      const styles = figma.motion.figmaAnimationStyles();
       return {
-        styles: styles.map((s) => ({
+        styles: availableAnimationStyles().map((s) => ({
           styleId: s.styleId,
-          name: s.name,
-          description: s.description ?? null
+          name: animationStyleLabel(s.name),
+          description: s.description ?? null,
+          props: s.props ?? null
         }))
       };
     }
@@ -2900,22 +2832,64 @@ async function runBridgeCommand(
       if (!isSceneNode(node)) {
         throw new Error('apply_animation requires a scene node.');
       }
-      const styleId = String(params.styleId ?? '');
-      if (!styleId) {
+      const wanted = String(params.styleId ?? '').trim();
+      if (!wanted) {
         throw new Error('apply_animation requires a styleId. Call list_animation_styles.');
+      }
+      // Accept the id or the display name; models often pass "Fade in" rather than the id.
+      const styles = availableAnimationStyles();
+      const lower = wanted.toLowerCase();
+      let style =
+        styles.find((s) => s.styleId === wanted) ??
+        styles.find(
+          (s) =>
+            s.styleId.toLowerCase() === lower ||
+            s.name.toLowerCase() === lower ||
+            looseKey(animationStyleLabel(s.name)) === looseKey(wanted)
+        );
+      let impliedType: string | undefined;
+      if (!style) {
+        const byOption = animationStyleByTypeOption(styles, wanted);
+        style = byOption?.style;
+        impliedType = byOption?.type;
+      }
+      if (!style) {
+        const names = styles.map((s) => s.styleId).join(', ');
+        throw new Error(
+          `No animation style "${wanted}". Available: ${names || 'none in this file'}. Variants such as fade in / slide in are the "type" prop of a style (see list_animation_styles).`
+        );
       }
       const config: { duration?: number; timelineOffset?: number; props?: Record<string, unknown> } = {};
       if (params.duration != null) {
-        config.duration = toNumber(params.duration, 0.3);
+        config.duration = nonNegativeSeconds(params.duration, 0.3);
       }
       if (params.timelineOffset != null) {
-        config.timelineOffset = toNumber(params.timelineOffset, 0);
+        config.timelineOffset = nonNegativeSeconds(params.timelineOffset, 0);
       }
       if (params.props && typeof params.props === 'object') {
         config.props = params.props as Record<string, unknown>;
       }
-      const appliedId = node.applyAnimationStyle(styleId, config as AnimationStyleConfiguration);
-      return { id: node.id, name: node.name, appliedId };
+      if (impliedType && !(config.props && 'type' in config.props)) {
+        config.props = { ...(config.props ?? {}), type: impliedType };
+      }
+      try {
+        const appliedId = node.applyAnimationStyle(style.styleId, config as AnimationStyleConfiguration);
+        return { id: node.id, name: node.name, styleId: style.styleId, appliedId };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const hints: string[] = [];
+        if (config.props) {
+          hints.push(
+            style.props
+              ? `Valid props for "${style.name}": ${JSON.stringify(style.props)}.`
+              : `"${style.name}" takes no props; retry without properties.`
+          );
+        }
+        if (typeof node.getTopLevelFrame === 'function' && !node.getTopLevelFrame()) {
+          hints.push('The node is not inside a top-level frame; move it into a frame on the page first.');
+        }
+        throw new Error([`Could not apply "${style.name}": ${detail}`, ...hints].join(' '));
+      }
     }
     case 'remove_animation': {
       const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
@@ -2939,8 +2913,9 @@ async function runBridgeCommand(
           id: a.id,
           styleId: a.styleId,
           name: a.name,
-          duration: a.duration ?? null,
-          props: a.props ?? null
+          type: a.type ?? 'FIGMA',
+          duration: 'duration' in a ? a.duration ?? null : null,
+          props: 'props' in a ? a.props ?? null : null
         }))
       };
     }

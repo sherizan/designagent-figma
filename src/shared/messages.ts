@@ -9,14 +9,6 @@ export type ToUIMessage =
       nodeType: string;
     }
   | { type: 'ANALYSIS_RESULT'; payload: AnalysisResult }
-  | {
-      type: 'ISSUE_FIX_RESULT';
-      nodeId: string;
-      category: string;
-      reason: string;
-      status: 'fixed';
-      detail: string;
-    }
   | { type: 'DESIGN_MD_RESULT'; markdown: string; filename: string; frameCount: number }
   | { type: 'HTML_RESULT'; html: string; filename: string }
   | { type: 'BRIDGE_RESULT'; id: string; ok: boolean; result?: unknown; error?: string }

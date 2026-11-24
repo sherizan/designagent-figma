@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -12,7 +12,6 @@ import { z } from 'zod';
 import { WebSocket } from 'ws';
 import { runBroker, BROKER_PROTOCOL_VERSION, BUILD_MTIME } from './broker';
 import { resolveProjectRoot, deriveProjectLabel } from './project-root';
-import { lottieFrameToSvg, type LottieRoot } from './lottie';
 
 // DesignAgent MCP server.
 //
@@ -254,6 +253,9 @@ function callPlugin(
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (!brokerSocket || brokerSocket.readyState !== WebSocket.OPEN || !brokerReady) {
+      // Never reached the broker: count the attempt and file it with the other setup gaps.
+      countToolCall(label);
+      countToolCall(`${label}_nc`);
       reject(
         new Error(
           'DesignAgent bridge is starting up or not connected. In Figma, open the DesignAgent plugin and click "Start" on the Claude bridge bar, then retry.'
@@ -284,7 +286,10 @@ function callPlugin(
 // Counts tool-call *names* only — never params, node data, or design content —
 // and posts the tallies to designagent.dev so we know which bridge tools earn
 // their keep. A failed call also counts by reason (name only, no message): `<tool>_err`
-// (tool failed), `<tool>_nc` (plugin not attached), `<tool>_timeout` (no reply).
+// (tool failed), `<tool>_nc` (plugin not attached), `<tool>_timeout` (no reply),
+// `<tool>_pre` (failed server-side before reaching the plugin, e.g. an image that
+// could not be loaded). Operations inside `batch` count as `b_<command>` (+ `_err`);
+// resource reads count as `res_<name>`.
 // Opt out with DESIGNAGENT_TELEMETRY=0. See README "Telemetry".
 
 const TELEMETRY_ENABLED = process.env.DESIGNAGENT_TELEMETRY !== '0';
@@ -297,6 +302,31 @@ const toolCounts = new Map<string, number>();
 function countToolCall(command: string): void {
   if (TELEMETRY_ENABLED) {
     toolCounts.set(command, (toolCounts.get(command) ?? 0) + 1);
+  }
+}
+
+// Tally the operations inside one `batch` reply. Sub-command names are model-written
+// strings, so only names the sandbox actually ran become counters: anything it did not
+// recognise (or a nested batch) is folded into `b_unknown`.
+const COUNTER_NAME = /^[a-z][a-z0-9_]{0,40}$/;
+function countBatchOps(result: unknown): void {
+  const results = (result as { results?: unknown } | null)?.results;
+  if (!Array.isArray(results)) {
+    return;
+  }
+  for (const entry of results) {
+    const r = (entry ?? {}) as { ok?: unknown; command?: unknown; error?: unknown };
+    const command = typeof r.command === 'string' ? r.command : '';
+    const error = typeof r.error === 'string' ? r.error : '';
+    const known =
+      COUNTER_NAME.test(command) &&
+      error.indexOf('Unknown command') !== 0 &&
+      error.indexOf('Nested batch') !== 0;
+    const name = known ? `b_${command}` : 'b_unknown';
+    countToolCall(name);
+    if (!r.ok) {
+      countToolCall(`${name}_err`);
+    }
   }
 }
 
@@ -388,6 +418,108 @@ async function run(command: string, params: Record<string, unknown> = {}, label?
 }
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4 MB — keeps the bridge payload sane
+const MAX_IMAGE_PX = 4096; // figma.createImage rejects anything larger on either side
+const execFileAsync = promisify(execFile);
+
+type SniffedImage = { format: string; width?: number; height?: number };
+
+// Identify an image from its first bytes. figma.createImage only takes PNG, JPEG and GIF
+// up to 4096 px, and fails with an opaque error on anything else — so check here, where
+// we can say what to do instead.
+function sniffImage(buf: Buffer): SniffedImage {
+  if (buf.length >= 24 && buf.readUInt32BE(0) === 0x89504e47) {
+    return { format: 'png', width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  if (buf.length >= 10 && buf.toString('latin1', 0, 4) === 'GIF8') {
+    return { format: 'gif', width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
+  }
+  if (buf.length >= 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+    // Walk the JPEG segments to the first start-of-frame marker, which holds the size.
+    let i = 2;
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 0xff) {
+        i += 1;
+        continue;
+      }
+      const marker = buf[i + 1] ?? 0;
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { format: 'jpeg', width: buf.readUInt16BE(i + 7), height: buf.readUInt16BE(i + 5) };
+      }
+      if (marker === 0xff || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) {
+        i += 2;
+        continue;
+      }
+      i += 2 + buf.readUInt16BE(i + 2);
+    }
+    return { format: 'jpeg' };
+  }
+  if (buf.length >= 12 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') {
+    return { format: 'webp' };
+  }
+  if (buf.length >= 12 && buf.toString('latin1', 4, 8) === 'ftyp') {
+    const brand = buf.toString('latin1', 8, 12);
+    return { format: brand.indexOf('avi') === 0 ? 'avif' : 'heic' };
+  }
+  const head = buf.toString('utf8', 0, Math.min(buf.length, 1024)).replace(/^\uFEFF/, '').trimStart().toLowerCase();
+  if (head.indexOf('<svg') === 0 || (head.indexOf('<?xml') === 0 && head.indexOf('<svg') !== -1)) {
+    return { format: 'svg' };
+  }
+  if (head.indexOf('<!doctype html') === 0 || head.indexOf('<html') === 0) {
+    return { format: 'html' };
+  }
+  return { format: 'unknown' };
+}
+
+// macOS ships `sips`, which reads WebP / AVIF / HEIC and can downscale. Returns a PNG
+// (longest side capped at MAX_IMAGE_PX), or null when the conversion is not possible.
+async function convertWithSips(buf: Buffer): Promise<Buffer | null> {
+  if (process.platform !== 'darwin') {
+    return null;
+  }
+  const src = join(tmpdir(), `designagent-img-${randomUUID()}`);
+  const out = `${src}.png`;
+  try {
+    await writeFile(src, buf);
+    await execFileAsync('sips', ['-s', 'format', 'png', '-Z', String(MAX_IMAGE_PX), src, '--out', out]);
+    return await readFile(out);
+  } catch {
+    return null;
+  } finally {
+    await rm(src, { force: true }).catch(() => {});
+    await rm(out, { force: true }).catch(() => {});
+  }
+}
+
+// Make sure the bytes are something Figma will accept, converting on macOS where we can.
+async function ensureFigmaImage(input: Buffer): Promise<Buffer> {
+  let buf = input;
+  let info = sniffImage(buf);
+  if (info.format === 'svg') {
+    throw new Error('This is an SVG, not a bitmap. Use place_svg (svg or path) to place it as vectors.');
+  }
+  if (info.format === 'html') {
+    throw new Error('The source returned an HTML page, not an image (a login, consent or error page). Use a direct image URL.');
+  }
+  if (info.format === 'unknown') {
+    throw new Error('Not a recognisable image. Figma accepts PNG, JPEG or GIF; check the URL, path or base64 data.');
+  }
+  const tooBig = (i: SniffedImage) => Math.max(i.width ?? 0, i.height ?? 0) > MAX_IMAGE_PX;
+  if (info.format === 'webp' || info.format === 'avif' || info.format === 'heic' || tooBig(info)) {
+    const why = tooBig(info)
+      ? `Image is ${info.width}×${info.height} px; Figma's limit is ${MAX_IMAGE_PX} px per side.`
+      : `${info.format.toUpperCase()} images are not supported by Figma (PNG, JPEG or GIF only).`;
+    const converted = await convertWithSips(buf);
+    if (!converted) {
+      throw new Error(`${why} Convert or resize it to PNG/JPEG first, then retry.`);
+    }
+    buf = converted;
+    info = sniffImage(buf);
+    if (info.format !== 'png' || tooBig(info)) {
+      throw new Error(`${why} Automatic conversion failed; convert or resize it to PNG/JPEG first, then retry.`);
+    }
+  }
+  return buf;
+}
 
 // Resolve an image source (url | path | data) to base64. The server does this
 // IO because the Figma plugin sandbox can't make network/file requests.
@@ -411,6 +543,7 @@ async function loadImageBase64(args: {
   } else {
     throw new Error('Provide an image source: one of "url", "path", or "data".');
   }
+  buf = await ensureFigmaImage(buf);
   if (buf.length > MAX_IMAGE_BYTES) {
     throw new Error(
       `Image is ${(buf.length / 1024 / 1024).toFixed(1)} MB; max is ${MAX_IMAGE_BYTES / 1024 / 1024} MB. Use a smaller image.`
@@ -668,7 +801,7 @@ async function handleServerRequest(command: string, params: Record<string, unkno
 }
 
 const IMAGE_SOURCE_SCHEMA = {
-  url: z.string().optional().describe('Image URL (fetched by the server).'),
+  url: z.string().optional().describe('Direct image URL (fetched by the server). PNG, JPEG or GIF, up to 4096 px per side and 4 MB; WebP/AVIF/HEIC and oversized images are converted on macOS only. For SVG use place_svg.'),
   path: z.string().optional().describe('Absolute local file path to an image.'),
   data: z.string().optional().describe('Base64 image data or a data: URL.'),
   scaleMode: z.enum(['FILL', 'FIT', 'CROP', 'TILE']).optional().describe('Default FILL.')
@@ -712,36 +845,13 @@ server.registerTool(
   async ({ nodeId, depth }) => run('get_spec', { nodeId, depth })
 );
 
-server.registerTool(
-  'export_tokens',
-  {
-    description:
-      "Export the current selection's resolved Figma variables as a machine-readable token file. `format`: 'css' (CSS custom properties, all light/dark modes), 'dtcg' (Design Tokens W3C JSON, all modes preserved), 'tailwind' (tailwind.config.js theme.extend), or 'sass' (SCSS $variables). Tailwind/Sass use the default mode; CSS/DTCG carry every mode. Returns the file contents as text.",
-    inputSchema: {
-      format: z
-        .enum(['css', 'tailwind', 'sass', 'dtcg'])
-        .optional()
-        .describe("Token output format (default 'css').")
-    }
-  },
-  async ({ format }) => {
-    try {
-      const result = (await callPlugin('export_tokens', { format: format ?? 'css' })) as {
-        content?: string;
-      };
-      return ok(result?.content ?? result);
-    } catch (error) {
-      return fail(error);
-    }
-  }
-);
-
 // --- MCP resources: let Claude read live Figma state without spending a tool call. ---
 // Each read forwards to the plugin over the broker; if the bridge is down we return a
 // readable note in the contents rather than throwing (resources shouldn't hard-fail).
-async function resourceText(uri: URL, command: string, params: Record<string, unknown> = {}) {
+async function resourceText(uri: URL, command: string, label: string) {
   try {
-    const value = await callPlugin(command, params);
+    // Labelled so a resource read is not counted as a call to the tool it rides.
+    const value = await callPlugin(command, {}, undefined, label);
     const text = typeof value === 'string' ? value : JSON.stringify(value);
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
   } catch (error) {
@@ -760,29 +870,7 @@ server.registerResource(
     description: 'Structured UI spec (hierarchy, tokens, layout, text, components) of what is selected now.',
     mimeType: 'application/json'
   },
-  async (uri) => resourceText(uri, 'get_spec')
-);
-
-server.registerResource(
-  'design-tokens',
-  'figma://design-tokens',
-  {
-    title: 'Design tokens (DTCG)',
-    description: "The selection's resolved Figma variables as W3C Design Tokens JSON, all modes preserved.",
-    mimeType: 'application/json'
-  },
-  async (uri) => {
-    try {
-      const result = (await callPlugin('export_tokens', { format: 'dtcg' })) as { content?: string };
-      const text = result?.content ?? JSON.stringify(result, null, 2);
-      return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        contents: [{ uri: uri.href, mimeType: 'text/plain', text: `Bridge unavailable: ${message}` }]
-      };
-    }
-  }
+  async (uri) => resourceText(uri, 'get_spec', 'res_selection')
 );
 
 server.registerResource(
@@ -793,7 +881,7 @@ server.registerResource(
     description: 'Bridge status: connected file name, current page, and selection summary.',
     mimeType: 'application/json'
   },
-  async (uri) => resourceText(uri, 'status')
+  async (uri) => resourceText(uri, 'status', 'res_file')
 );
 
 // --- MCP prompts: reusable design workflows, surfaced as /mcp__designagent__<name>. ---
@@ -827,7 +915,7 @@ server.registerPrompt(
               'Analyze the current DesignAgent (Figma) selection for design-system quality.',
               '1. Read the selection with the `get_spec` tool (and `get_design_md` for the token frontmatter).',
               '2. Assess against the design’s own system, reporting concrete findings tied to node names/ids:',
-              '   - Tokens: hardcoded/raw values that should reference a resolved variable (see `export_tokens`).',
+              '   - Tokens: hardcoded/raw values that should reference a resolved variable (see `list_variables_and_styles`).',
               '   - Layout: manual absolute positioning where Auto Layout is intended.',
               '   - Components: repeated structures that should be a component/instance.',
               '   - States: for screens, whether empty/loading/error variants are evidenced.',
@@ -1165,7 +1253,7 @@ server.registerTool(
   async (args) => run('set_shadow', args as Record<string, unknown>)
 );
 
-// ---- Gradients, noise, patterns & effects (native Figma paints/effects) ----
+// ---- Gradients & effects (native Figma paints/effects) ----
 
 server.registerTool(
   'set_gradient',
@@ -1197,67 +1285,32 @@ server.registerTool(
 );
 
 server.registerTool(
-  'set_noise',
-  {
-    description:
-      'Add a native Figma noise/grain effect to a node. monotone (one color), duotone (two colors), or multitone (color + opacity). Requires a recent Figma version.',
-    inputSchema: {
-      nodeId: z.string(),
-      noiseType: z.enum(['monotone', 'duotone', 'multitone']).optional().describe('Default monotone.'),
-      noiseSize: z.number().optional().describe('Grain size, >0 (default 1.5). Smaller = finer.'),
-      density: z.number().optional().describe('Coverage 0–1 (default 0.4).'),
-      color: COLOR.optional().describe('Primary noise color (default #000000).'),
-      secondaryColor: COLOR.optional().describe('Duotone: the second color (default #ffffff).'),
-      opacity: z.number().optional().describe('Multitone: noise opacity 0–1 (default 0.5).'),
-      append: z.boolean().optional().describe('Keep existing effects and add this (default false = replace).')
-    }
-  },
-  async (args) => run('set_noise', args as Record<string, unknown>)
-);
-
-server.registerTool(
-  'set_pattern',
-  {
-    description:
-      'Fill a node by tiling another node (sourceNodeId) as a repeating pattern. The source must be a separate node, not an ancestor/descendant of the target.',
-    inputSchema: {
-      nodeId: z.string(),
-      sourceNodeId: z.string().describe('The node to tile as the pattern cell.'),
-      tileType: z
-        .enum(['RECTANGULAR', 'HORIZONTAL_HEXAGONAL', 'VERTICAL_HEXAGONAL'])
-        .optional()
-        .describe('Tiling arrangement (default RECTANGULAR).'),
-      scalingFactor: z.number().optional().describe('Scale of each tile (default 1).'),
-      spacing: z.array(z.number()).optional().describe('[x, y] gap between tiles (default [0,0]).'),
-      horizontalAlignment: z.enum(['START', 'CENTER', 'END']).optional().describe('Default CENTER.')
-    }
-  },
-  async (args) => run('set_pattern', args as Record<string, unknown>)
-);
-
-server.registerTool(
   'set_effect',
   {
     description:
-      'Add a native Figma effect to a node: inner-shadow, blur (layer or background), texture (grain), or glass (frost + refraction). Drop shadows use set_shadow; noise uses set_noise. Texture/glass require a recent Figma version.',
+      'Add a native Figma effect to a node: inner-shadow, blur (layer or background), noise (coloured grain overlay), texture (roughens the layer itself), or glass (frost + refraction). Drop shadows use set_shadow. Noise/texture/glass require a recent Figma version.',
     inputSchema: {
       nodeId: z.string(),
       type: z
-        .enum(['inner-shadow', 'blur', 'texture', 'glass'])
+        .enum(['inner-shadow', 'blur', 'noise', 'texture', 'glass'])
         .describe('Which effect to add.'),
       append: z.boolean().optional().describe('Keep existing effects and add this (default false = replace).'),
       // blur
       radius: z.number().optional().describe('blur/texture/glass: radius (blur default 8).'),
       blurType: z.enum(['LAYER', 'BACKGROUND']).optional().describe('blur: default LAYER. BACKGROUND needs a translucent fill.'),
       // inner-shadow (mirrors set_shadow)
-      color: COLOR.optional().describe('inner-shadow: shadow color, 8-digit hex ok (default #00000040).'),
+      color: COLOR.optional().describe('inner-shadow: shadow color, 8-digit hex ok (default #00000040). noise: primary color (default #000000).'),
       offsetX: z.number().optional().describe('inner-shadow: horizontal offset (default 0).'),
       offsetY: z.number().optional().describe('inner-shadow: vertical offset (default 4).'),
       blur: z.number().optional().describe('inner-shadow: blur radius (default 8).'),
       spread: z.number().optional().describe('inner-shadow: spread (default 0).'),
-      opacity: z.number().optional().describe('inner-shadow: override alpha 0–1.'),
+      opacity: z.number().optional().describe('inner-shadow: override alpha 0–1. noise multitone: noise opacity 0–1 (default 0.5).'),
+      // noise
+      noiseType: z.enum(['monotone', 'duotone', 'multitone']).optional().describe('noise: default monotone.'),
+      density: z.number().optional().describe('noise: coverage 0–1 (default 0.4).'),
+      secondaryColor: COLOR.optional().describe('noise duotone: the second color (default #ffffff).'),
       // texture
-      noiseSize: z.number().optional().describe('texture: grain size, >0 (default 0.5).'),
+      noiseSize: z.number().optional().describe('noise/texture: grain size, >0 (noise default 1.5, texture default 0.5). Smaller = finer.'),
       clipToShape: z.boolean().optional().describe('texture: clip to the node shape (default true).'),
       // glass
       lightIntensity: z.number().optional().describe('glass: specular highlight 0–1 (default 0.5).'),
@@ -1282,6 +1335,7 @@ server.registerTool(
       const imageBase64 = await loadImageBase64(args);
       return run('set_image', { nodeId: args.nodeId, imageBase64, scaleMode: args.scaleMode });
     } catch (error) {
+      countToolCall('set_image_pre');
       return fail(error);
     }
   }
@@ -1316,12 +1370,11 @@ server.registerTool(
         height: args.height
       });
     } catch (error) {
+      countToolCall('place_image_pre');
       return fail(error);
     }
   }
 );
-
-const execFileAsync = promisify(execFile);
 
 server.registerTool(
   'capture_simulator',
@@ -1365,14 +1418,15 @@ server.registerTool(
         y: args.y,
         width: Math.round(pxW / Math.max(1, args.scale ?? 3)),
         height: Math.round(pxH / Math.max(1, args.scale ?? 3))
-      });
+      }, 'capture_simulator');
     } catch (error) {
+      countToolCall('capture_simulator_pre');
       return fail(error);
     }
   }
 );
 
-// ---- Vectors: SVG, icons, Lottie ----
+// ---- Vectors: SVG, icons ----
 
 server.registerTool(
   'place_svg',
@@ -1396,6 +1450,7 @@ server.registerTool(
       if (!svg) return fail(new Error('Provide "svg" or "path".'));
       return run('place_svg', { ...args, svg });
     } catch (error) {
+      countToolCall('place_svg_pre');
       return fail(error);
     }
   }
@@ -1447,46 +1502,11 @@ server.registerTool(
         y: args.y
       }, 'place_icon');
     } catch (error) {
+      countToolCall('place_icon_pre');
       return fail(error);
     }
   }
 );
-
-server.registerTool(
-  'place_lottie',
-  {
-    description:
-      'Render one frame of a Lottie animation (.json) as native, editable vectors. Supports shape layers (groups, rectangles, ellipses, paths, solid fills/strokes, transforms) and solid layers, with animated values resolved at the chosen frame. Precomps, masks, mattes, trim paths, text and gradient fills (kept as their first color) are skipped and listed in the result.',
-    inputSchema: {
-      path: z.string().describe('Path to the Lottie .json (project or temp space).'),
-      frame: z.union([z.number(), z.literal('last')]).optional().describe('Frame to render (default "last").'),
-      name: z.string().optional(),
-      width: z.number().optional().describe('Target width in px (default the composition width).'),
-      parentId: z.string().optional(),
-      x: z.number().optional(),
-      y: z.number().optional()
-    }
-  },
-  async (args) => {
-    try {
-      const raw = JSON.parse(await readFile(resolveReadable(args.path), 'utf8')) as LottieRoot;
-      const { svg, skipped } = lottieFrameToSvg(raw, args.frame ?? 'last');
-      const result = await callPlugin('place_svg', {
-        svg,
-        name: args.name ?? raw.nm ?? 'Lottie',
-        width: args.width ?? raw.w,
-        parentId: args.parentId,
-        x: args.x,
-        y: args.y
-      }, undefined, 'place_lottie');
-      return ok({ ...(result as object), skipped });
-    } catch (error) {
-      return fail(error);
-    }
-  }
-);
-
-// ---- Grid layout (Figma API Update 126) ----
 
 // ---- Motion (Figma API Update 127, Beta — API may change) ----
 
@@ -1494,7 +1514,7 @@ server.registerTool(
   'list_animation_styles',
   {
     description:
-      '(Beta) List the Figma Motion animation styles available in the current document. Use a returned styleId with apply_animation.',
+      '(Beta) List the Figma Motion animation styles available in the current document, with the configurable props each one accepts. Use a returned styleId (or name) with apply_animation.',
     inputSchema: {}
   },
   async () => run('list_animation_styles')
@@ -1507,13 +1527,13 @@ server.registerTool(
       '(Beta — Figma Motion) Apply an animation style to a node. Returns an appliedId you can pass to remove_animation.',
     inputSchema: {
       nodeId: z.string(),
-      styleId: z.string().describe('Animation style id from list_animation_styles.'),
-      duration: z.number().optional().describe('Duration in seconds.'),
+      styleId: z.string().describe('Animation style id from list_animation_styles (e.g. Opacity, Position, Scale). A variant name such as "fade in" or "slide_out" also works: it resolves to the style whose `type` prop has that option.'),
+      duration: z.number().optional().describe('Duration in seconds (0.3, not 300).'),
       timelineOffset: z.number().optional().describe('Timeline offset in seconds.'),
       properties: z
         .record(z.string(), z.unknown())
         .optional()
-        .describe('Style-specific configuration props (e.g. direction, distance).')
+        .describe('Style-specific props, e.g. { type: "fadeOut" } or { type: "slide_in", direction: "left", distance: 80 }. Use the names and values list_animation_styles reports: Figma silently ignores unknown ones.')
     }
   },
   async ({ nodeId, styleId, duration, timelineOffset, properties }) =>
@@ -1677,6 +1697,7 @@ server.registerTool(
     }
   },
   async (args) => {
+    let sent = false;
     try {
       const operations = [];
       for (const op of args.operations) {
@@ -1690,11 +1711,13 @@ server.registerTool(
         }
         operations.push({ command: op.command, params });
       }
+      sent = true;
       const result = (await callPlugin(
         'batch',
         { operations, screenshot: args.screenshot, screenshotScale: args.screenshotScale },
         60_000
       )) as { image?: { base64: string; mimeType: string; name?: string; width?: number; height?: number } } & Record<string, unknown>;
+      countBatchOps(result);
       if (result?.image?.base64) {
         const { image, ...rest } = result;
         return {
@@ -1707,6 +1730,9 @@ server.registerTool(
       }
       return ok(result);
     } catch (error) {
+      if (!sent) {
+        countToolCall('batch_pre');
+      }
       return fail(error);
     }
   }

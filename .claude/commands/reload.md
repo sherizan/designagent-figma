@@ -1,6 +1,6 @@
 ---
 description: Build the plugin and verify the DesignAgent bridge picks up the change in Figma
-allowed-tools: Bash(npm run build:*), Bash(npm run typecheck:*), mcp__plugin_designagent_designagent__status, mcp__plugin_designagent_designagent__get_score, mcp__plugin_designagent_designagent__get_spec, mcp__plugin_designagent_designagent__list_issues, mcp__plugin_designagent_designagent__take_screenshot, mcp__plugin_designagent_designagent__console_logs
+allowed-tools: Bash(npm run build:*), Bash(npm run typecheck:*), mcp__plugin_designagent_designagent__status, mcp__plugin_designagent_designagent__get_spec, mcp__plugin_designagent_designagent__take_screenshot, mcp__plugin_designagent_designagent__console_logs
 ---
 
 Run the DesignAgent dev loop and report the outcome concisely:
@@ -14,9 +14,8 @@ Run the DesignAgent dev loop and report the outcome concisely:
    DesignAgent); the bridge reconnects on its own.
 4. Run `mcp__plugin_designagent_designagent__status` again and report the connected file,
    current page, and what is selected.
-5. If something is selected, run `mcp__plugin_designagent_designagent__get_score` (and
-   `list_issues` if useful) so I can confirm the rebuilt plugin analyzes the selection
-   correctly. Then run `mcp__plugin_designagent_designagent__take_screenshot` to see the result,
+5. If something is selected, run `mcp__plugin_designagent_designagent__get_spec` so I can
+   confirm the rebuilt plugin reads the selection correctly. Then run `mcp__plugin_designagent_designagent__take_screenshot` to see the result,
    and `mcp__plugin_designagent_designagent__console_logs` to surface any plugin errors.
 
 Keep the summary to a few lines: build status, bridge status, what the rebuilt plugin reports for

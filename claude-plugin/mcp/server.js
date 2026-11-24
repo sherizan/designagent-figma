@@ -25149,171 +25149,6 @@ function deriveProjectLabel(root) {
   return parts.slice(-2).join("/");
 }
 
-// src/lottie.ts
-function lottieValue(prop, frame) {
-  if (!prop) return [];
-  if (prop.s && prop.x && prop.y) {
-    return [lottieValue(prop.x, frame)[0] ?? 0, lottieValue(prop.y, frame)[0] ?? 0];
-  }
-  const k = prop.k;
-  if (!prop.a || !Array.isArray(k) || typeof k[0] === "number") {
-    return Array.isArray(k) ? k : typeof k === "number" ? [k] : [];
-  }
-  const frames = k;
-  const first = frames[0];
-  if (frame <= first.t) return first.s ?? [];
-  for (let i = 0; i < frames.length - 1; i += 1) {
-    const a = frames[i];
-    const b = frames[i + 1];
-    if (frame >= a.t && frame < b.t) {
-      const from = a.s ?? [];
-      const to = b.s ?? a.e ?? from;
-      if (a.h) return from;
-      const u = (frame - a.t) / Math.max(1, b.t - a.t);
-      return from.map((v, j) => v + ((to[j] ?? v) - v) * u);
-    }
-  }
-  const last = frames[frames.length - 1];
-  return last.s ?? frames[frames.length - 2]?.e ?? frames[frames.length - 2]?.s ?? [];
-}
-function lottieTransform(t, frame) {
-  if (!t) return "";
-  const [ax = 0, ay = 0] = lottieValue(t.a, frame);
-  const [px = 0, py = 0] = lottieValue(t.p, frame);
-  const [sx = 100, sy = 100] = lottieValue(t.s, frame);
-  const [r = 0] = lottieValue(t.r, frame);
-  return `translate(${px} ${py}) rotate(${r}) scale(${sx / 100} ${sy / 100}) translate(${-ax} ${-ay})`;
-}
-function lottieColor(prop, frame) {
-  const [r = 0, g = 0, b = 0] = lottieValue(prop, frame);
-  const h = (v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0");
-  return `#${h(r)}${h(g)}${h(b)}`;
-}
-function lottiePathD(prop, frame) {
-  const k = prop?.k;
-  let shape = k;
-  if (Array.isArray(k)) {
-    const frames = k;
-    const kf = frames.filter((f) => f.t <= frame).pop() ?? frames[0];
-    shape = kf?.s?.[0];
-  }
-  const v = shape?.v ?? [];
-  if (v.length === 0) return "";
-  const i = shape?.i ?? [];
-  const o = shape?.o ?? [];
-  const pt = (p) => `${p?.[0] ?? 0} ${p?.[1] ?? 0}`;
-  const parts = [`M ${pt(v[0])}`];
-  const n = v.length;
-  const segs = shape?.c ? n : n - 1;
-  for (let idx = 0; idx < segs; idx += 1) {
-    const a = idx;
-    const b = (idx + 1) % n;
-    const c1 = [(v[a]?.[0] ?? 0) + (o[a]?.[0] ?? 0), (v[a]?.[1] ?? 0) + (o[a]?.[1] ?? 0)];
-    const c2 = [(v[b]?.[0] ?? 0) + (i[b]?.[0] ?? 0), (v[b]?.[1] ?? 0) + (i[b]?.[1] ?? 0)];
-    parts.push(`C ${pt(c1)} ${pt(c2)} ${pt(v[b])}`);
-  }
-  if (shape?.c) parts.push("Z");
-  return parts.join(" ");
-}
-function lottieShapesToSvg(shapes, frame, skipped) {
-  let fill = "none";
-  let stroke = "";
-  let strokeWidth = 0;
-  let fillOpacity = 1;
-  let strokeOpacity = 1;
-  let transform2 = "";
-  const geoms = [];
-  const groups = [];
-  for (const sh of shapes) {
-    if (sh.hd) continue;
-    switch (sh.ty) {
-      case "gr":
-        groups.push(lottieShapesToSvg(sh.it ?? [], frame, skipped));
-        break;
-      case "rc": {
-        const [w = 0, h = 0] = lottieValue(sh.s, frame);
-        const [cx = 0, cy = 0] = lottieValue(sh.p, frame);
-        const [r = 0] = lottieValue(sh.r, frame);
-        geoms.push(`<rect x="${cx - w / 2}" y="${cy - h / 2}" width="${w}" height="${h}" rx="${r}"/>`);
-        break;
-      }
-      case "el": {
-        const [w = 0, h = 0] = lottieValue(sh.s, frame);
-        const [cx = 0, cy = 0] = lottieValue(sh.p, frame);
-        geoms.push(`<ellipse cx="${cx}" cy="${cy}" rx="${w / 2}" ry="${h / 2}"/>`);
-        break;
-      }
-      case "sh": {
-        const d = lottiePathD(sh.ks, frame);
-        if (d) geoms.push(`<path d="${d}"/>`);
-        break;
-      }
-      case "fl":
-        fill = lottieColor(sh.c, frame);
-        fillOpacity = (lottieValue(sh.o, frame)[0] ?? 100) / 100;
-        break;
-      case "st":
-        stroke = lottieColor(sh.c, frame);
-        strokeWidth = lottieValue(sh.w, frame)[0] ?? 1;
-        strokeOpacity = (lottieValue(sh.o, frame)[0] ?? 100) / 100;
-        break;
-      case "gf":
-      case "gs": {
-        const k = lottieValue(sh.g?.k, frame);
-        const h = (v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0");
-        const c = `#${h(k[1] ?? 0)}${h(k[2] ?? 0)}${h(k[3] ?? 0)}`;
-        if (sh.ty === "gf") fill = c;
-        else {
-          stroke = c;
-          strokeWidth = lottieValue(sh.w, frame)[0] ?? 1;
-        }
-        skipped.add(`gradient "${sh.nm ?? sh.ty}" flattened`);
-        break;
-      }
-      case "tr":
-        transform2 = lottieTransform(sh, frame);
-        fillOpacity *= (lottieValue(sh.o, frame)[0] ?? 100) / 100;
-        break;
-      case "tm":
-      case "rp":
-      case "mm":
-      case "pb":
-      case "rd":
-        skipped.add(`shape modifier "${sh.nm ?? sh.ty}"`);
-        break;
-      default:
-        skipped.add(`shape type "${sh.ty}"`);
-    }
-  }
-  const paint = `fill="${fill}" fill-opacity="${fillOpacity}"` + (stroke ? ` stroke="${stroke}" stroke-width="${strokeWidth}" stroke-opacity="${strokeOpacity}"` : "");
-  return `<g transform="${transform2}" ${paint}>${geoms.join("")}${groups.join("")}</g>`;
-}
-function lottieFrameToSvg(root, frameArg) {
-  const frame = frameArg === "last" ? Math.max(root.ip, root.op - 1) : frameArg;
-  const skipped = /* @__PURE__ */ new Set();
-  const byIndex = /* @__PURE__ */ new Map();
-  for (const l of root.layers) if (l.ind != null) byIndex.set(l.ind, l);
-  const chain = (l, depth = 0) => {
-    const own = lottieTransform(l.ks, frame);
-    const parent = l.parent != null ? byIndex.get(l.parent) : void 0;
-    return parent && depth < 16 ? `${chain(parent, depth + 1)} ${own}` : own;
-  };
-  const out = [];
-  for (const layer of [...root.layers].reverse()) {
-    if (layer.hd || frame < layer.ip || frame >= layer.op) continue;
-    const opacity = (lottieValue(layer.ks.o, frame)[0] ?? 100) / 100;
-    if (layer.ty === 4) {
-      out.push(`<g transform="${chain(layer)}" opacity="${opacity}">${lottieShapesToSvg(layer.shapes ?? [], frame, skipped)}</g>`);
-    } else if (layer.ty === 1) {
-      out.push(`<g transform="${chain(layer)}" opacity="${opacity}"><rect width="${layer.sw ?? 0}" height="${layer.sh ?? 0}" fill="${layer.sc ?? "#000"}"/></g>`);
-    } else if (layer.ty !== 3) {
-      skipped.add(`layer "${layer.nm ?? layer.ty}" (type ${layer.ty})`);
-    }
-  }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${root.w}" height="${root.h}" viewBox="0 0 ${root.w} ${root.h}">${out.join("")}</svg>`;
-  return { svg, skipped: Array.from(skipped) };
-}
-
 // src/server.ts
 var IS_BROKER = process.argv.includes("--broker");
 var PORT2 = Number(process.env.DESIGNAGENT_BRIDGE_PORT ?? 3790);
@@ -25475,6 +25310,8 @@ function connectToBroker() {
 function callPlugin(command, params = {}, timeoutMs = REQUEST_TIMEOUT_MS, label = command) {
   return new Promise((resolve3, reject) => {
     if (!brokerSocket || brokerSocket.readyState !== import_websocket.default.OPEN || !brokerReady) {
+      countToolCall(label);
+      countToolCall(`${label}_nc`);
       reject(
         new Error(
           'DesignAgent bridge is starting up or not connected. In Figma, open the DesignAgent plugin and click "Start" on the Claude bridge bar, then retry.'
@@ -25506,6 +25343,24 @@ var toolCounts = /* @__PURE__ */ new Map();
 function countToolCall(command) {
   if (TELEMETRY_ENABLED) {
     toolCounts.set(command, (toolCounts.get(command) ?? 0) + 1);
+  }
+}
+var COUNTER_NAME = /^[a-z][a-z0-9_]{0,40}$/;
+function countBatchOps(result) {
+  const results = result?.results;
+  if (!Array.isArray(results)) {
+    return;
+  }
+  for (const entry of results) {
+    const r = entry ?? {};
+    const command = typeof r.command === "string" ? r.command : "";
+    const error2 = typeof r.error === "string" ? r.error : "";
+    const known = COUNTER_NAME.test(command) && error2.indexOf("Unknown command") !== 0 && error2.indexOf("Nested batch") !== 0;
+    const name = known ? `b_${command}` : "b_unknown";
+    countToolCall(name);
+    if (!r.ok) {
+      countToolCall(`${name}_err`);
+    }
   }
 }
 var telemetryId;
@@ -25577,6 +25432,96 @@ async function run(command, params = {}, label) {
   }
 }
 var MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+var MAX_IMAGE_PX = 4096;
+var execFileAsync = (0, import_node_util.promisify)(import_node_child_process.execFile);
+function sniffImage(buf) {
+  if (buf.length >= 24 && buf.readUInt32BE(0) === 2303741511) {
+    return { format: "png", width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  if (buf.length >= 10 && buf.toString("latin1", 0, 4) === "GIF8") {
+    return { format: "gif", width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
+  }
+  if (buf.length >= 4 && buf[0] === 255 && buf[1] === 216) {
+    let i = 2;
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 255) {
+        i += 1;
+        continue;
+      }
+      const marker = buf[i + 1] ?? 0;
+      if (marker >= 192 && marker <= 207 && marker !== 196 && marker !== 200 && marker !== 204) {
+        return { format: "jpeg", width: buf.readUInt16BE(i + 7), height: buf.readUInt16BE(i + 5) };
+      }
+      if (marker === 255 || marker === 1 || marker >= 208 && marker <= 217) {
+        i += 2;
+        continue;
+      }
+      i += 2 + buf.readUInt16BE(i + 2);
+    }
+    return { format: "jpeg" };
+  }
+  if (buf.length >= 12 && buf.toString("latin1", 0, 4) === "RIFF" && buf.toString("latin1", 8, 12) === "WEBP") {
+    return { format: "webp" };
+  }
+  if (buf.length >= 12 && buf.toString("latin1", 4, 8) === "ftyp") {
+    const brand = buf.toString("latin1", 8, 12);
+    return { format: brand.indexOf("avi") === 0 ? "avif" : "heic" };
+  }
+  const head = buf.toString("utf8", 0, Math.min(buf.length, 1024)).replace(/^\uFEFF/, "").trimStart().toLowerCase();
+  if (head.indexOf("<svg") === 0 || head.indexOf("<?xml") === 0 && head.indexOf("<svg") !== -1) {
+    return { format: "svg" };
+  }
+  if (head.indexOf("<!doctype html") === 0 || head.indexOf("<html") === 0) {
+    return { format: "html" };
+  }
+  return { format: "unknown" };
+}
+async function convertWithSips(buf) {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  const src = (0, import_node_path3.join)((0, import_node_os2.tmpdir)(), `designagent-img-${(0, import_node_crypto.randomUUID)()}`);
+  const out = `${src}.png`;
+  try {
+    await (0, import_promises2.writeFile)(src, buf);
+    await execFileAsync("sips", ["-s", "format", "png", "-Z", String(MAX_IMAGE_PX), src, "--out", out]);
+    return await (0, import_promises2.readFile)(out);
+  } catch {
+    return null;
+  } finally {
+    await (0, import_promises2.rm)(src, { force: true }).catch(() => {
+    });
+    await (0, import_promises2.rm)(out, { force: true }).catch(() => {
+    });
+  }
+}
+async function ensureFigmaImage(input) {
+  let buf = input;
+  let info = sniffImage(buf);
+  if (info.format === "svg") {
+    throw new Error("This is an SVG, not a bitmap. Use place_svg (svg or path) to place it as vectors.");
+  }
+  if (info.format === "html") {
+    throw new Error("The source returned an HTML page, not an image (a login, consent or error page). Use a direct image URL.");
+  }
+  if (info.format === "unknown") {
+    throw new Error("Not a recognisable image. Figma accepts PNG, JPEG or GIF; check the URL, path or base64 data.");
+  }
+  const tooBig = (i) => Math.max(i.width ?? 0, i.height ?? 0) > MAX_IMAGE_PX;
+  if (info.format === "webp" || info.format === "avif" || info.format === "heic" || tooBig(info)) {
+    const why = tooBig(info) ? `Image is ${info.width}\xD7${info.height} px; Figma's limit is ${MAX_IMAGE_PX} px per side.` : `${info.format.toUpperCase()} images are not supported by Figma (PNG, JPEG or GIF only).`;
+    const converted = await convertWithSips(buf);
+    if (!converted) {
+      throw new Error(`${why} Convert or resize it to PNG/JPEG first, then retry.`);
+    }
+    buf = converted;
+    info = sniffImage(buf);
+    if (info.format !== "png" || tooBig(info)) {
+      throw new Error(`${why} Automatic conversion failed; convert or resize it to PNG/JPEG first, then retry.`);
+    }
+  }
+  return buf;
+}
 async function loadImageBase64(args) {
   let buf;
   if (args.data) {
@@ -25593,6 +25538,7 @@ async function loadImageBase64(args) {
   } else {
     throw new Error('Provide an image source: one of "url", "path", or "data".');
   }
+  buf = await ensureFigmaImage(buf);
   if (buf.length > MAX_IMAGE_BYTES) {
     throw new Error(
       `Image is ${(buf.length / 1024 / 1024).toFixed(1)} MB; max is ${MAX_IMAGE_BYTES / 1024 / 1024} MB. Use a smaller image.`
@@ -25806,7 +25752,7 @@ async function handleServerRequest(command, params) {
   }
 }
 var IMAGE_SOURCE_SCHEMA = {
-  url: external_exports.string().optional().describe("Image URL (fetched by the server)."),
+  url: external_exports.string().optional().describe("Direct image URL (fetched by the server). PNG, JPEG or GIF, up to 4096 px per side and 4 MB; WebP/AVIF/HEIC and oversized images are converted on macOS only. For SVG use place_svg."),
   path: external_exports.string().optional().describe("Absolute local file path to an image."),
   data: external_exports.string().optional().describe("Base64 image data or a data: URL."),
   scaleMode: external_exports.enum(["FILL", "FIT", "CROP", "TILE"]).optional().describe("Default FILL.")
@@ -25843,26 +25789,9 @@ server.registerTool(
   },
   async ({ nodeId, depth }) => run("get_spec", { nodeId, depth })
 );
-server.registerTool(
-  "export_tokens",
-  {
-    description: "Export the current selection's resolved Figma variables as a machine-readable token file. `format`: 'css' (CSS custom properties, all light/dark modes), 'dtcg' (Design Tokens W3C JSON, all modes preserved), 'tailwind' (tailwind.config.js theme.extend), or 'sass' (SCSS $variables). Tailwind/Sass use the default mode; CSS/DTCG carry every mode. Returns the file contents as text.",
-    inputSchema: {
-      format: external_exports.enum(["css", "tailwind", "sass", "dtcg"]).optional().describe("Token output format (default 'css').")
-    }
-  },
-  async ({ format }) => {
-    try {
-      const result = await callPlugin("export_tokens", { format: format ?? "css" });
-      return ok(result?.content ?? result);
-    } catch (error2) {
-      return fail(error2);
-    }
-  }
-);
-async function resourceText(uri, command, params = {}) {
+async function resourceText(uri, command, label) {
   try {
-    const value = await callPlugin(command, params);
+    const value = await callPlugin(command, {}, void 0, label);
     const text = typeof value === "string" ? value : JSON.stringify(value);
     return { contents: [{ uri: uri.href, mimeType: "application/json", text }] };
   } catch (error2) {
@@ -25880,28 +25809,7 @@ server.registerResource(
     description: "Structured UI spec (hierarchy, tokens, layout, text, components) of what is selected now.",
     mimeType: "application/json"
   },
-  async (uri) => resourceText(uri, "get_spec")
-);
-server.registerResource(
-  "design-tokens",
-  "figma://design-tokens",
-  {
-    title: "Design tokens (DTCG)",
-    description: "The selection's resolved Figma variables as W3C Design Tokens JSON, all modes preserved.",
-    mimeType: "application/json"
-  },
-  async (uri) => {
-    try {
-      const result = await callPlugin("export_tokens", { format: "dtcg" });
-      const text = result?.content ?? JSON.stringify(result, null, 2);
-      return { contents: [{ uri: uri.href, mimeType: "application/json", text }] };
-    } catch (error2) {
-      const message = error2 instanceof Error ? error2.message : String(error2);
-      return {
-        contents: [{ uri: uri.href, mimeType: "text/plain", text: `Bridge unavailable: ${message}` }]
-      };
-    }
-  }
+  async (uri) => resourceText(uri, "get_spec", "res_selection")
 );
 server.registerResource(
   "current-file",
@@ -25911,7 +25819,7 @@ server.registerResource(
     description: "Bridge status: connected file name, current page, and selection summary.",
     mimeType: "application/json"
   },
-  async (uri) => resourceText(uri, "status")
+  async (uri) => resourceText(uri, "status", "res_file")
 );
 server.registerPrompt(
   "analyze_selection",
@@ -25935,7 +25843,7 @@ server.registerPrompt(
               "Analyze the current DesignAgent (Figma) selection for design-system quality.",
               "1. Read the selection with the `get_spec` tool (and `get_design_md` for the token frontmatter).",
               "2. Assess against the design\u2019s own system, reporting concrete findings tied to node names/ids:",
-              "   - Tokens: hardcoded/raw values that should reference a resolved variable (see `export_tokens`).",
+              "   - Tokens: hardcoded/raw values that should reference a resolved variable (see `list_variables_and_styles`).",
               "   - Layout: manual absolute positioning where Auto Layout is intended.",
               "   - Components: repeated structures that should be a component/instance.",
               "   - States: for screens, whether empty/loading/error variants are evidenced.",
@@ -26246,57 +26154,29 @@ server.registerTool(
   async (args) => run("set_gradient", args)
 );
 server.registerTool(
-  "set_noise",
-  {
-    description: "Add a native Figma noise/grain effect to a node. monotone (one color), duotone (two colors), or multitone (color + opacity). Requires a recent Figma version.",
-    inputSchema: {
-      nodeId: external_exports.string(),
-      noiseType: external_exports.enum(["monotone", "duotone", "multitone"]).optional().describe("Default monotone."),
-      noiseSize: external_exports.number().optional().describe("Grain size, >0 (default 1.5). Smaller = finer."),
-      density: external_exports.number().optional().describe("Coverage 0\u20131 (default 0.4)."),
-      color: COLOR.optional().describe("Primary noise color (default #000000)."),
-      secondaryColor: COLOR.optional().describe("Duotone: the second color (default #ffffff)."),
-      opacity: external_exports.number().optional().describe("Multitone: noise opacity 0\u20131 (default 0.5)."),
-      append: external_exports.boolean().optional().describe("Keep existing effects and add this (default false = replace).")
-    }
-  },
-  async (args) => run("set_noise", args)
-);
-server.registerTool(
-  "set_pattern",
-  {
-    description: "Fill a node by tiling another node (sourceNodeId) as a repeating pattern. The source must be a separate node, not an ancestor/descendant of the target.",
-    inputSchema: {
-      nodeId: external_exports.string(),
-      sourceNodeId: external_exports.string().describe("The node to tile as the pattern cell."),
-      tileType: external_exports.enum(["RECTANGULAR", "HORIZONTAL_HEXAGONAL", "VERTICAL_HEXAGONAL"]).optional().describe("Tiling arrangement (default RECTANGULAR)."),
-      scalingFactor: external_exports.number().optional().describe("Scale of each tile (default 1)."),
-      spacing: external_exports.array(external_exports.number()).optional().describe("[x, y] gap between tiles (default [0,0])."),
-      horizontalAlignment: external_exports.enum(["START", "CENTER", "END"]).optional().describe("Default CENTER.")
-    }
-  },
-  async (args) => run("set_pattern", args)
-);
-server.registerTool(
   "set_effect",
   {
-    description: "Add a native Figma effect to a node: inner-shadow, blur (layer or background), texture (grain), or glass (frost + refraction). Drop shadows use set_shadow; noise uses set_noise. Texture/glass require a recent Figma version.",
+    description: "Add a native Figma effect to a node: inner-shadow, blur (layer or background), noise (coloured grain overlay), texture (roughens the layer itself), or glass (frost + refraction). Drop shadows use set_shadow. Noise/texture/glass require a recent Figma version.",
     inputSchema: {
       nodeId: external_exports.string(),
-      type: external_exports.enum(["inner-shadow", "blur", "texture", "glass"]).describe("Which effect to add."),
+      type: external_exports.enum(["inner-shadow", "blur", "noise", "texture", "glass"]).describe("Which effect to add."),
       append: external_exports.boolean().optional().describe("Keep existing effects and add this (default false = replace)."),
       // blur
       radius: external_exports.number().optional().describe("blur/texture/glass: radius (blur default 8)."),
       blurType: external_exports.enum(["LAYER", "BACKGROUND"]).optional().describe("blur: default LAYER. BACKGROUND needs a translucent fill."),
       // inner-shadow (mirrors set_shadow)
-      color: COLOR.optional().describe("inner-shadow: shadow color, 8-digit hex ok (default #00000040)."),
+      color: COLOR.optional().describe("inner-shadow: shadow color, 8-digit hex ok (default #00000040). noise: primary color (default #000000)."),
       offsetX: external_exports.number().optional().describe("inner-shadow: horizontal offset (default 0)."),
       offsetY: external_exports.number().optional().describe("inner-shadow: vertical offset (default 4)."),
       blur: external_exports.number().optional().describe("inner-shadow: blur radius (default 8)."),
       spread: external_exports.number().optional().describe("inner-shadow: spread (default 0)."),
-      opacity: external_exports.number().optional().describe("inner-shadow: override alpha 0\u20131."),
+      opacity: external_exports.number().optional().describe("inner-shadow: override alpha 0\u20131. noise multitone: noise opacity 0\u20131 (default 0.5)."),
+      // noise
+      noiseType: external_exports.enum(["monotone", "duotone", "multitone"]).optional().describe("noise: default monotone."),
+      density: external_exports.number().optional().describe("noise: coverage 0\u20131 (default 0.4)."),
+      secondaryColor: COLOR.optional().describe("noise duotone: the second color (default #ffffff)."),
       // texture
-      noiseSize: external_exports.number().optional().describe("texture: grain size, >0 (default 0.5)."),
+      noiseSize: external_exports.number().optional().describe("noise/texture: grain size, >0 (noise default 1.5, texture default 0.5). Smaller = finer."),
       clipToShape: external_exports.boolean().optional().describe("texture: clip to the node shape (default true)."),
       // glass
       lightIntensity: external_exports.number().optional().describe("glass: specular highlight 0\u20131 (default 0.5)."),
@@ -26319,6 +26199,7 @@ server.registerTool(
       const imageBase64 = await loadImageBase64(args);
       return run("set_image", { nodeId: args.nodeId, imageBase64, scaleMode: args.scaleMode });
     } catch (error2) {
+      countToolCall("set_image_pre");
       return fail(error2);
     }
   }
@@ -26351,11 +26232,11 @@ server.registerTool(
         height: args.height
       });
     } catch (error2) {
+      countToolCall("place_image_pre");
       return fail(error2);
     }
   }
 );
-var execFileAsync = (0, import_node_util.promisify)(import_node_child_process.execFile);
 server.registerTool(
   "capture_simulator",
   {
@@ -26395,8 +26276,9 @@ server.registerTool(
         y: args.y,
         width: Math.round(pxW / Math.max(1, args.scale ?? 3)),
         height: Math.round(pxH / Math.max(1, args.scale ?? 3))
-      });
+      }, "capture_simulator");
     } catch (error2) {
+      countToolCall("capture_simulator_pre");
       return fail(error2);
     }
   }
@@ -26422,6 +26304,7 @@ server.registerTool(
       if (!svg) return fail(new Error('Provide "svg" or "path".'));
       return run("place_svg", { ...args, svg });
     } catch (error2) {
+      countToolCall("place_svg_pre");
       return fail(error2);
     }
   }
@@ -26469,38 +26352,7 @@ server.registerTool(
         y: args.y
       }, "place_icon");
     } catch (error2) {
-      return fail(error2);
-    }
-  }
-);
-server.registerTool(
-  "place_lottie",
-  {
-    description: "Render one frame of a Lottie animation (.json) as native, editable vectors. Supports shape layers (groups, rectangles, ellipses, paths, solid fills/strokes, transforms) and solid layers, with animated values resolved at the chosen frame. Precomps, masks, mattes, trim paths, text and gradient fills (kept as their first color) are skipped and listed in the result.",
-    inputSchema: {
-      path: external_exports.string().describe("Path to the Lottie .json (project or temp space)."),
-      frame: external_exports.union([external_exports.number(), external_exports.literal("last")]).optional().describe('Frame to render (default "last").'),
-      name: external_exports.string().optional(),
-      width: external_exports.number().optional().describe("Target width in px (default the composition width)."),
-      parentId: external_exports.string().optional(),
-      x: external_exports.number().optional(),
-      y: external_exports.number().optional()
-    }
-  },
-  async (args) => {
-    try {
-      const raw = JSON.parse(await (0, import_promises2.readFile)(resolveReadable(args.path), "utf8"));
-      const { svg, skipped } = lottieFrameToSvg(raw, args.frame ?? "last");
-      const result = await callPlugin("place_svg", {
-        svg,
-        name: args.name ?? raw.nm ?? "Lottie",
-        width: args.width ?? raw.w,
-        parentId: args.parentId,
-        x: args.x,
-        y: args.y
-      }, void 0, "place_lottie");
-      return ok({ ...result, skipped });
-    } catch (error2) {
+      countToolCall("place_icon_pre");
       return fail(error2);
     }
   }
@@ -26508,7 +26360,7 @@ server.registerTool(
 server.registerTool(
   "list_animation_styles",
   {
-    description: "(Beta) List the Figma Motion animation styles available in the current document. Use a returned styleId with apply_animation.",
+    description: "(Beta) List the Figma Motion animation styles available in the current document, with the configurable props each one accepts. Use a returned styleId (or name) with apply_animation.",
     inputSchema: {}
   },
   async () => run("list_animation_styles")
@@ -26519,10 +26371,10 @@ server.registerTool(
     description: "(Beta \u2014 Figma Motion) Apply an animation style to a node. Returns an appliedId you can pass to remove_animation.",
     inputSchema: {
       nodeId: external_exports.string(),
-      styleId: external_exports.string().describe("Animation style id from list_animation_styles."),
-      duration: external_exports.number().optional().describe("Duration in seconds."),
+      styleId: external_exports.string().describe('Animation style id from list_animation_styles (e.g. Opacity, Position, Scale). A variant name such as "fade in" or "slide_out" also works: it resolves to the style whose `type` prop has that option.'),
+      duration: external_exports.number().optional().describe("Duration in seconds (0.3, not 300)."),
       timelineOffset: external_exports.number().optional().describe("Timeline offset in seconds."),
-      properties: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Style-specific configuration props (e.g. direction, distance).")
+      properties: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe('Style-specific props, e.g. { type: "fadeOut" } or { type: "slide_in", direction: "left", distance: 80 }. Use the names and values list_animation_styles reports: Figma silently ignores unknown ones.')
     }
   },
   async ({ nodeId, styleId, duration: duration3, timelineOffset, properties }) => run("apply_animation", { nodeId, styleId, duration: duration3, timelineOffset, props: properties })
@@ -26659,6 +26511,7 @@ server.registerTool(
     }
   },
   async (args) => {
+    let sent = false;
     try {
       const operations = [];
       for (const op of args.operations) {
@@ -26668,11 +26521,13 @@ server.registerTool(
         }
         operations.push({ command: op.command, params });
       }
+      sent = true;
       const result = await callPlugin(
         "batch",
         { operations, screenshot: args.screenshot, screenshotScale: args.screenshotScale },
         6e4
       );
+      countBatchOps(result);
       if (result?.image?.base64) {
         const { image, ...rest } = result;
         return {
@@ -26685,6 +26540,9 @@ server.registerTool(
       }
       return ok(result);
     } catch (error2) {
+      if (!sent) {
+        countToolCall("batch_pre");
+      }
       return fail(error2);
     }
   }
