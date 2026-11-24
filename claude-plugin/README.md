@@ -25,6 +25,10 @@ to build production UI from it the design-system-faithful way.
   - layout: `move`, `resize`, `reparent`, `delete`
   - advanced: `clone`, `group`, `ungroup`, `set_opacity`, `set_rotation`,
     `instantiate_component`, `batch` (run many ops in one call)
+  - design system: `list_variables_and_styles`, `bind_variable` (tie spacing, radius, type,
+    colour and effect values to variables)
+  - motion (Beta): `list_animation_styles`, `apply_animation`, `export_asset` with
+    `format: "mp4" | "webm" | "gif"`
   - html → design: `html_to_design` — render HTML (a string or a project `.html` file
     path) into real Figma layers ("render index.html into Figma")
 
@@ -35,12 +39,16 @@ to build production UI from it the design-system-faithful way.
 `html_to_design` is powerful but has a known fidelity envelope. Staying inside it avoids silent
 re-renders:
 
-- **Reliable:** vertical flex columns; solid fills, `border`, `border-radius`, `box-shadow`;
-  fixed-width rows with a few px of trailing slack; Google fonts.
-- **Avoid for now:** exact-fit flex rows (`flex:1` / `width:fit-content` / `space-between` whose
-  children fill the row — can silently drop or overlap a child); CSS gradients (render near-white —
-  use solid fills); inline styled `<span>` inside wrapping text (overlaps — use separate text blocks);
-  negative margins (scramble — use positive `gap`).
+- **Reliable:** flex rows and columns (justify, gap, `flex-grow`, `flex-wrap`); px `min-`/`max-`
+  sizes; CSS grid as a native Figma grid (`fr` tracks stay flexible, spans and `grid-area` keep
+  their cells); absolutely positioned children; solid fills, linear and radial gradients,
+  background images, `border`, `border-radius`, `box-shadow`, `backdrop-filter: blur()`; inline
+  `<svg>` as vectors; Google fonts.
+- **Known limits:** conic gradients flatten to their first stop; `flex-wrap: wrap-reverse` and
+  grids offset by `justify-content` / `align-content` fall back to pinned or auto-flowed children;
+  `auto-fill` / `auto-fit` and `auto` grid tracks become fixed px tracks; only fonts installed in
+  Figma render.
+- The tool's own description carries the full, current list.
 - **Large pages:** render section-by-section — a very large single render can exceed the response
   timeout while the plugin keeps painting.
 

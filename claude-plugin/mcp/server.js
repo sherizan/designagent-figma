@@ -26048,7 +26048,14 @@ server.registerTool(
       padding: external_exports.union([external_exports.number(), external_exports.object({ top: external_exports.number().optional(), right: external_exports.number().optional(), bottom: external_exports.number().optional(), left: external_exports.number().optional() })]).optional().describe("Uniform px, or per-side."),
       primaryAxisAlign: external_exports.enum(["MIN", "CENTER", "MAX", "SPACE_BETWEEN", "SPACE_AROUND", "SPACE_EVENLY"]).optional(),
       counterAxisAlign: external_exports.enum(["MIN", "CENTER", "MAX", "BASELINE"]).optional(),
-      sizing: external_exports.enum(["HUG", "FIXED"]).optional().describe("HUG = size to content on both axes; FIXED = keep the current size.")
+      sizing: external_exports.enum(["HUG", "FIXED"]).optional().describe("HUG = size to content on both axes; FIXED = keep the current size."),
+      wrap: external_exports.boolean().optional().describe("true = children wrap onto new lines (CSS flex-wrap); fixes the main-axis size. Vertical wrap needs a recent Figma build."),
+      counterAxisSpacing: external_exports.number().optional().describe("Gap between wrapped lines in px (wrap only)."),
+      counterAxisAlignContent: external_exports.enum(["AUTO", "SPACE_BETWEEN"]).optional().describe("How wrapped lines are distributed (wrap only)."),
+      minWidth: external_exports.number().nullable().optional().describe("Min width in px; null clears it."),
+      maxWidth: external_exports.number().nullable().optional().describe("Max width in px; null clears it."),
+      minHeight: external_exports.number().nullable().optional(),
+      maxHeight: external_exports.number().nullable().optional()
     }
   },
   async (args) => run("set_auto_layout", args)
@@ -26071,6 +26078,23 @@ server.registerTool(
     inputSchema: { nodeId: external_exports.string(), name: external_exports.string().optional() }
   },
   async ({ nodeId, name }) => run("create_component", { nodeId, name })
+);
+server.registerTool(
+  "bind_variable",
+  {
+    description: "Bind a Figma variable to a property of a node so the design stays tied to the design system (or pass variable: null to unbind). Works for spacing, radius, stroke weight, opacity, size and min/max, typography, fill/stroke colour, and effect values. The variable type must match the field: FLOAT for numbers, COLOR for fill/stroke/effect.color, STRING for fontFamily/fontStyle/characters, BOOLEAN for visible. Opacity variables are percentages (0\u2013100). min/max and padding/gap need an auto-layout frame or a child of one.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      field: external_exports.string().describe(
+        "What to bind. Layout: padding (all four) | paddingHorizontal | paddingVertical | paddingLeft/Right/Top/Bottom | gap (itemSpacing) | counterAxisSpacing | gridRowGap | gridColumnGap. Shape: cornerRadius | topLeftRadius/topRightRadius/bottomLeftRadius/bottomRightRadius | strokeWeight | strokeTopWeight/\u2026 | opacity | visible. Size: width | height | minWidth | maxWidth | minHeight | maxHeight. Text nodes: fontSize | fontWeight | lineHeight | letterSpacing | paragraphSpacing | paragraphIndent | fontFamily | fontStyle | characters. Colour: fill | stroke (first solid paint). Effects: effect.color | effect.radius | effect.spread | effect.offsetX | effect.offsetY."
+      ),
+      variable: external_exports.string().nullable().describe('Variable id (VariableID:\u2026), exact name ("spacing/md" or "Collection/spacing/md") from list_variables_and_styles, or a library variable key. null removes the binding.'),
+      effectIndex: external_exports.number().optional().describe("effect.* fields: which effect on the node (default 0)."),
+      start: external_exports.number().optional().describe("Text fields: bind only this character range (with end)."),
+      end: external_exports.number().optional()
+    }
+  },
+  async (args) => run("bind_variable", args)
 );
 server.registerTool(
   "list_variables_and_styles",
@@ -26360,7 +26384,7 @@ server.registerTool(
 server.registerTool(
   "list_animation_styles",
   {
-    description: "(Beta) List the Figma Motion animation styles available in the current document, with the configurable props each one accepts. Use a returned styleId (or name) with apply_animation.",
+    description: "(Beta) List the Figma Motion animation styles available in the current document: built-in styles (type FIGMA, with the configurable props each one accepts) and the file's local custom styles (type CUSTOM). Use a returned styleId (or name) with apply_animation.",
     inputSchema: {}
   },
   async () => run("list_animation_styles")
@@ -26368,7 +26392,7 @@ server.registerTool(
 server.registerTool(
   "apply_animation",
   {
-    description: "(Beta \u2014 Figma Motion) Apply an animation style to a node. Returns an appliedId you can pass to remove_animation.",
+    description: "(Beta \u2014 Figma Motion) Apply an animation style to a node. Returns an appliedId you can pass to remove_animation. Custom styles (type CUSTOM in list_animation_styles) accept only timelineOffset. Export the result with export_asset format mp4 / webm / gif.",
     inputSchema: {
       nodeId: external_exports.string(),
       styleId: external_exports.string().describe('Animation style id from list_animation_styles (e.g. Opacity, Position, Scale). A variant name such as "fade in" or "slide_out" also works: it resolves to the style whose `type` prop has that option.'),
@@ -26409,8 +26433,16 @@ server.registerTool(
 server.registerTool(
   "resize",
   {
-    description: "Resize a node. Omitted dimensions keep their current value.",
-    inputSchema: { nodeId: external_exports.string(), width: external_exports.number().optional(), height: external_exports.number().optional() }
+    description: "Resize a node. Omitted dimensions keep their current value. minWidth / maxWidth / minHeight / maxHeight set responsive limits (null clears one); they only apply to an auto-layout frame or a direct child of one.",
+    inputSchema: {
+      nodeId: external_exports.string(),
+      width: external_exports.number().optional(),
+      height: external_exports.number().optional(),
+      minWidth: external_exports.number().nullable().optional(),
+      maxWidth: external_exports.number().nullable().optional(),
+      minHeight: external_exports.number().nullable().optional(),
+      maxHeight: external_exports.number().nullable().optional()
+    }
   },
   async (args) => run("resize", args)
 );
@@ -26550,7 +26582,7 @@ server.registerTool(
 server.registerTool(
   "html_to_design",
   {
-    description: "Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project or in temp space (your scratchpad / the OS temp dir are fine \u2014 no need to copy into the project). With `path`, relative image paths (`<img src>`, CSS `url()`) resolve against that file's folder and are inlined; external http(s) images are inlined too. Fonts must exist in the Figma file. Solid colors and text that exactly match a local color variable, paint style, or text style get bound to it (see useDesignSystem). The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset \u2014 staying inside it avoids silent re-renders):\n- Reliable: flex rows/columns (justify-content incl. space-between/around/evenly, gap, flex-grow); CSS grid (display:grid \u2192 native Figma grid, column count from grid-template-columns, gaps; rows auto-flow); position:absolute/fixed children (pinned at their measured x/y, in any document order); solid fills, linear + radial gradients, multi-layer backgrounds (each layer a fill), background-image url(), border, border-radius, box-shadow, backdrop-filter: blur() (\u2192 background blur; add `set_effect glass` afterwards for frosted glass); inline <svg> \u2192 native vectors; text-wrap: balance/pretty; variable-font axes via font-variation-settings; Google fonts.\n- Layer names come from data-name \u2192 id \u2192 aria-label \u2192 first class \u2192 tag; the top frame is named after <title>. Set these in the HTML to get a readable layer tree.\n- Wrapped text sits in a hugging Auto Layout wrapper so it grows (and pushes siblings) when Figma breaks lines differently from the browser; single-line text hugs its content.\n- Known limits: conic gradients flatten to their first stop; ellipse radial shapes render as circles; grid rows auto-flow (row spans and grid-areas are ignored); only fonts installed in Figma render (others fall back).\n- Returns the new frame's id immediately and finishes painting in the background; take_screenshot on that id waits for the paint to finish. Omit x/y to auto-place to the right of existing content (works inside a SECTION `parentId` too). Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.",
+    description: "Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project or in temp space (your scratchpad / the OS temp dir are fine \u2014 no need to copy into the project). With `path`, relative image paths (`<img src>`, CSS `url()`) resolve against that file's folder and are inlined; external http(s) images are inlined too. Fonts must exist in the Figma file. Solid colors and text that exactly match a local color variable, paint style, or text style get bound to it (see useDesignSystem). The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset \u2014 staying inside it avoids silent re-renders):\n- Reliable: flex rows/columns (justify-content incl. space-between/around/evenly, gap, flex-grow, flex-wrap \u2192 wrapping Auto Layout with its line gap); px min-/max-width/height (\u2192 Figma min/max sizes); CSS grid (display:grid \u2192 native Figma grid: fr tracks stay flexible, other tracks keep their measured px; column/row spans, grid-area and explicit line placement are kept as real cells; gaps); position:absolute/fixed children (pinned at their measured x/y, in any document order); solid fills, linear + radial gradients, multi-layer backgrounds (each layer a fill), background-image url(), border, border-radius, box-shadow, backdrop-filter: blur() (\u2192 background blur; add `set_effect glass` afterwards for frosted glass); inline <svg> \u2192 native vectors; text-wrap: balance/pretty; variable-font axes via font-variation-settings; Google fonts.\n- Layer names come from data-name \u2192 id \u2192 aria-label \u2192 first class \u2192 tag; the top frame is named after <title>. Set these in the HTML to get a readable layer tree.\n- Wrapped text sits in a hugging Auto Layout wrapper so it grows (and pushes siblings) when Figma breaks lines differently from the browser; single-line text hugs its content.\n- Known limits: conic gradients flatten to their first stop; ellipse radial shapes render as circles; flex-wrap: wrap-reverse and a grid offset by justify-content/align-content fall back to pinned or auto-flowed children; auto-fill/auto-fit and auto grid tracks become fixed px tracks; only fonts installed in Figma render (others fall back).\n- Returns the new frame's id immediately and finishes painting in the background; take_screenshot on that id waits for the paint to finish. Omit x/y to auto-place to the right of existing content (works inside a SECTION `parentId` too). Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.",
     inputSchema: {
       html: external_exports.string().optional().describe("Raw HTML to render."),
       path: external_exports.string().optional().describe("Path to an .html file in the project."),
@@ -26621,21 +26653,31 @@ server.registerTool(
 server.registerTool(
   "export_asset",
   {
-    description: 'Export Figma nodes as real asset files written into the project \u2014 SVG for icons/vectors, PNG for images and illustrations. This is the design-to-code way to get icons, logos, and illustrations out of a design, including nodes inside nested component instances (ids like "I123:4;56:7" are handled automatically via a temporary instance). Pass ALL node ids in ONE call \u2014 they export sequentially; parallel export calls can wedge the bridge. With format "auto", vector nodes become SVG and everything else PNG. Returns the written file paths; re-exporting a node overwrites its file.',
+    description: 'Export Figma nodes as real asset files written into the project \u2014 SVG for icons/vectors, PNG for images and illustrations. This is the design-to-code way to get icons, logos, and illustrations out of a design, including nodes inside nested component instances (ids like "I123:4;56:7" are handled automatically via a temporary instance). Pass ALL node ids in ONE call \u2014 they export sequentially; parallel export calls can wedge the bridge. With format "auto", vector nodes become SVG and everything else PNG. For Figma Motion, format "mp4", "webm" or "gif" exports the animation of ONE top-level frame per call (a layer id resolves to its frame; the frame needs at least one animation; Beta, Figma Design only). Returns the written file paths; re-exporting a node overwrites its file.',
     inputSchema: {
       nodeIds: external_exports.array(external_exports.string()).min(1).max(50).describe("Node ids to export \u2014 e.g. collapsed vector leaves or image-fill nodes from get_spec."),
       dir: external_exports.string().optional().describe("Project-relative output directory (default 'assets')."),
-      format: external_exports.enum(["auto", "svg", "png"]).optional().describe("Default 'auto': SVG for vectors, PNG elsewhere."),
-      scale: external_exports.number().optional().describe("PNG export scale, 0.5\u20134 (default 2). Ignored for SVG.")
+      format: external_exports.enum(["auto", "svg", "png", "mp4", "webm", "gif"]).optional().describe("Default 'auto': SVG for vectors, PNG elsewhere. mp4 / webm / gif export an animated frame and are never chosen automatically."),
+      scale: external_exports.number().optional().describe("PNG export scale, 0.5\u20134 (default 2). Ignored for SVG. Video: snapped to 0.5 / 0.75 / 1 / 1.5 / 2 / 3 / 4 (default 1)."),
+      fps: external_exports.number().optional().describe("Video only. mp4/webm: 12, 24, 30 or 60 (default 30). gif: 8, 12, 15, 24 or 30."),
+      quality: external_exports.enum(["LOW", "MEDIUM", "HIGH"]).optional().describe("mp4/webm only (default HIGH). Lower it if the file is over the 24 MB cap."),
+      loopCount: external_exports.number().optional().describe("gif only: number of loops, 0 = forever.")
     }
   },
   async (args) => {
     try {
       const result = await callPlugin(
         "export_asset",
-        { nodeIds: args.nodeIds, format: args.format, scale: args.scale },
-        12e4
-        // sequential batch of up to 50 exports won't fit the default 20s
+        {
+          nodeIds: args.nodeIds,
+          format: args.format,
+          scale: args.scale,
+          fps: args.fps,
+          quality: args.quality,
+          loopCount: args.loopCount
+        },
+        // A sequential batch of up to 50 exports won't fit the default 20s; video encoding is slower still.
+        args.format === "mp4" || args.format === "webm" || args.format === "gif" ? 3e5 : 12e4
       );
       const dir = args.dir ?? "assets";
       await (0, import_promises2.mkdir)(resolveInProject(dir), { recursive: true });

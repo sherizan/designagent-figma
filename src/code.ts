@@ -7,7 +7,7 @@ import { generateDesignDoc, type DesignDocFrame } from './core/designdoc';
 import { parseDesignMd } from './core/parsedesignmd';
 import { generateHtml, type HtmlNode } from './core/htmldoc';
 import { formatVariableValue, loadAnnotationCategories, solidHex } from './core/extract';
-import type { DesignTreeNode, TextRun } from './shared/designtree';
+import type { DesignTreeNode, DesignTreeTrack, TextRun } from './shared/designtree';
 import { isScreenLikeNode } from './core/intent';
 import type { EmptyAnalysis, Mode } from './core/types';
 import type { ToPluginMessage, ToUIMessage } from './shared/messages';
@@ -1140,18 +1140,28 @@ function buildFrameShell(
     frame.paddingRight = node.paddingRight ?? 0;
     frame.paddingBottom = node.paddingBottom ?? 0;
     frame.paddingLeft = node.paddingLeft ?? 0;
+    const manualRows = node.gridManual ? node.gridRowSizes?.length ?? 0 : 0;
     applyGridLayout(frame, {
       columns: node.gridColumns ?? 1,
+      rows: manualRows > 0 ? manualRows : undefined,
       columnGap: node.gridColumnGap,
       rowGap: node.gridRowGap
     });
-    try {
-      // Rows are created as children flow in, row-major — matches CSS grid auto-placement.
-      frame.gridAutoTracks = 'ROWS';
-      frame.gridItemsPositioning = 'ROW_AUTO_FLOW';
-    } catch {
-      // older Figma runtime: children still land in the fixed grid, just without auto rows
+    if (manualRows > 0) {
+      // Children carry explicit cells (spans / grid-area): rows are fixed up front and
+      // positioning stays MANUAL, which setGridChildPosition requires.
+      applyGridTrackSizes(frame, 'gridRowSizes', node.gridRowSizes);
+    } else {
+      try {
+        // Rows are created as children flow in, row-major — matches CSS grid auto-placement.
+        frame.gridAutoTracks = 'ROWS';
+        frame.gridItemsPositioning = 'ROW_AUTO_FLOW';
+      } catch {
+        // older Figma runtime: children still land in the fixed grid, just without auto rows
+      }
     }
+    applyGridTrackSizes(frame, 'gridColumnSizes', node.gridColumnSizes);
+    applyMinMax(frame, node);
   } else if (node.layout) {
     frame.layoutMode = node.layout;
     frame.itemSpacing = node.itemSpacing ?? 0;
@@ -1161,6 +1171,21 @@ function buildFrameShell(
     frame.paddingLeft = node.paddingLeft ?? 0;
     frame.primaryAxisAlignItems = node.primaryAxisAlign ?? 'MIN';
     frame.counterAxisAlignItems = node.counterAxisAlign ?? 'MIN';
+    // flex-wrap: keep the measured main size so children break onto the same lines.
+    let wrapped = false;
+    if (node.wrap) {
+      try {
+        frame.layoutWrap = 'WRAP';
+        wrapped = true;
+        frame.counterAxisSpacing = node.counterAxisSpacing ?? 0;
+        if (node.counterAxisAlignContent === 'SPACE_BETWEEN') {
+          frame.counterAxisAlignContent = 'SPACE_BETWEEN';
+        }
+      } catch {
+        // vertical wrap needs a recent Figma build; without it the frame stays a single line
+        wrapped = frame.layoutWrap === 'WRAP';
+      }
+    }
 
     const horizontal = node.layout === 'HORIZONTAL';
     const kids = node.children ?? [];
@@ -1180,10 +1205,11 @@ function buildFrameShell(
     // keeps full-width rows full-width. The clamp then prevents any exact-fit drop.
     const mustFill = kids.some((c) => c.grow) || (node.primaryAxisAlign ?? '').startsWith('SPACE_');
     const contentFills = contentMain >= measuredMain - 1;
-    const hug = !mustFill && contentFills;
+    const hug = !wrapped && !mustFill && contentFills;
     frame.primaryAxisSizingMode = hug ? 'AUTO' : 'FIXED';
     frame.counterAxisSizingMode = 'FIXED';
-    if (!hug) {
+    applyMinMax(frame, node);
+    if (!hug && !wrapped) {
       // Clamp: grow the frame to fit its in-flow children rather than dropping one
       // (no-op when the measured size already fits, e.g. a full-width row with slack).
       if (horizontal) {
@@ -1223,6 +1249,18 @@ async function appendDesignChildrenInner(frame: FrameNode, node: DesignTreeNode)
       (created as SceneNode & LayoutMixin).y = child.y;
       continue;
     }
+    if (node.layout === 'GRID' && node.gridManual && child.gridRow != null && child.gridColumn != null) {
+      // Position first, then span: the span must grow into cells that are still free.
+      try {
+        const cell = created as SceneNode & GridChildrenMixin;
+        cell.setGridChildPosition(child.gridRow, child.gridColumn);
+        if ((child.gridColumnSpan ?? 1) > 1) cell.gridColumnSpan = child.gridColumnSpan ?? 1;
+        if ((child.gridRowSpan ?? 1) > 1) cell.gridRowSpan = child.gridRowSpan ?? 1;
+      } catch (error) {
+        console.warn('html_to_design: could not place grid child', child.name ?? child.kind, error);
+      }
+    }
+    applyMinMax(created, child);
     if (child.grow && 'layoutGrow' in created) {
       (created as SceneNode & { layoutGrow: number }).layoutGrow = 1;
     }
@@ -1900,6 +1938,62 @@ function buildEffect(params: Record<string, unknown>): Effect {
   }
 }
 
+// min/max sizes are valid only on auto-layout frames and their direct children; anything
+// else throws, so each one is applied on its own and a refusal is simply skipped.
+// A number sets the limit, null clears it, undefined leaves it alone.
+function applyMinMax(
+  target: SceneNode,
+  limits: { minWidth?: unknown; maxWidth?: unknown; minHeight?: unknown; maxHeight?: unknown }
+): string[] {
+  const applied: string[] = [];
+  const keys = ['minWidth', 'maxWidth', 'minHeight', 'maxHeight'] as const;
+  for (const key of keys) {
+    const raw = limits[key];
+    if (raw === undefined || !(key in target)) continue;
+    const value = raw === null ? null : toNumber(raw, 0);
+    if (value !== null && !(value > 0)) continue;
+    try {
+      (target as SceneNode & Record<typeof key, number | null>)[key] = value;
+      applied.push(key);
+    } catch {
+      // not an auto-layout frame or child of one
+    }
+  }
+  return applied;
+}
+
+// Set grid track types/sizes. All-default tracks (FLEX 1) are left untouched. Figma's docs
+// mutate the live track objects in place; if a runtime ignores that, assign the whole array.
+function applyGridTrackSizes(
+  frame: FrameNode,
+  key: 'gridRowSizes' | 'gridColumnSizes',
+  tracks: DesignTreeTrack[] | undefined
+): void {
+  if (!tracks || tracks.length === 0 || tracks.every((t) => t.type === 'FLEX' && t.value === 1)) {
+    return;
+  }
+  try {
+    const live = frame[key];
+    if (live.length !== tracks.length) return;
+    tracks.forEach((t, i) => {
+      const slot = live[i];
+      if (!slot) return;
+      slot.type = t.type;
+      if (t.type === 'FIXED' || t.value !== 1) slot.value = t.value;
+    });
+    const after = frame[key];
+    const stuck = tracks.every((t, i) => {
+      const a = after[i];
+      return Boolean(a) && a?.type === t.type && (t.type !== 'FIXED' || Math.abs((a?.value ?? 0) - t.value) < 0.5);
+    });
+    if (!stuck) {
+      frame[key] = tracks.map((t) => ({ type: t.type, value: t.value }));
+    }
+  } catch (error) {
+    console.warn(`html_to_design: could not set ${key}`, error);
+  }
+}
+
 // Apply native Figma grid layout (Update 126) to a frame-like node.
 // gridAutoTracks defaults to 'NONE', so setting the counts directly is safe; we still
 // guard the assignment in case a track is being managed automatically.
@@ -2104,12 +2198,200 @@ function imagePaintFromBase64(base64: unknown, scaleMode: unknown): { paint: Ima
   };
 }
 
+// ---- bind_variable ----
+// One tool binds (or, with variable: null, unbinds) a variable on any bindable field.
+const NODE_BIND_FIELDS: Record<string, VariableResolvedDataType> = {
+  width: 'FLOAT', height: 'FLOAT', minWidth: 'FLOAT', maxWidth: 'FLOAT', minHeight: 'FLOAT', maxHeight: 'FLOAT',
+  itemSpacing: 'FLOAT', counterAxisSpacing: 'FLOAT', gridRowGap: 'FLOAT', gridColumnGap: 'FLOAT',
+  paddingLeft: 'FLOAT', paddingRight: 'FLOAT', paddingTop: 'FLOAT', paddingBottom: 'FLOAT',
+  cornerRadius: 'FLOAT', topLeftRadius: 'FLOAT', topRightRadius: 'FLOAT', bottomLeftRadius: 'FLOAT', bottomRightRadius: 'FLOAT',
+  strokeWeight: 'FLOAT', strokeTopWeight: 'FLOAT', strokeRightWeight: 'FLOAT', strokeBottomWeight: 'FLOAT', strokeLeftWeight: 'FLOAT',
+  opacity: 'FLOAT', visible: 'BOOLEAN', characters: 'STRING'
+};
+const TEXT_BIND_FIELDS: Record<string, VariableResolvedDataType> = {
+  fontSize: 'FLOAT', fontWeight: 'FLOAT', lineHeight: 'FLOAT', letterSpacing: 'FLOAT',
+  paragraphSpacing: 'FLOAT', paragraphIndent: 'FLOAT', fontFamily: 'STRING', fontStyle: 'STRING'
+};
+const EFFECT_BIND_FIELDS: Record<string, VariableResolvedDataType> = {
+  color: 'COLOR', radius: 'FLOAT', spread: 'FLOAT', offsetX: 'FLOAT', offsetY: 'FLOAT'
+};
+// Shorthands that fan out to several real fields.
+const BIND_ALIASES: Record<string, string[]> = {
+  padding: ['paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom'],
+  paddingHorizontal: ['paddingLeft', 'paddingRight'],
+  paddingVertical: ['paddingTop', 'paddingBottom'],
+  gap: ['itemSpacing']
+};
+
+// Resolve a variable from an id, a local name ("Collection/name" or just "name"), or a library key.
+async function resolveVariableRef(ref: string): Promise<Variable> {
+  if (ref.indexOf('VariableID:') === 0) {
+    const byId = await figma.variables.getVariableByIdAsync(ref);
+    if (byId) return byId;
+    throw new Error(`No variable with id ${ref}. Call list_variables_and_styles.`);
+  }
+  const [locals, collections] = await Promise.all([
+    figma.variables.getLocalVariablesAsync(),
+    figma.variables.getLocalVariableCollectionsAsync()
+  ]);
+  const collectionName = new Map<string, string>();
+  for (const c of collections) collectionName.set(c.id, c.name);
+  const lower = ref.toLowerCase();
+  const matches = locals.filter(
+    (v) =>
+      v.name.toLowerCase() === lower ||
+      `${collectionName.get(v.variableCollectionId) ?? ''}/${v.name}`.toLowerCase() === lower
+  );
+  if (matches.length === 1 && matches[0]) return matches[0];
+  if (matches.length > 1) {
+    const options = matches
+      .map((v) => `${collectionName.get(v.variableCollectionId) ?? '?'}/${v.name} (${v.id})`)
+      .join(', ');
+    throw new Error(`"${ref}" matches several variables: ${options}. Pass the id or "Collection/name".`);
+  }
+  try {
+    return await figma.variables.importVariableByKeyAsync(ref);
+  } catch {
+    throw new Error(`No variable named "${ref}" in this file (and it is not a library variable key). Call list_variables_and_styles.`);
+  }
+}
+
+function assertVariableType(variable: Variable | null, expected: VariableResolvedDataType, field: string): void {
+  if (variable && variable.resolvedType !== expected) {
+    throw new Error(`"${field}" needs a ${expected} variable; "${variable.name}" is ${variable.resolvedType}.`);
+  }
+}
+
+async function bindVariable(params: Record<string, unknown>): Promise<unknown> {
+  const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+  if (!isSceneNode(node)) {
+    throw new Error('bind_variable requires a scene node.');
+  }
+  const field = String(params.field ?? '').trim();
+  if (!field) {
+    throw new Error('bind_variable requires a field, e.g. "padding", "cornerRadius", "fontSize", "fill", "effect.radius".');
+  }
+  const ref = params.variable == null ? '' : String(params.variable).trim();
+  const variable = ref ? await resolveVariableRef(ref) : null;
+  const done = (bound: string[]) => ({
+    id: node.id,
+    name: node.name,
+    bound,
+    variable: variable ? { id: variable.id, name: variable.name, type: variable.resolvedType } : null
+  });
+
+  // Paints: fill / stroke bind the colour of the first solid paint.
+  if (field === 'fill' || field === 'stroke') {
+    const key = field === 'fill' ? 'fills' : 'strokes';
+    if (!(key in node)) {
+      throw new Error(`This node has no ${key}.`);
+    }
+    assertVariableType(variable, 'COLOR', field);
+    const target = node as unknown as Record<'fills' | 'strokes', ReadonlyArray<Paint> | PluginAPI['mixed']>;
+    const paints = target[key];
+    if (paints === figma.mixed) {
+      throw new Error(`${key} are mixed on this node; set a single ${field} first.`);
+    }
+    const index = paints.findIndex((p) => p.type === 'SOLID');
+    const current = paints[index];
+    if (index < 0 || !current || current.type !== 'SOLID') {
+      throw new Error(`No solid ${field} to bind. Set a solid ${field} first (set_fill / set_stroke).`);
+    }
+    const next = paints.slice();
+    next[index] = figma.variables.setBoundVariableForPaint(current, 'color', variable);
+    target[key] = next;
+    return done([field]);
+  }
+
+  // Effects: "effect.radius", optional effectIndex.
+  if (field.indexOf('effect.') === 0) {
+    const sub = field.slice('effect.'.length);
+    const expected = EFFECT_BIND_FIELDS[sub];
+    if (!expected) {
+      throw new Error(`Unknown effect field "${sub}". Use effect.color | effect.radius | effect.spread | effect.offsetX | effect.offsetY.`);
+    }
+    if (!('effects' in node)) {
+      throw new Error('This node does not support effects.');
+    }
+    assertVariableType(variable, expected, field);
+    const effects = (node as BlendMixin).effects.slice();
+    const index = Math.max(0, Math.floor(toNumber(params.effectIndex, 0)));
+    const effect = effects[index];
+    if (!effect) {
+      throw new Error(`No effect at index ${index}; the node has ${effects.length}. Add one first (set_shadow / set_effect).`);
+    }
+    effects[index] = figma.variables.setBoundVariableForEffect(effect, sub as VariableBindableEffectField, variable);
+    (node as BlendMixin).effects = effects;
+    return done([field]);
+  }
+
+  // Typography.
+  const textType = TEXT_BIND_FIELDS[field];
+  if (textType) {
+    if (node.type !== 'TEXT') {
+      throw new Error(`"${field}" can only be bound on a text node.`);
+    }
+    assertVariableType(variable, textType, field);
+    await loadFontForExistingText(node);
+    const textField = field as VariableBindableTextField;
+    if (params.start != null && params.end != null) {
+      const start = Math.max(0, Math.floor(toNumber(params.start, 0)));
+      const end = Math.min(node.characters.length, Math.floor(toNumber(params.end, node.characters.length)));
+      node.setRangeBoundVariable(start, end, textField, variable);
+    } else {
+      node.setBoundVariable(textField, variable);
+    }
+    return done([field]);
+  }
+
+  // Plain node fields, including shorthands. Uniform cornerRadius / strokeWeight fall back
+  // to the per-side fields when the node only exposes those.
+  let targets = BIND_ALIASES[field] ?? [field];
+  if (field === 'cornerRadius' && !('cornerRadius' in node) && 'topLeftRadius' in node) {
+    targets = ['topLeftRadius', 'topRightRadius', 'bottomLeftRadius', 'bottomRightRadius'];
+  }
+  const bound: string[] = [];
+  for (const target of targets) {
+    const expected = NODE_BIND_FIELDS[target];
+    if (!expected) {
+      const all = Object.keys(NODE_BIND_FIELDS)
+        .concat(Object.keys(BIND_ALIASES), Object.keys(TEXT_BIND_FIELDS), ['fill', 'stroke', 'effect.<field>'])
+        .join(', ');
+      throw new Error(`Unknown field "${field}". Bindable fields: ${all}.`);
+    }
+    assertVariableType(variable, expected, target);
+    if (!(target in node)) {
+      throw new Error(`This ${node.type.toLowerCase()} node has no "${target}" to bind.`);
+    }
+    try {
+      node.setBoundVariable(target as VariableBindableNodeField, variable);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`Could not bind "${target}": ${detail}`);
+    }
+    bound.push(target);
+  }
+  return done(bound);
+}
+
 // Figma Motion is Beta and missing on older desktop builds; fail with something actionable.
 function availableAnimationStyles(): AvailableAnimationStyle[] {
   if (!figma.motion || typeof figma.motion.figmaAnimationStyles !== 'function') {
     throw new Error('Figma Motion is not available in this Figma build or file. Update Figma Desktop and retry.');
   }
   return figma.motion.figmaAnimationStyles();
+}
+
+// Local custom animation styles (Update 140). Absent on older builds: treat as none.
+async function localCustomAnimationStyles(): Promise<CustomAnimationStyle[]> {
+  if (typeof figma.getLocalCustomAnimationStylesAsync !== 'function') {
+    return [];
+  }
+  try {
+    return await figma.getLocalCustomAnimationStylesAsync();
+  } catch {
+    return [];
+  }
 }
 
 // Figma reports style names as translation keys ("motion.preset_name.text_stagger").
@@ -2533,12 +2815,42 @@ async function runBridgeCommand(
         frame.primaryAxisSizingMode = sizing === 'HUG' ? 'AUTO' : 'FIXED';
         frame.counterAxisSizingMode = sizing === 'HUG' ? 'AUTO' : 'FIXED';
       }
+      if (params.wrap != null) {
+        if (frame.layoutMode !== 'HORIZONTAL' && frame.layoutMode !== 'VERTICAL') {
+          throw new Error('wrap needs layoutMode HORIZONTAL or VERTICAL.');
+        }
+        try {
+          frame.layoutWrap = params.wrap ? 'WRAP' : 'NO_WRAP';
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(`Could not set wrap (${detail}). Wrapping a VERTICAL layout needs a recent Figma build.`);
+        }
+        if (params.wrap) {
+          // Wrapping only happens against a fixed main-axis size.
+          frame.primaryAxisSizingMode = 'FIXED';
+        }
+      }
+      if (frame.layoutWrap === 'WRAP') {
+        if (params.counterAxisSpacing != null) {
+          frame.counterAxisSpacing = toNumber(params.counterAxisSpacing, 0);
+        }
+        const content = String(params.counterAxisAlignContent ?? '').toUpperCase();
+        if (content === 'AUTO' || content === 'SPACE_BETWEEN') {
+          frame.counterAxisAlignContent = content;
+        }
+      }
+      applyMinMax(frame, params);
       return {
         id: frame.id,
         name: frame.name,
         layoutMode: frame.layoutMode,
         itemSpacing: frame.itemSpacing,
-        padding: [frame.paddingTop, frame.paddingRight, frame.paddingBottom, frame.paddingLeft]
+        padding: [frame.paddingTop, frame.paddingRight, frame.paddingBottom, frame.paddingLeft],
+        wrap: frame.layoutWrap === 'WRAP',
+        minWidth: frame.minWidth,
+        maxWidth: frame.maxWidth,
+        minHeight: frame.minHeight,
+        maxHeight: frame.maxHeight
       };
     }
     case 'set_instance_property': {
@@ -2580,6 +2892,8 @@ async function runBridgeCommand(
       }
       return { ...selectAndReturn(component), key: component.key };
     }
+    case 'bind_variable':
+      return bindVariable(params);
     case 'list_variables_and_styles': {
       const LIMIT = 500;
       const [collections, variables, paintStyles, textStyles, effectStyles] = await Promise.all([
@@ -2694,6 +3008,13 @@ async function runBridgeCommand(
       const width = toNumber(params.width, layout.width);
       const height = toNumber(params.height, layout.height);
       layout.resize(Math.max(1, width), Math.max(1, height));
+      const limits = applyMinMax(node, params);
+      const wanted = ['minWidth', 'maxWidth', 'minHeight', 'maxHeight'].filter((k) => params[k] !== undefined);
+      if (wanted.length > limits.length) {
+        throw new Error(
+          `Resized, but could not set ${wanted.filter((k) => limits.indexOf(k) < 0).join(', ')}: min/max sizes need an auto-layout frame or a direct child of one, and positive values.`
+        );
+      }
       return { ...selectAndReturn(node), width: layout.width, height: layout.height };
     }
     case 'reparent': {
@@ -2818,13 +3139,25 @@ async function runBridgeCommand(
       return selectAndReturn(instance);
     }
     case 'list_animation_styles': {
+      const custom = await localCustomAnimationStyles();
       return {
-        styles: availableAnimationStyles().map((s) => ({
-          styleId: s.styleId,
-          name: animationStyleLabel(s.name),
-          description: s.description ?? null,
-          props: s.props ?? null
-        }))
+        styles: [
+          ...availableAnimationStyles().map((s) => ({
+            styleId: s.styleId,
+            name: animationStyleLabel(s.name),
+            type: 'FIGMA' as const,
+            description: s.description ?? null,
+            props: s.props ?? null
+          })),
+          // Custom styles are fixed bundles: they take a timelineOffset but no duration or props.
+          ...custom.map((s) => ({
+            styleId: s.id,
+            name: s.name,
+            type: 'CUSTOM' as const,
+            description: s.description || null,
+            contains: s.animationEntries.map((e) => e.name)
+          }))
+        ]
       };
     }
     case 'apply_animation': {
@@ -2848,13 +3181,39 @@ async function runBridgeCommand(
             looseKey(animationStyleLabel(s.name)) === looseKey(wanted)
         );
       let impliedType: string | undefined;
+      let customNames: string[] = [];
       if (!style) {
+        const customStyles = await localCustomAnimationStyles();
+        const custom =
+          customStyles.find((s) => s.id === wanted) ?? customStyles.find((s) => s.name.toLowerCase() === lower);
+        if (custom) {
+          const customConfig: CustomAnimationStyleConfiguration =
+            params.timelineOffset != null
+              ? { type: 'CUSTOM', timelineOffset: nonNegativeSeconds(params.timelineOffset, 0) }
+              : { type: 'CUSTOM' };
+          const ignored = ['duration', 'props'].filter((k) => params[k] != null);
+          try {
+            const appliedId = node.applyAnimationStyle(custom.id, customConfig);
+            return {
+              id: node.id,
+              name: node.name,
+              styleId: custom.id,
+              type: 'CUSTOM',
+              appliedId,
+              ...(ignored.length ? { ignored, note: 'Custom styles take only timelineOffset.' } : {})
+            };
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            throw new Error(`Could not apply custom style "${custom.name}": ${detail}`);
+          }
+        }
+        customNames = customStyles.map((s) => `${s.name} (custom)`);
         const byOption = animationStyleByTypeOption(styles, wanted);
         style = byOption?.style;
         impliedType = byOption?.type;
       }
       if (!style) {
-        const names = styles.map((s) => s.styleId).join(', ');
+        const names = styles.map((s) => s.styleId).concat(customNames).join(', ');
         throw new Error(
           `No animation style "${wanted}". Available: ${names || 'none in this file'}. Variants such as fade in / slide in are the "type" prop of a style (see list_animation_styles).`
         );
@@ -3003,7 +3362,7 @@ const ASSET_VECTOR_TYPES = new Set(['VECTOR', 'BOOLEAN_OPERATION', 'STAR', 'POLY
 interface ExportedAsset {
   nodeId: string;
   name: string;
-  format: 'svg' | 'png';
+  format: 'svg' | 'png' | 'mp4' | 'webm' | 'gif';
   base64: string;
   width: number;
   height: number;
@@ -3018,6 +3377,9 @@ async function exportAssets(params: Record<string, unknown>): Promise<{
     : [];
   if (nodeIds.length === 0) {
     throw new Error('Pass nodeIds: the Figma node ids to export.');
+  }
+  if (params.format === 'mp4' || params.format === 'webm' || params.format === 'gif') {
+    return exportVideo(nodeIds, params.format, params);
   }
   const requestedFormat = params.format === 'svg' || params.format === 'png' ? params.format : 'auto';
   const scale = Math.max(0.5, Math.min(4, toNumber(params.scale, 2)));
@@ -3076,6 +3438,93 @@ async function exportAssets(params: Record<string, unknown>): Promise<{
     }
   }
   return { assets, errors };
+}
+
+const VIDEO_SCALES = [0.5, 0.75, 1, 1.5, 2, 3, 4] as const;
+const VIDEO_MAX_BYTES = 24 * 1024 * 1024; // raw bytes; ~32 MB once base64-encoded for the bridge
+
+function nearest<T extends number>(options: ReadonlyArray<T>, value: number, fallback: T): T {
+  let best = fallback;
+  for (const option of options) {
+    if (Math.abs(option - value) < Math.abs(best - value)) best = option;
+  }
+  return best;
+}
+
+// Motion export (Beta): MP4 / WebM / GIF of an animated top-level frame. Figma rejects
+// anything else, so resolve each node to its enclosing top-level frame first. One video
+// per call keeps the bridge payload and the encode time bounded.
+async function exportVideo(
+  nodeIds: string[],
+  format: 'mp4' | 'webm' | 'gif',
+  params: Record<string, unknown>
+): Promise<{ assets: ExportedAsset[]; errors: Array<{ nodeId: string; error: string }> }> {
+  const nodeId = nodeIds[0] ?? '';
+  const errors: Array<{ nodeId: string; error: string }> = nodeIds
+    .slice(1)
+    .map((id) => ({ nodeId: id, error: 'Video export handles one frame per call; export this one separately.' }));
+  try {
+    const node = await getNodeByIdGuarded(nodeId);
+    if (!isSceneNode(node)) {
+      throw new Error(`No node with id ${nodeId}.`);
+    }
+    const frame = node.getTopLevelFrame() ?? (node.parent && node.parent.type === 'PAGE' ? node : undefined);
+    if (!frame || !('exportAsync' in frame)) {
+      throw new Error('Video export needs a top-level frame (a frame placed directly on the page) with animation.');
+    }
+    const scale = nearest(VIDEO_SCALES, toNumber(params.scale, 1), 1);
+    const constraint: VideoExportConstraint = { type: 'SCALE', value: scale };
+    const q = String(params.quality ?? '').toUpperCase();
+    const quality = q === 'LOW' || q === 'MEDIUM' || q === 'HIGH' ? q : undefined;
+    let settings: ExportSettingsMP4 | ExportSettingsWEBM | ExportSettingsGIF;
+    if (format === 'gif') {
+      settings = {
+        format: 'GIF',
+        constraint,
+        ...(params.fps != null ? { fps: nearest([8, 12, 15, 24, 30] as const, toNumber(params.fps, 15), 15) } : {}),
+        ...(params.loopCount != null
+          ? { loopCount: Math.max(0, Math.min(1000, Math.floor(toNumber(params.loopCount, 0)))) }
+          : {})
+      };
+    } else {
+      settings = {
+        format: format === 'mp4' ? 'MP4' : 'WEBM',
+        constraint,
+        ...(params.fps != null ? { fps: nearest([12, 24, 30, 60] as const, toNumber(params.fps, 30), 30) } : {}),
+        ...(quality ? { quality } : {})
+      };
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = await (frame as SceneNode).exportAsync(settings);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Figma could not export "${frame.name}" as ${format.toUpperCase()} (${detail}). The frame needs at least one animation (apply_animation), and video export only works in Figma Design on a recent desktop build.`
+      );
+    }
+    if (bytes.byteLength > VIDEO_MAX_BYTES) {
+      throw new Error(
+        `Video is ${(bytes.byteLength / 1024 / 1024).toFixed(1)} MB; over the ${VIDEO_MAX_BYTES / 1024 / 1024} MB cap. Lower scale, fps or quality.`
+      );
+    }
+    return {
+      assets: [
+        {
+          nodeId: frame.id,
+          name: frame.name,
+          format,
+          base64: figma.base64Encode(bytes),
+          width: 'width' in frame ? Math.round(frame.width * scale) : 0,
+          height: 'height' in frame ? Math.round(frame.height * scale) : 0
+        }
+      ],
+      errors
+    };
+  } catch (error) {
+    errors.unshift({ nodeId, error: error instanceof Error ? error.message : String(error) });
+    return { assets: [], errors };
+  }
 }
 
 // "I<instanceId>;<innerId…>" — clone the top-level instance (fresh plain ids),
