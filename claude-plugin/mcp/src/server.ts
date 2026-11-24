@@ -12,7 +12,6 @@ import { z } from 'zod';
 import { WebSocket } from 'ws';
 import { runBroker, BROKER_PROTOCOL_VERSION, BUILD_MTIME } from './broker';
 import { resolveProjectRoot, deriveProjectLabel } from './project-root';
-import { lottieFrameToSvg, type LottieRoot } from './lottie';
 
 // DesignAgent MCP server.
 //
@@ -712,30 +711,6 @@ server.registerTool(
   async ({ nodeId, depth }) => run('get_spec', { nodeId, depth })
 );
 
-server.registerTool(
-  'export_tokens',
-  {
-    description:
-      "Export the current selection's resolved Figma variables as a machine-readable token file. `format`: 'css' (CSS custom properties, all light/dark modes), 'dtcg' (Design Tokens W3C JSON, all modes preserved), 'tailwind' (tailwind.config.js theme.extend), or 'sass' (SCSS $variables). Tailwind/Sass use the default mode; CSS/DTCG carry every mode. Returns the file contents as text.",
-    inputSchema: {
-      format: z
-        .enum(['css', 'tailwind', 'sass', 'dtcg'])
-        .optional()
-        .describe("Token output format (default 'css').")
-    }
-  },
-  async ({ format }) => {
-    try {
-      const result = (await callPlugin('export_tokens', { format: format ?? 'css' })) as {
-        content?: string;
-      };
-      return ok(result?.content ?? result);
-    } catch (error) {
-      return fail(error);
-    }
-  }
-);
-
 // --- MCP resources: let Claude read live Figma state without spending a tool call. ---
 // Each read forwards to the plugin over the broker; if the bridge is down we return a
 // readable note in the contents rather than throwing (resources shouldn't hard-fail).
@@ -761,28 +736,6 @@ server.registerResource(
     mimeType: 'application/json'
   },
   async (uri) => resourceText(uri, 'get_spec')
-);
-
-server.registerResource(
-  'design-tokens',
-  'figma://design-tokens',
-  {
-    title: 'Design tokens (DTCG)',
-    description: "The selection's resolved Figma variables as W3C Design Tokens JSON, all modes preserved.",
-    mimeType: 'application/json'
-  },
-  async (uri) => {
-    try {
-      const result = (await callPlugin('export_tokens', { format: 'dtcg' })) as { content?: string };
-      const text = result?.content ?? JSON.stringify(result, null, 2);
-      return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        contents: [{ uri: uri.href, mimeType: 'text/plain', text: `Bridge unavailable: ${message}` }]
-      };
-    }
-  }
 );
 
 server.registerResource(
@@ -827,7 +780,7 @@ server.registerPrompt(
               'Analyze the current DesignAgent (Figma) selection for design-system quality.',
               '1. Read the selection with the `get_spec` tool (and `get_design_md` for the token frontmatter).',
               '2. Assess against the design’s own system, reporting concrete findings tied to node names/ids:',
-              '   - Tokens: hardcoded/raw values that should reference a resolved variable (see `export_tokens`).',
+              '   - Tokens: hardcoded/raw values that should reference a resolved variable (see `list_variables_and_styles`).',
               '   - Layout: manual absolute positioning where Auto Layout is intended.',
               '   - Components: repeated structures that should be a component/instance.',
               '   - States: for screens, whether empty/loading/error variants are evidenced.',
@@ -1165,7 +1118,7 @@ server.registerTool(
   async (args) => run('set_shadow', args as Record<string, unknown>)
 );
 
-// ---- Gradients, noise, patterns & effects (native Figma paints/effects) ----
+// ---- Gradients & effects (native Figma paints/effects) ----
 
 server.registerTool(
   'set_gradient',
@@ -1197,67 +1150,32 @@ server.registerTool(
 );
 
 server.registerTool(
-  'set_noise',
-  {
-    description:
-      'Add a native Figma noise/grain effect to a node. monotone (one color), duotone (two colors), or multitone (color + opacity). Requires a recent Figma version.',
-    inputSchema: {
-      nodeId: z.string(),
-      noiseType: z.enum(['monotone', 'duotone', 'multitone']).optional().describe('Default monotone.'),
-      noiseSize: z.number().optional().describe('Grain size, >0 (default 1.5). Smaller = finer.'),
-      density: z.number().optional().describe('Coverage 0–1 (default 0.4).'),
-      color: COLOR.optional().describe('Primary noise color (default #000000).'),
-      secondaryColor: COLOR.optional().describe('Duotone: the second color (default #ffffff).'),
-      opacity: z.number().optional().describe('Multitone: noise opacity 0–1 (default 0.5).'),
-      append: z.boolean().optional().describe('Keep existing effects and add this (default false = replace).')
-    }
-  },
-  async (args) => run('set_noise', args as Record<string, unknown>)
-);
-
-server.registerTool(
-  'set_pattern',
-  {
-    description:
-      'Fill a node by tiling another node (sourceNodeId) as a repeating pattern. The source must be a separate node, not an ancestor/descendant of the target.',
-    inputSchema: {
-      nodeId: z.string(),
-      sourceNodeId: z.string().describe('The node to tile as the pattern cell.'),
-      tileType: z
-        .enum(['RECTANGULAR', 'HORIZONTAL_HEXAGONAL', 'VERTICAL_HEXAGONAL'])
-        .optional()
-        .describe('Tiling arrangement (default RECTANGULAR).'),
-      scalingFactor: z.number().optional().describe('Scale of each tile (default 1).'),
-      spacing: z.array(z.number()).optional().describe('[x, y] gap between tiles (default [0,0]).'),
-      horizontalAlignment: z.enum(['START', 'CENTER', 'END']).optional().describe('Default CENTER.')
-    }
-  },
-  async (args) => run('set_pattern', args as Record<string, unknown>)
-);
-
-server.registerTool(
   'set_effect',
   {
     description:
-      'Add a native Figma effect to a node: inner-shadow, blur (layer or background), texture (grain), or glass (frost + refraction). Drop shadows use set_shadow; noise uses set_noise. Texture/glass require a recent Figma version.',
+      'Add a native Figma effect to a node: inner-shadow, blur (layer or background), noise (coloured grain overlay), texture (roughens the layer itself), or glass (frost + refraction). Drop shadows use set_shadow. Noise/texture/glass require a recent Figma version.',
     inputSchema: {
       nodeId: z.string(),
       type: z
-        .enum(['inner-shadow', 'blur', 'texture', 'glass'])
+        .enum(['inner-shadow', 'blur', 'noise', 'texture', 'glass'])
         .describe('Which effect to add.'),
       append: z.boolean().optional().describe('Keep existing effects and add this (default false = replace).'),
       // blur
       radius: z.number().optional().describe('blur/texture/glass: radius (blur default 8).'),
       blurType: z.enum(['LAYER', 'BACKGROUND']).optional().describe('blur: default LAYER. BACKGROUND needs a translucent fill.'),
       // inner-shadow (mirrors set_shadow)
-      color: COLOR.optional().describe('inner-shadow: shadow color, 8-digit hex ok (default #00000040).'),
+      color: COLOR.optional().describe('inner-shadow: shadow color, 8-digit hex ok (default #00000040). noise: primary color (default #000000).'),
       offsetX: z.number().optional().describe('inner-shadow: horizontal offset (default 0).'),
       offsetY: z.number().optional().describe('inner-shadow: vertical offset (default 4).'),
       blur: z.number().optional().describe('inner-shadow: blur radius (default 8).'),
       spread: z.number().optional().describe('inner-shadow: spread (default 0).'),
-      opacity: z.number().optional().describe('inner-shadow: override alpha 0–1.'),
+      opacity: z.number().optional().describe('inner-shadow: override alpha 0–1. noise multitone: noise opacity 0–1 (default 0.5).'),
+      // noise
+      noiseType: z.enum(['monotone', 'duotone', 'multitone']).optional().describe('noise: default monotone.'),
+      density: z.number().optional().describe('noise: coverage 0–1 (default 0.4).'),
+      secondaryColor: COLOR.optional().describe('noise duotone: the second color (default #ffffff).'),
       // texture
-      noiseSize: z.number().optional().describe('texture: grain size, >0 (default 0.5).'),
+      noiseSize: z.number().optional().describe('noise/texture: grain size, >0 (noise default 1.5, texture default 0.5). Smaller = finer.'),
       clipToShape: z.boolean().optional().describe('texture: clip to the node shape (default true).'),
       // glass
       lightIntensity: z.number().optional().describe('glass: specular highlight 0–1 (default 0.5).'),
@@ -1372,7 +1290,7 @@ server.registerTool(
   }
 );
 
-// ---- Vectors: SVG, icons, Lottie ----
+// ---- Vectors: SVG, icons ----
 
 server.registerTool(
   'place_svg',
@@ -1451,42 +1369,6 @@ server.registerTool(
     }
   }
 );
-
-server.registerTool(
-  'place_lottie',
-  {
-    description:
-      'Render one frame of a Lottie animation (.json) as native, editable vectors. Supports shape layers (groups, rectangles, ellipses, paths, solid fills/strokes, transforms) and solid layers, with animated values resolved at the chosen frame. Precomps, masks, mattes, trim paths, text and gradient fills (kept as their first color) are skipped and listed in the result.',
-    inputSchema: {
-      path: z.string().describe('Path to the Lottie .json (project or temp space).'),
-      frame: z.union([z.number(), z.literal('last')]).optional().describe('Frame to render (default "last").'),
-      name: z.string().optional(),
-      width: z.number().optional().describe('Target width in px (default the composition width).'),
-      parentId: z.string().optional(),
-      x: z.number().optional(),
-      y: z.number().optional()
-    }
-  },
-  async (args) => {
-    try {
-      const raw = JSON.parse(await readFile(resolveReadable(args.path), 'utf8')) as LottieRoot;
-      const { svg, skipped } = lottieFrameToSvg(raw, args.frame ?? 'last');
-      const result = await callPlugin('place_svg', {
-        svg,
-        name: args.name ?? raw.nm ?? 'Lottie',
-        width: args.width ?? raw.w,
-        parentId: args.parentId,
-        x: args.x,
-        y: args.y
-      }, undefined, 'place_lottie');
-      return ok({ ...(result as object), skipped });
-    } catch (error) {
-      return fail(error);
-    }
-  }
-);
-
-// ---- Grid layout (Figma API Update 126) ----
 
 // ---- Motion (Figma API Update 127, Beta — API may change) ----
 

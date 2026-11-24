@@ -2,7 +2,7 @@
 name: figma-effects
 description: >-
   Apply rich fills and effects to Figma nodes via the designagent bridge — gradients
-  (linear/radial/angular/diamond), noise/grain, tiled patterns, inner-shadow, blur,
+  (linear/radial/angular/diamond), noise/grain, inner-shadow, blur,
   texture, glass, plus mesh gradients, halftones and holographic foil. Use whenever
   the user asks to make a node look like a gradient, mesh, iridescent/holographic card,
   grainy/noisy surface, frosted glass, halftone/dot pattern, or textured background in
@@ -24,10 +24,9 @@ create tools. After applying anything, call `take_screenshot` to confirm the pix
 | The user wants… | Use | Native? |
 |-----------------|-----|---------|
 | Gradient: linear / radial / angular / diamond, multi-stop | `set_gradient` | ✅ editable |
-| Noise / grain / film grain | `set_noise` | ✅ editable |
-| Frosted **glass**, **blur**, **inner shadow**, **texture** grain | `set_effect` | ✅ editable |
+| Noise / grain / film grain | `set_effect { type: "noise" }` | ✅ editable |
+| Frosted **glass**, **blur**, **inner shadow**, **texture** (roughened layer) | `set_effect` | ✅ editable |
 | Drop shadow | `set_shadow` | ✅ editable |
-| Repeat/tile a node as a fill | `set_pattern` | ✅ editable |
 | **Mesh gradient** (smooth multi-point blend) | raster → `set_image` | ❌ no native paint |
 | **Halftone** / dot-screen | raster → `set_image` | ❌ no native paint |
 | **Holographic / iridescent foil** | raster → `set_image`, or native — see below | ❌ no native paint |
@@ -39,7 +38,7 @@ fill only for the three rows Figma can't express. Noise/texture/glass need a rec
 front and ask, rather than silently shipping a PNG someone then has to live with. Holographic has a
 real native option, so it is a genuine choice:
 
-- **Editability matters** → `set_gradient` **angular**, rainbow stops, + `set_noise`. Every band stays
+- **Editability matters** → `set_gradient` **angular**, rainbow stops, + `set_effect {type:'noise', append:true}`. Every band stays
   a draggable stop. Reads as a CD/disc sheen, not foil — no wavy distortion, because no native paint
   warps a gradient along a curve.
 - **The foil look matters** → raster `holographic.py`. Only the raster gets the irregular warp.
@@ -54,19 +53,16 @@ them. A `glass` effect on top barely registers. Don't burn turns rediscovering t
   `type` linear|radial|angular|diamond. Linear uses `angle` (deg, 0=up, 180=down); the others use
   `centerX/centerY/radius` in 0–1 (defaults center 0.5,0.5 radius 0.5 = fills the box). ≥2 stops;
   positions default to an even spread. 8-digit hex gives per-stop alpha.
-- **Noise** — `set_noise { nodeId, noiseType, noiseSize?, density?, color?, secondaryColor?, opacity?, append? }`.
-  monotone / duotone (add `secondaryColor`) / multitone (add `opacity`). `append:true` keeps existing effects.
-- **Pattern** — `set_pattern { nodeId, sourceNodeId, tileType?, scalingFactor?, spacing?, horizontalAlignment? }`.
-  `sourceNodeId` is any separate node (not an ancestor/descendant of the target). Great for dot grids,
-  stripes, logos-as-tile.
-- **Effect** — `set_effect { nodeId, type, ... }` where type is inner-shadow | blur | texture | glass:
+- **Effect** — `set_effect { nodeId, type, ... }` where type is inner-shadow | blur | noise | texture | glass:
+  - `noise`: `noiseType` monotone / duotone (add `secondaryColor`) / multitone (add `opacity`), plus
+    `noiseSize`, `density`, `color`. A coloured grain overlay.
   - `blur`: `radius`, `blurType` LAYER|BACKGROUND (background needs a translucent fill to show through).
   - `inner-shadow`: `color`, `offsetX/offsetY`, `blur`, `spread`, `opacity` (mirrors `set_shadow`).
-  - `texture`: `noiseSize`, `radius`, `clipToShape`.
+  - `texture`: `noiseSize`, `radius`, `clipToShape`. Roughens the layer's own pixels; no colour or density.
   - `glass`: `lightIntensity`, `lightAngle`, `refraction`, `depth`, `dispersion`, `radius`.
   - `append:true` stacks on top of existing effects instead of replacing.
 
-Effects can stack: e.g. `set_gradient` then `set_noise {append:true}` for a grainy gradient.
+Effects can stack: e.g. `set_gradient` then `set_effect {type:'noise', append:true}` for a grainy gradient.
 
 ## Recipe — iOS-style frosted glass (tab bar, card, button)
 
@@ -114,10 +110,10 @@ to verify the result.
   runtime's schema lacks (the bundled typings run ahead of shipped Figma). Fix the payload; do not fall
   back to raster. Only a genuinely unsupported effect type justifies the fallback, and that error names
   the type, not a key.
-- If `set_noise`/`set_effect` (texture/glass) fails because the effect type itself is unsupported, the
+- If `set_effect` (noise/texture/glass) fails because the effect type itself is unsupported, the
   file's Figma version predates those effects — fall back to a raster texture or a shader.
 - For a **grainy holographic card** (this skill's origin): generate the foil with **`--grain 0`**, apply
-  via `set_image`, then `set_noise {append:true, noiseType:'multitone', density:0.35}`. Keep grain native
+  via `set_image`, then `set_effect {type:'noise', append:true, noiseType:'multitone', density:0.35}`. Keep grain native
   and it stays a slider in Figma's effects panel; bake it with `--grain` and every tweak means
-  regenerating the PNG. Baked grain also swamps the native layer, so you can't tell whether `set_noise`
+  regenerating the PNG. Baked grain also swamps the native layer, so you can't tell whether the noise effect
   actually rendered — a grain-free fill is the only way to see it work.

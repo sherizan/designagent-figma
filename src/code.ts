@@ -7,7 +7,6 @@ import { generateDesignDoc, type DesignDocFrame } from './core/designdoc';
 import { parseDesignMd } from './core/parsedesignmd';
 import { generateHtml, type HtmlNode } from './core/htmldoc';
 import { formatVariableValue, loadAnnotationCategories, solidHex } from './core/extract';
-import { exportTokens, type TokenFormat } from './core/tokens';
 import type { DesignTreeNode, TextRun } from './shared/designtree';
 import { isScreenLikeNode } from './core/intent';
 import type { EmptyAnalysis, Mode } from './core/types';
@@ -436,88 +435,6 @@ function applyAutoLayoutFix(node: SceneNode): { ok: boolean; message: string } {
     ok: true,
     message: 'Auto Layout applied with inferred spacing and padding.'
   };
-}
-
-function applyAbsolutePositioningFix(node: SceneNode): { ok: boolean; message: string } {
-  if (!('layoutPositioning' in node)) {
-    return {
-      ok: false,
-      message: 'Absolute positioning fix skipped: node does not support layout positioning.'
-    };
-  }
-
-  const parent = node.parent;
-  if (!parent || parent.type === 'PAGE' || parent.type === 'DOCUMENT' || parent.type === 'SLICE') {
-    return {
-      ok: false,
-      message: 'Absolute positioning fix skipped: node is not inside an Auto Layout container.'
-    };
-  }
-
-  if (!('layoutMode' in parent) || parent.layoutMode === 'NONE') {
-    return {
-      ok: false,
-      message: 'Absolute positioning fix skipped: parent is not Auto Layout.'
-    };
-  }
-
-  if (node.layoutPositioning !== 'ABSOLUTE') {
-    return {
-      ok: true,
-      message: 'Node is already in Auto Layout flow.'
-    };
-  }
-
-  node.layoutPositioning = 'AUTO';
-  return {
-    ok: true,
-    message: 'Absolute positioning removed. Node now follows Auto Layout flow.'
-  };
-}
-
-async function tryFixIssue(message: {
-  nodeId: string;
-  nodeName: string;
-  category: string;
-  reason: string;
-  suggestion: string;
-}): Promise<void> {
-  const baseNode = await getNodeByIdGuarded(message.nodeId);
-  if (!isSceneNode(baseNode)) {
-    figma.notify('Fix failed: target node not found.');
-    return;
-  }
-
-  let result: { ok: boolean; message: string } = {
-    ok: false,
-    message: 'This issue type is not auto-fixable yet. Use Focus for manual correction.'
-  };
-
-  const reasonText = `${message.reason} ${message.suggestion}`.toLowerCase();
-  if (message.category === 'Layout Semantics') {
-    if (reasonText.includes('absolute positioning')) {
-      result = applyAbsolutePositioningFix(baseNode);
-    } else if (reasonText.includes('auto layout')) {
-      result = applyAutoLayoutFix(baseNode);
-    }
-  }
-
-  figma.currentPage.selection = [baseNode];
-  figma.viewport.scrollAndZoomIntoView([baseNode]);
-  figma.notify(result.message);
-
-  if (result.ok) {
-    postToUI({
-      type: 'ISSUE_FIX_RESULT',
-      nodeId: message.nodeId,
-      category: message.category,
-      reason: message.reason,
-      status: 'fixed',
-      detail: result.message
-    });
-    invalidateCache();
-    void computeAndPostAnalysis();
-  }
 }
 
 async function getOrCreateDesignAgentCategoryId(): Promise<string | undefined> {
@@ -1938,25 +1855,8 @@ function buildNoiseEffect(params: Record<string, unknown>): NoiseEffect {
   return { ...base, noiseType: 'MONOTONE' } as NoiseEffect;
 }
 
-function buildPatternPaint(params: Record<string, unknown>): PatternPaint {
-  const tt = String(params.tileType ?? 'RECTANGULAR').toUpperCase();
-  const tileType =
-    tt === 'HORIZONTAL_HEXAGONAL' || tt === 'VERTICAL_HEXAGONAL' ? tt : 'RECTANGULAR';
-  const align = String(params.horizontalAlignment ?? 'CENTER').toUpperCase();
-  const horizontalAlignment = align === 'START' || align === 'END' ? align : 'CENTER';
-  const spacing = Array.isArray(params.spacing) ? params.spacing : [];
-  return {
-    type: 'PATTERN',
-    sourceNodeId: String(params.sourceNodeId ?? ''),
-    tileType,
-    scalingFactor: Math.max(0.01, toNumber(params.scalingFactor, 1)),
-    spacing: { x: toNumber(spacing[0], 0), y: toNumber(spacing[1], 0) },
-    horizontalAlignment
-  };
-}
-
-// Build one native effect for set_effect: inner-shadow | blur | texture | glass.
-// (Drop shadow keeps its own tool; noise has its own richer tool.)
+// Build one native effect for set_effect: inner-shadow | blur | noise | texture | glass.
+// (Drop shadow keeps its own tool.)
 function buildEffect(params: Record<string, unknown>): Effect {
   const kind = String(params.type ?? '').toLowerCase().replace(/_/g, '-');
   switch (kind) {
@@ -1972,6 +1872,8 @@ function buildEffect(params: Record<string, unknown>): Effect {
         visible: true
       } as BlurEffect;
     }
+    case 'noise':
+      return buildNoiseEffect(params);
     case 'texture':
       return {
         type: 'TEXTURE',
@@ -1993,7 +1895,7 @@ function buildEffect(params: Record<string, unknown>): Effect {
       } as GlassEffect;
     default:
       throw new Error(
-        `Unknown effect type "${kind}". Use inner-shadow | blur | texture | glass.`
+        `Unknown effect type "${kind}". Use inner-shadow | blur | noise | texture | glass.`
       );
   }
 }
@@ -2233,16 +2135,6 @@ async function runBridgeCommand(
       const core = await analyzePrimaryForBridge();
       return { selectedNode: core.selectedNode, intent: core.intent, uiSpec: core.uiSpec };
     }
-    case 'export_tokens': {
-      const allowed: TokenFormat[] = ['css', 'tailwind', 'sass', 'dtcg'];
-      const requested = String(params.format ?? 'css').toLowerCase();
-      const format = (allowed as string[]).includes(requested)
-        ? (requested as TokenFormat)
-        : 'css';
-      const core = await analyzePrimaryForBridge();
-      const vars = core.uiSpec.tokenization.resolvedVariables ?? [];
-      return { format, count: vars.length, content: exportTokens(vars, format) };
-    }
     case 'list_page_nodes': {
       const nodes = figma.currentPage.children.map((child) => ({
         id: child.id,
@@ -2475,27 +2367,6 @@ async function runBridgeCommand(
         gradientStops: buildGradientStops(params.stops)
       };
       (node as GeometryMixin).fills = [paint];
-      return { id: node.id, name: node.name };
-    }
-    case 'set_noise': {
-      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
-      if (!isSceneNode(node) || !('effects' in node)) {
-        throw new Error('set_noise requires a node that supports effects.');
-      }
-      const existing = params.append ? (node as BlendMixin).effects : [];
-      (node as BlendMixin).effects = [...existing, buildNoiseEffect(params)];
-      return { id: node.id, name: node.name };
-    }
-    case 'set_pattern': {
-      const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
-      if (!isSceneNode(node) || !('fills' in node)) {
-        throw new Error('set_pattern requires a node that supports fills.');
-      }
-      const source = await getNodeByIdGuarded(String(params.sourceNodeId ?? ''));
-      if (!isSceneNode(source)) {
-        throw new Error('set_pattern requires a valid sourceNodeId to tile as the pattern.');
-      }
-      (node as GeometryMixin).fills = [buildPatternPaint(params)];
       return { id: node.id, name: node.name };
     }
     case 'set_effect': {

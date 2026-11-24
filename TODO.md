@@ -16,11 +16,9 @@ screenshot) shipped in 0.23.0 as the interim.
 ## Parked
 - SF Symbols in `place_icon` — Apple's license bars redistribution and they're on no CDN; the
   supported path is export-as-SVG → `place_svg`. Lucide + Material shipped in 0.23.0.
-- `place_lottie` beyond the static shape subset (precomps, masks, trim paths, gradients, text) —
-  would need lottie-web in the plugin UI as a real renderer. Only if a real file needs it.
 
 ## Later (from the 2026-09-19 competitor survey; not scheduled)
 - `find` tool: search a subtree by name / type / text regex (list_page_nodes → drill-down gap).
 - `iterate` skill: build → screenshot → compare with a reference → fix, with a call budget.
-- Variables write-back from a tokens file (Console MCP / use_figma have it; export_tokens is 171 calls).
+- Variables write-back from a tokens file (Console MCP / use_figma have it; export_tokens was cut in 0.24.0 at ~235 calls all-time).
 

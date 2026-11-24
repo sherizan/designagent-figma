@@ -94,7 +94,7 @@ There are no automated tests — verification is visual, in Figma Desktop.
    when the MCP is connected. Then use the designagent MCP tools (all prefixed
    `mcp__plugin_designagent_designagent__`):
    - `status` — confirm the bridge; see the file / page / current selection
-   - `get_spec`, `get_score`, `get_design_md`, `list_issues` — inspect what the plugin extracts
+   - `get_spec`, `get_design_md`, `list_page_nodes` — inspect what the plugin extracts
    - `focus` / `select` — drive the Figma selection
    - `annotate`, `set_auto_layout`, plus the create/style/layout tools — act on the design
    - `take_screenshot` — render the selection/page to a PNG you can see; `console_logs` — read the

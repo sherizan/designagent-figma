@@ -7,8 +7,7 @@
     "designagent-mcp": "./server.js"
   },
   "scripts": {
-    "build": "node build.mjs",
-    "check": "node check-lottie.mjs"
+    "build": "node build.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
