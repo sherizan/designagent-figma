@@ -20,6 +20,12 @@ export interface TextRun {
   fontWeight?: number; // numeric weight overriding the base for this range
 }
 
+// One grid track: FLEX carries the fr value, FIXED the px size.
+export interface DesignTreeTrack {
+  type: 'FLEX' | 'FIXED';
+  value: number;
+}
+
 export interface DesignTreeNode {
   kind: 'frame' | 'text' | 'image' | 'svg';
   name?: string; // layer name: data-name / id / aria-label / first class / tag; root = <title>
@@ -55,10 +61,29 @@ export interface DesignTreeNode {
   // auto layout (when set, children flow instead of being absolutely placed)
   layout?: 'HORIZONTAL' | 'VERTICAL' | 'GRID';
   itemSpacing?: number;
+  // flex-wrap: children actually broke onto several lines → Figma layoutWrap.
+  wrap?: boolean;
+  counterAxisSpacing?: number; // gap between wrapped lines
+  counterAxisAlignContent?: 'SPACE_BETWEEN'; // align-content: space-between
+  // CSS min/max sizes in px (only when they agree with the measured box).
+  minWidth?: number;
+  maxWidth?: number;
+  minHeight?: number;
+  maxHeight?: number;
   // GRID only: column count + gaps; rows are auto-created as children flow in (row-major).
   gridColumns?: number;
   gridColumnGap?: number;
   gridRowGap?: number;
+  gridColumnSizes?: DesignTreeTrack[]; // from grid-template-columns (fr → FLEX, else FIXED px)
+  // Set when children need explicit cells (spans, grid-area, gaps in the flow): rows are
+  // then fixed up front and each child carries its own cell below.
+  gridManual?: boolean;
+  gridRowSizes?: DesignTreeTrack[];
+  // Child of a gridManual grid: 0-based cell and spans.
+  gridRow?: number;
+  gridColumn?: number;
+  gridRowSpan?: number;
+  gridColumnSpan?: number;
   paddingTop?: number;
   paddingRight?: number;
   paddingBottom?: number;

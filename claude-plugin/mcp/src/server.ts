@@ -1157,7 +1157,14 @@ server.registerTool(
         .describe('Uniform px, or per-side.'),
       primaryAxisAlign: z.enum(['MIN', 'CENTER', 'MAX', 'SPACE_BETWEEN', 'SPACE_AROUND', 'SPACE_EVENLY']).optional(),
       counterAxisAlign: z.enum(['MIN', 'CENTER', 'MAX', 'BASELINE']).optional(),
-      sizing: z.enum(['HUG', 'FIXED']).optional().describe('HUG = size to content on both axes; FIXED = keep the current size.')
+      sizing: z.enum(['HUG', 'FIXED']).optional().describe('HUG = size to content on both axes; FIXED = keep the current size.'),
+      wrap: z.boolean().optional().describe('true = children wrap onto new lines (CSS flex-wrap); fixes the main-axis size. Vertical wrap needs a recent Figma build.'),
+      counterAxisSpacing: z.number().optional().describe('Gap between wrapped lines in px (wrap only).'),
+      counterAxisAlignContent: z.enum(['AUTO', 'SPACE_BETWEEN']).optional().describe('How wrapped lines are distributed (wrap only).'),
+      minWidth: z.number().nullable().optional().describe('Min width in px; null clears it.'),
+      maxWidth: z.number().nullable().optional().describe('Max width in px; null clears it.'),
+      minHeight: z.number().nullable().optional(),
+      maxHeight: z.number().nullable().optional()
     }
   },
   async (args) => run('set_auto_layout', args as Record<string, unknown>)
@@ -1599,8 +1606,17 @@ server.registerTool(
 server.registerTool(
   'resize',
   {
-    description: 'Resize a node. Omitted dimensions keep their current value.',
-    inputSchema: { nodeId: z.string(), width: z.number().optional(), height: z.number().optional() }
+    description:
+      'Resize a node. Omitted dimensions keep their current value. minWidth / maxWidth / minHeight / maxHeight set responsive limits (null clears one); they only apply to an auto-layout frame or a direct child of one.',
+    inputSchema: {
+      nodeId: z.string(),
+      width: z.number().optional(),
+      height: z.number().optional(),
+      minWidth: z.number().nullable().optional(),
+      maxWidth: z.number().nullable().optional(),
+      minHeight: z.number().nullable().optional(),
+      maxHeight: z.number().nullable().optional()
+    }
   },
   async (args) => run('resize', args as Record<string, unknown>)
 );
@@ -1766,7 +1782,7 @@ server.registerTool(
   'html_to_design',
   {
     description:
-      'Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project or in temp space (your scratchpad / the OS temp dir are fine — no need to copy into the project). With `path`, relative image paths (`<img src>`, CSS `url()`) resolve against that file\'s folder and are inlined; external http(s) images are inlined too. Fonts must exist in the Figma file. Solid colors and text that exactly match a local color variable, paint style, or text style get bound to it (see useDesignSystem). The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset — staying inside it avoids silent re-renders):\n- Reliable: flex rows/columns (justify-content incl. space-between/around/evenly, gap, flex-grow); CSS grid (display:grid → native Figma grid, column count from grid-template-columns, gaps; rows auto-flow); position:absolute/fixed children (pinned at their measured x/y, in any document order); solid fills, linear + radial gradients, multi-layer backgrounds (each layer a fill), background-image url(), border, border-radius, box-shadow, backdrop-filter: blur() (→ background blur; add `set_effect glass` afterwards for frosted glass); inline <svg> → native vectors; text-wrap: balance/pretty; variable-font axes via font-variation-settings; Google fonts.\n- Layer names come from data-name → id → aria-label → first class → tag; the top frame is named after <title>. Set these in the HTML to get a readable layer tree.\n- Wrapped text sits in a hugging Auto Layout wrapper so it grows (and pushes siblings) when Figma breaks lines differently from the browser; single-line text hugs its content.\n- Known limits: conic gradients flatten to their first stop; ellipse radial shapes render as circles; grid rows auto-flow (row spans and grid-areas are ignored); only fonts installed in Figma render (others fall back).\n- Returns the new frame\'s id immediately and finishes painting in the background; take_screenshot on that id waits for the paint to finish. Omit x/y to auto-place to the right of existing content (works inside a SECTION `parentId` too). Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.',
+      'Render HTML into Figma as real layers (frames, text, rectangles, images). Provide `html` directly OR a `path` to an .html file in the project or in temp space (your scratchpad / the OS temp dir are fine — no need to copy into the project). With `path`, relative image paths (`<img src>`, CSS `url()`) resolve against that file\'s folder and are inlined; external http(s) images are inlined too. Fonts must exist in the Figma file. Solid colors and text that exactly match a local color variable, paint style, or text style get bound to it (see useDesignSystem). The DesignAgent plugin must be open with the bridge enabled.\n\nFIDELITY NOTES (current supported-CSS subset — staying inside it avoids silent re-renders):\n- Reliable: flex rows/columns (justify-content incl. space-between/around/evenly, gap, flex-grow, flex-wrap → wrapping Auto Layout with its line gap); px min-/max-width/height (→ Figma min/max sizes); CSS grid (display:grid → native Figma grid: fr tracks stay flexible, other tracks keep their measured px; column/row spans, grid-area and explicit line placement are kept as real cells; gaps); position:absolute/fixed children (pinned at their measured x/y, in any document order); solid fills, linear + radial gradients, multi-layer backgrounds (each layer a fill), background-image url(), border, border-radius, box-shadow, backdrop-filter: blur() (→ background blur; add `set_effect glass` afterwards for frosted glass); inline <svg> → native vectors; text-wrap: balance/pretty; variable-font axes via font-variation-settings; Google fonts.\n- Layer names come from data-name → id → aria-label → first class → tag; the top frame is named after <title>. Set these in the HTML to get a readable layer tree.\n- Wrapped text sits in a hugging Auto Layout wrapper so it grows (and pushes siblings) when Figma breaks lines differently from the browser; single-line text hugs its content.\n- Known limits: conic gradients flatten to their first stop; ellipse radial shapes render as circles; flex-wrap: wrap-reverse and a grid offset by justify-content/align-content fall back to pinned or auto-flowed children; auto-fill/auto-fit and auto grid tracks become fixed px tracks; only fonts installed in Figma render (others fall back).\n- Returns the new frame\'s id immediately and finishes painting in the background; take_screenshot on that id waits for the paint to finish. Omit x/y to auto-place to the right of existing content (works inside a SECTION `parentId` too). Pass `replaceId` (an id from a prior call) to re-render in place instead of stacking a new frame; render very large pages section-by-section.',
     inputSchema: {
       html: z.string().optional().describe('Raw HTML to render.'),
       path: z.string().optional().describe('Path to an .html file in the project.'),

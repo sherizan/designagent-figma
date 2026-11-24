@@ -7,7 +7,7 @@ import { generateDesignDoc, type DesignDocFrame } from './core/designdoc';
 import { parseDesignMd } from './core/parsedesignmd';
 import { generateHtml, type HtmlNode } from './core/htmldoc';
 import { formatVariableValue, loadAnnotationCategories, solidHex } from './core/extract';
-import type { DesignTreeNode, TextRun } from './shared/designtree';
+import type { DesignTreeNode, DesignTreeTrack, TextRun } from './shared/designtree';
 import { isScreenLikeNode } from './core/intent';
 import type { EmptyAnalysis, Mode } from './core/types';
 import type { ToPluginMessage, ToUIMessage } from './shared/messages';
@@ -1140,18 +1140,28 @@ function buildFrameShell(
     frame.paddingRight = node.paddingRight ?? 0;
     frame.paddingBottom = node.paddingBottom ?? 0;
     frame.paddingLeft = node.paddingLeft ?? 0;
+    const manualRows = node.gridManual ? node.gridRowSizes?.length ?? 0 : 0;
     applyGridLayout(frame, {
       columns: node.gridColumns ?? 1,
+      rows: manualRows > 0 ? manualRows : undefined,
       columnGap: node.gridColumnGap,
       rowGap: node.gridRowGap
     });
-    try {
-      // Rows are created as children flow in, row-major — matches CSS grid auto-placement.
-      frame.gridAutoTracks = 'ROWS';
-      frame.gridItemsPositioning = 'ROW_AUTO_FLOW';
-    } catch {
-      // older Figma runtime: children still land in the fixed grid, just without auto rows
+    if (manualRows > 0) {
+      // Children carry explicit cells (spans / grid-area): rows are fixed up front and
+      // positioning stays MANUAL, which setGridChildPosition requires.
+      applyGridTrackSizes(frame, 'gridRowSizes', node.gridRowSizes);
+    } else {
+      try {
+        // Rows are created as children flow in, row-major — matches CSS grid auto-placement.
+        frame.gridAutoTracks = 'ROWS';
+        frame.gridItemsPositioning = 'ROW_AUTO_FLOW';
+      } catch {
+        // older Figma runtime: children still land in the fixed grid, just without auto rows
+      }
     }
+    applyGridTrackSizes(frame, 'gridColumnSizes', node.gridColumnSizes);
+    applyMinMax(frame, node);
   } else if (node.layout) {
     frame.layoutMode = node.layout;
     frame.itemSpacing = node.itemSpacing ?? 0;
@@ -1161,6 +1171,21 @@ function buildFrameShell(
     frame.paddingLeft = node.paddingLeft ?? 0;
     frame.primaryAxisAlignItems = node.primaryAxisAlign ?? 'MIN';
     frame.counterAxisAlignItems = node.counterAxisAlign ?? 'MIN';
+    // flex-wrap: keep the measured main size so children break onto the same lines.
+    let wrapped = false;
+    if (node.wrap) {
+      try {
+        frame.layoutWrap = 'WRAP';
+        wrapped = true;
+        frame.counterAxisSpacing = node.counterAxisSpacing ?? 0;
+        if (node.counterAxisAlignContent === 'SPACE_BETWEEN') {
+          frame.counterAxisAlignContent = 'SPACE_BETWEEN';
+        }
+      } catch {
+        // vertical wrap needs a recent Figma build; without it the frame stays a single line
+        wrapped = frame.layoutWrap === 'WRAP';
+      }
+    }
 
     const horizontal = node.layout === 'HORIZONTAL';
     const kids = node.children ?? [];
@@ -1180,10 +1205,11 @@ function buildFrameShell(
     // keeps full-width rows full-width. The clamp then prevents any exact-fit drop.
     const mustFill = kids.some((c) => c.grow) || (node.primaryAxisAlign ?? '').startsWith('SPACE_');
     const contentFills = contentMain >= measuredMain - 1;
-    const hug = !mustFill && contentFills;
+    const hug = !wrapped && !mustFill && contentFills;
     frame.primaryAxisSizingMode = hug ? 'AUTO' : 'FIXED';
     frame.counterAxisSizingMode = 'FIXED';
-    if (!hug) {
+    applyMinMax(frame, node);
+    if (!hug && !wrapped) {
       // Clamp: grow the frame to fit its in-flow children rather than dropping one
       // (no-op when the measured size already fits, e.g. a full-width row with slack).
       if (horizontal) {
@@ -1223,6 +1249,18 @@ async function appendDesignChildrenInner(frame: FrameNode, node: DesignTreeNode)
       (created as SceneNode & LayoutMixin).y = child.y;
       continue;
     }
+    if (node.layout === 'GRID' && node.gridManual && child.gridRow != null && child.gridColumn != null) {
+      // Position first, then span: the span must grow into cells that are still free.
+      try {
+        const cell = created as SceneNode & GridChildrenMixin;
+        cell.setGridChildPosition(child.gridRow, child.gridColumn);
+        if ((child.gridColumnSpan ?? 1) > 1) cell.gridColumnSpan = child.gridColumnSpan ?? 1;
+        if ((child.gridRowSpan ?? 1) > 1) cell.gridRowSpan = child.gridRowSpan ?? 1;
+      } catch (error) {
+        console.warn('html_to_design: could not place grid child', child.name ?? child.kind, error);
+      }
+    }
+    applyMinMax(created, child);
     if (child.grow && 'layoutGrow' in created) {
       (created as SceneNode & { layoutGrow: number }).layoutGrow = 1;
     }
@@ -1897,6 +1935,62 @@ function buildEffect(params: Record<string, unknown>): Effect {
       throw new Error(
         `Unknown effect type "${kind}". Use inner-shadow | blur | noise | texture | glass.`
       );
+  }
+}
+
+// min/max sizes are valid only on auto-layout frames and their direct children; anything
+// else throws, so each one is applied on its own and a refusal is simply skipped.
+// A number sets the limit, null clears it, undefined leaves it alone.
+function applyMinMax(
+  target: SceneNode,
+  limits: { minWidth?: unknown; maxWidth?: unknown; minHeight?: unknown; maxHeight?: unknown }
+): string[] {
+  const applied: string[] = [];
+  const keys = ['minWidth', 'maxWidth', 'minHeight', 'maxHeight'] as const;
+  for (const key of keys) {
+    const raw = limits[key];
+    if (raw === undefined || !(key in target)) continue;
+    const value = raw === null ? null : toNumber(raw, 0);
+    if (value !== null && !(value > 0)) continue;
+    try {
+      (target as SceneNode & Record<typeof key, number | null>)[key] = value;
+      applied.push(key);
+    } catch {
+      // not an auto-layout frame or child of one
+    }
+  }
+  return applied;
+}
+
+// Set grid track types/sizes. All-default tracks (FLEX 1) are left untouched. Figma's docs
+// mutate the live track objects in place; if a runtime ignores that, assign the whole array.
+function applyGridTrackSizes(
+  frame: FrameNode,
+  key: 'gridRowSizes' | 'gridColumnSizes',
+  tracks: DesignTreeTrack[] | undefined
+): void {
+  if (!tracks || tracks.length === 0 || tracks.every((t) => t.type === 'FLEX' && t.value === 1)) {
+    return;
+  }
+  try {
+    const live = frame[key];
+    if (live.length !== tracks.length) return;
+    tracks.forEach((t, i) => {
+      const slot = live[i];
+      if (!slot) return;
+      slot.type = t.type;
+      if (t.type === 'FIXED' || t.value !== 1) slot.value = t.value;
+    });
+    const after = frame[key];
+    const stuck = tracks.every((t, i) => {
+      const a = after[i];
+      return Boolean(a) && a?.type === t.type && (t.type !== 'FIXED' || Math.abs((a?.value ?? 0) - t.value) < 0.5);
+    });
+    if (!stuck) {
+      frame[key] = tracks.map((t) => ({ type: t.type, value: t.value }));
+    }
+  } catch (error) {
+    console.warn(`html_to_design: could not set ${key}`, error);
   }
 }
 
@@ -2687,12 +2781,42 @@ async function runBridgeCommand(
         frame.primaryAxisSizingMode = sizing === 'HUG' ? 'AUTO' : 'FIXED';
         frame.counterAxisSizingMode = sizing === 'HUG' ? 'AUTO' : 'FIXED';
       }
+      if (params.wrap != null) {
+        if (frame.layoutMode !== 'HORIZONTAL' && frame.layoutMode !== 'VERTICAL') {
+          throw new Error('wrap needs layoutMode HORIZONTAL or VERTICAL.');
+        }
+        try {
+          frame.layoutWrap = params.wrap ? 'WRAP' : 'NO_WRAP';
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(`Could not set wrap (${detail}). Wrapping a VERTICAL layout needs a recent Figma build.`);
+        }
+        if (params.wrap) {
+          // Wrapping only happens against a fixed main-axis size.
+          frame.primaryAxisSizingMode = 'FIXED';
+        }
+      }
+      if (frame.layoutWrap === 'WRAP') {
+        if (params.counterAxisSpacing != null) {
+          frame.counterAxisSpacing = toNumber(params.counterAxisSpacing, 0);
+        }
+        const content = String(params.counterAxisAlignContent ?? '').toUpperCase();
+        if (content === 'AUTO' || content === 'SPACE_BETWEEN') {
+          frame.counterAxisAlignContent = content;
+        }
+      }
+      applyMinMax(frame, params);
       return {
         id: frame.id,
         name: frame.name,
         layoutMode: frame.layoutMode,
         itemSpacing: frame.itemSpacing,
-        padding: [frame.paddingTop, frame.paddingRight, frame.paddingBottom, frame.paddingLeft]
+        padding: [frame.paddingTop, frame.paddingRight, frame.paddingBottom, frame.paddingLeft],
+        wrap: frame.layoutWrap === 'WRAP',
+        minWidth: frame.minWidth,
+        maxWidth: frame.maxWidth,
+        minHeight: frame.minHeight,
+        maxHeight: frame.maxHeight
       };
     }
     case 'set_instance_property': {
@@ -2850,6 +2974,13 @@ async function runBridgeCommand(
       const width = toNumber(params.width, layout.width);
       const height = toNumber(params.height, layout.height);
       layout.resize(Math.max(1, width), Math.max(1, height));
+      const limits = applyMinMax(node, params);
+      const wanted = ['minWidth', 'maxWidth', 'minHeight', 'maxHeight'].filter((k) => params[k] !== undefined);
+      if (wanted.length > limits.length) {
+        throw new Error(
+          `Resized, but could not set ${wanted.filter((k) => limits.indexOf(k) < 0).join(', ')}: min/max sizes need an auto-layout frame or a direct child of one, and positive values.`
+        );
+      }
       return { ...selectAndReturn(node), width: layout.width, height: layout.height };
     }
     case 'reparent': {

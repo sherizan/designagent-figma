@@ -1,4 +1,4 @@
-import type { DesignTreeNode, DesignTreeShadow, TextRun } from './shared/designtree';
+import type { DesignTreeTrack, DesignTreeNode, DesignTreeShadow, TextRun } from './shared/designtree';
 
 // Render HTML in a hidden, SANDBOXED iframe and walk the laid-out DOM into a
 // serializable tree (boxes + computed styles + text + images). Runs in the plugin
@@ -118,6 +118,182 @@ interface LayoutInfo {
   gridColumns?: number;
   gridColumnGap?: number;
   gridRowGap?: number;
+  // flex: CSS allows wrapping (whether children actually wrapped is measured later)
+  wrapCss?: boolean;
+  crossGap?: number;
+  alignContentBetween?: boolean;
+  // grid: resolved px tracks (for placing children) and their Figma track types
+  colPx?: number[];
+  rowPx?: number[];
+  gridCols?: DesignTreeTrack[];
+  gridRows?: DesignTreeTrack[];
+}
+
+// Resolved px sizes from a computed grid-template-* value ("[a] 200px 1fr" never appears
+// here: the browser resolves every track to px, but named lines stay in as "[name]").
+function pxTracks(value: string): number[] {
+  return value
+    .replace(/\[[^\]]*\]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => /^[\d.]+px$/.test(t))
+    .map((t) => parseFloat(t));
+}
+
+// Split a track list at top level (spaces inside minmax()/repeat() do not split) and
+// expand repeat(N, …). Returns null for anything we cannot count (auto-fill, subgrid…).
+function expandTracks(value: string): string[] | null {
+  const src = value.replace(/\[[^\]]*\]/g, ' ').trim();
+  if (!src || src === 'none' || /subgrid|masonry|auto-fill|auto-fit/.test(src)) return null;
+  const tokens: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of src) {
+    if (ch === '(') depth += 1;
+    if (ch === ')') depth -= 1;
+    if (/\s/.test(ch) && depth === 0) {
+      if (current) tokens.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current) tokens.push(current);
+  const out: string[] = [];
+  for (const token of tokens) {
+    const m = /^repeat\(\s*(\d+)\s*,(.*)\)$/.exec(token);
+    if (m) {
+      const inner = expandTracks(m[2] ?? '');
+      if (!inner) return null;
+      for (let i = 0; i < Number(m[1]); i += 1) out.push(...inner);
+    } else if (token.indexOf('repeat(') === 0) {
+      return null;
+    } else {
+      out.push(token);
+    }
+  }
+  return out;
+}
+
+// The fr value a track flexes by, or 0 when it does not flex ("1fr", "minmax(0, 2fr)").
+function trackFr(token: string): number {
+  const m = /^([\d.]+)fr$/.exec(token) ?? /^minmax\(.*,\s*([\d.]+)fr\s*\)$/.exec(token);
+  return m ? parseFloat(m[1] ?? '0') : 0;
+}
+
+// Figma track types for a grid axis. `authored` is the computed (not resolved) track list
+// when the browser exposes it; `px` are the resolved sizes. fr tracks become FLEX only when
+// the measured sizes really are proportional to their fr values (content can force an fr
+// track wider than its share) — otherwise every track is pinned at its measured px.
+function classifyTracks(authored: string, px: number[]): DesignTreeTrack[] {
+  const fixed = (): DesignTreeTrack[] => px.map((value) => ({ type: 'FIXED' as const, value }));
+  const tokens = authored ? expandTracks(authored) : null;
+  if (!tokens || tokens.length !== px.length) {
+    // No usable source: equal tracks stay Figma's default (FLEX 1), unequal ones are pinned.
+    const first = px[0] ?? 0;
+    return px.every((v) => Math.abs(v - first) <= 1) ? px.map(() => ({ type: 'FLEX' as const, value: 1 })) : fixed();
+  }
+  const frs = tokens.map(trackFr);
+  let unit = 0;
+  for (let i = 0; i < frs.length; i += 1) {
+    const fr = frs[i] ?? 0;
+    if (fr <= 0) continue;
+    const perFr = (px[i] ?? 0) / fr;
+    if (unit === 0) unit = perFr;
+    else if (Math.abs(perFr - unit) > 1.5) return fixed();
+  }
+  return px.map((value, i) => {
+    const fr = frs[i] ?? 0;
+    return fr > 0 ? { type: 'FLEX' as const, value: fr } : { type: 'FIXED' as const, value };
+  });
+}
+
+// Computed (as-authored) value of a property, where the browser supports Typed OM.
+function authoredValue(el: Element, prop: string): string {
+  try {
+    const map = (el as Element & { computedStyleMap?: () => { get(p: string): unknown } }).computedStyleMap?.();
+    const value = map?.get(prop);
+    return value ? String(value) : '';
+  } catch {
+    return '';
+  }
+}
+
+// Index of the track containing `pos` along one axis, or -1 when it falls outside every
+// track (in a gap, or the grid is offset by justify/align-content).
+function trackAt(starts: number[], sizes: number[], pos: number): number {
+  for (let i = 0; i < starts.length; i += 1) {
+    const start = starts[i] ?? 0;
+    if (pos >= start - 1.5 && pos <= start + (sizes[i] ?? 0) + 1.5) return i;
+  }
+  return -1;
+}
+
+// Work out each grid child's cell and spans from where the browser drew it. That covers
+// grid-area, line placement, spans and dense flow without parsing any of them. Returns
+// true when the children need explicit cells (they differ from plain row-major flow) and
+// every one of them could be placed without overlap.
+function placeGridChildren(
+  lay: LayoutInfo,
+  origin: { left: number; top: number },
+  flow: Array<{ rect: DOMRect; child: DesignTreeNode }>
+): boolean {
+  const colPx = lay.colPx ?? [];
+  const rowPx = lay.rowPx ?? [];
+  if (colPx.length === 0 || rowPx.length === 0 || flow.length === 0) return false;
+  const starts = (sizes: number[], from: number, gap: number): number[] => {
+    const out: number[] = [];
+    let at = from;
+    for (const size of sizes) {
+      out.push(at);
+      at += size + gap;
+    }
+    return out;
+  };
+  const colStarts = starts(colPx, origin.left, lay.gridColumnGap ?? 0);
+  const rowStarts = starts(rowPx, origin.top, lay.gridRowGap ?? 0);
+  const taken = new Set<string>();
+  const cells: Array<{ row: number; col: number; rowSpan: number; colSpan: number }> = [];
+  for (const f of flow) {
+    const col = trackAt(colStarts, colPx, f.rect.left);
+    const row = trackAt(rowStarts, rowPx, f.rect.top);
+    // The far edges, nudged inwards so an item that exactly fills its cell stays in it.
+    const colEnd = trackAt(colStarts, colPx, f.rect.right - 2);
+    const rowEnd = trackAt(rowStarts, rowPx, f.rect.bottom - 2);
+    if (col < 0 || row < 0) return false;
+    const colSpan = colEnd >= col ? colEnd - col + 1 : 1;
+    const rowSpan = rowEnd >= row ? rowEnd - row + 1 : 1;
+    for (let r = row; r < row + rowSpan; r += 1) {
+      for (let c = col; c < col + colSpan; c += 1) {
+        const key = `${r}:${c}`;
+        if (taken.has(key)) return false;
+        taken.add(key);
+      }
+    }
+    cells.push({ row, col, rowSpan, colSpan });
+  }
+  const cols = colPx.length;
+  const plainFlow = cells.every(
+    (cell, i) => cell.rowSpan === 1 && cell.colSpan === 1 && cell.row === Math.floor(i / cols) && cell.col === i % cols
+  );
+  if (plainFlow) return false;
+  flow.forEach((f, i) => {
+    const cell = cells[i];
+    if (!cell) return;
+    f.child.gridRow = cell.row;
+    f.child.gridColumn = cell.col;
+    f.child.gridRowSpan = cell.rowSpan;
+    f.child.gridColumnSpan = cell.colSpan;
+  });
+  return true;
+}
+
+// A CSS min-/max- size in px, kept only when it agrees with the measured size (so applying
+// it in Figma can never change how the element renders). Percentages and keywords are skipped.
+function limitPx(value: string, measured: number, kind: 'min' | 'max'): number | undefined {
+  if (!value || !/^[\d.]+px$/.test(value)) return undefined;
+  const n = parseFloat(value);
+  if (!(n > 0)) return undefined;
+  return kind === 'min' ? (n <= measured + 0.5 ? n : undefined) : n >= measured - 0.5 ? n : undefined;
 }
 
 // Layer name for a rendered element: data-name → id → aria-label → first plain class → tag.
@@ -166,14 +342,21 @@ function computeLayout(el: Element, cs: CSSStyleDeclaration, win: Window): Layou
       itemSpacing: gap,
       padding,
       primary: primaryFromJustify(cs.justifyContent),
-      counter: counterFromItems(cs.alignItems)
+      counter: counterFromItems(cs.alignItems),
+      // wrap-reverse stacks lines the other way; Figma has no equivalent, so it is left alone
+      wrapCss: cs.flexWrap === 'wrap',
+      crossGap: gapPx(layout === 'VERTICAL' ? cs.columnGap : cs.rowGap),
+      alignContentBetween: cs.alignContent === 'space-between'
     };
   }
 
   if (display === 'grid' || display === 'inline-grid') {
     // Computed grid-template-columns is a resolved px track list ("200px 200px 200px"),
     // so the token count is the column count. Rows are left to Figma's auto-flow.
-    const cols = cs.gridTemplateColumns.split(/\s+/).filter((t) => t && t !== 'none').length;
+    const colPx = pxTracks(cs.gridTemplateColumns);
+    const rowPx = pxTracks(cs.gridTemplateRows);
+    const cols =
+      colPx.length || cs.gridTemplateColumns.split(/\s+/).filter((t) => t && t !== 'none').length;
     return {
       layout: 'GRID',
       itemSpacing: 0,
@@ -182,7 +365,11 @@ function computeLayout(el: Element, cs: CSSStyleDeclaration, win: Window): Layou
       counter: 'MIN',
       gridColumns: Math.max(1, cols),
       gridColumnGap: gapPx(cs.columnGap),
-      gridRowGap: gapPx(cs.rowGap)
+      gridRowGap: gapPx(cs.rowGap),
+      colPx,
+      rowPx,
+      gridCols: classifyTracks(authoredValue(el, 'grid-template-columns'), colPx),
+      gridRows: classifyTracks(authoredValue(el, 'grid-template-rows'), rowPx)
     };
   }
 
@@ -451,6 +638,10 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
     children: []
   };
   applyBoxStyles(node, cs);
+  node.minWidth = limitPx(cs.minWidth, rect.width, 'min');
+  node.maxWidth = limitPx(cs.maxWidth, rect.width, 'max');
+  node.minHeight = limitPx(cs.minHeight, rect.height, 'min');
+  node.maxHeight = limitPx(cs.maxHeight, rect.height, 'max');
 
   const tag = el.tagName.toLowerCase();
 
@@ -496,11 +687,39 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
       node.gridColumns = lay.gridColumns;
       node.gridColumnGap = lay.gridColumnGap;
       node.gridRowGap = lay.gridRowGap;
+      if (lay.gridCols && lay.gridCols.length === lay.gridColumns) {
+        node.gridColumnSizes = lay.gridCols;
+      }
     }
   }
   const isGrid = lay?.layout === 'GRID';
+  // flex-wrap only matters when the in-flow children really broke onto a second line
+  // (a second column for a column flexbox).
+  let wrapped = false;
+  if (lay && lay.wrapCss && lay.layout !== 'GRID') {
+    const horizontal = lay.layout === 'HORIZONTAL';
+    let prev: DOMRect | undefined;
+    for (const c of Array.from(el.children)) {
+      const ccs = win.getComputedStyle(c);
+      if (isHidden(ccs) || ccs.position === 'absolute' || ccs.position === 'fixed') continue;
+      const r = c.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) continue;
+      if (prev && (horizontal ? r.top >= prev.bottom - 1 : r.left >= prev.right - 1)) {
+        wrapped = true;
+        break;
+      }
+      prev = r;
+    }
+    if (wrapped) {
+      node.wrap = true;
+      node.counterAxisSpacing = lay.crossGap ?? 0;
+      if (lay.alignContentBetween) node.counterAxisAlignContent = 'SPACE_BETWEEN';
+    }
+  }
+  let looseGridText = false;
   // For a vertical Auto Layout, a child as wide as the content box should fill width.
-  const isVertical = lay?.layout === 'VERTICAL';
+  // (Not in a wrapped column: its children sit side by side in several columns.)
+  const isVertical = lay?.layout === 'VERTICAL' && !wrapped;
   const contentWidth = isVertical ? rect.width - lay!.padding.l - lay!.padding.r : 0;
   // Left/right edges of the container's content box, in viewport coords.
   const contentLeft = rect.left + (lay ? lay.padding.l : 0);
@@ -551,6 +770,7 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
       range.selectNodeContents(child);
       const tr = range.getBoundingClientRect();
       if (tr.width <= 0 || tr.height <= 0) continue;
+      if (isGrid) looseGridText = true; // an anonymous grid item: leave placement to auto-flow
       // One client rect per visual line — >1 means the source text wrapped.
       const multiline = range.getClientRects().length > 1;
       // Bake text-transform into the string so glyphs match what was measured.
@@ -589,8 +809,19 @@ function buildNode(el: Element, win: Window, parent: Box): DesignTreeNode {
     }
   }
 
-  if (lay && lay.layout !== 'GRID') {
+  if (lay && lay.layout !== 'GRID' && !wrapped) {
+    // (A wrapped flexbox looks like one big negative gap at every line break; skip it.)
     applyOverlap(node, lay.layout, flowChildren);
+  }
+  if (lay && isGrid && !looseGridText) {
+    const origin = {
+      left: rect.left + px(cs.borderLeftWidth) + lay.padding.l,
+      top: rect.top + px(cs.borderTopWidth) + lay.padding.t
+    };
+    if (placeGridChildren(lay, origin, flowChildren) && lay.gridRows) {
+      node.gridManual = true;
+      node.gridRowSizes = lay.gridRows;
+    }
   }
   const only = node.children.length === 1 ? node.children[0] : undefined;
   if (!lay && only?.kind === 'text' && only.multiline) {
