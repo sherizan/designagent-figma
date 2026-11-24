@@ -1558,13 +1558,13 @@ server.registerTool(
       '(Beta — Figma Motion) Apply an animation style to a node. Returns an appliedId you can pass to remove_animation. Custom styles (type CUSTOM in list_animation_styles) accept only timelineOffset. Export the result with export_asset format mp4 / webm / gif.',
     inputSchema: {
       nodeId: z.string(),
-      styleId: z.string().describe('Animation style id or name from list_animation_styles. Do not guess: an unknown value fails with the list of valid names.'),
+      styleId: z.string().describe('Animation style id from list_animation_styles (e.g. Opacity, Position, Scale). A variant name such as "fade in" or "slide_out" also works: it resolves to the style whose `type` prop has that option.'),
       duration: z.number().optional().describe('Duration in seconds (0.3, not 300).'),
       timelineOffset: z.number().optional().describe('Timeline offset in seconds.'),
       properties: z
         .record(z.string(), z.unknown())
         .optional()
-        .describe('Style-specific props. Only use the prop names and values list_animation_styles reports for this style.')
+        .describe('Style-specific props, e.g. { type: "fadeOut" } or { type: "slide_in", direction: "left", distance: 80 }. Use the names and values list_animation_styles reports: Figma silently ignores unknown ones.')
     }
   },
   async ({ nodeId, styleId, duration, timelineOffset, properties }) =>
