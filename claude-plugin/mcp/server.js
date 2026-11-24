@@ -25432,6 +25432,96 @@ async function run(command, params = {}, label) {
   }
 }
 var MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+var MAX_IMAGE_PX = 4096;
+var execFileAsync = (0, import_node_util.promisify)(import_node_child_process.execFile);
+function sniffImage(buf) {
+  if (buf.length >= 24 && buf.readUInt32BE(0) === 2303741511) {
+    return { format: "png", width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  if (buf.length >= 10 && buf.toString("latin1", 0, 4) === "GIF8") {
+    return { format: "gif", width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
+  }
+  if (buf.length >= 4 && buf[0] === 255 && buf[1] === 216) {
+    let i = 2;
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 255) {
+        i += 1;
+        continue;
+      }
+      const marker = buf[i + 1] ?? 0;
+      if (marker >= 192 && marker <= 207 && marker !== 196 && marker !== 200 && marker !== 204) {
+        return { format: "jpeg", width: buf.readUInt16BE(i + 7), height: buf.readUInt16BE(i + 5) };
+      }
+      if (marker === 255 || marker === 1 || marker >= 208 && marker <= 217) {
+        i += 2;
+        continue;
+      }
+      i += 2 + buf.readUInt16BE(i + 2);
+    }
+    return { format: "jpeg" };
+  }
+  if (buf.length >= 12 && buf.toString("latin1", 0, 4) === "RIFF" && buf.toString("latin1", 8, 12) === "WEBP") {
+    return { format: "webp" };
+  }
+  if (buf.length >= 12 && buf.toString("latin1", 4, 8) === "ftyp") {
+    const brand = buf.toString("latin1", 8, 12);
+    return { format: brand.indexOf("avi") === 0 ? "avif" : "heic" };
+  }
+  const head = buf.toString("utf8", 0, Math.min(buf.length, 1024)).replace(/^\uFEFF/, "").trimStart().toLowerCase();
+  if (head.indexOf("<svg") === 0 || head.indexOf("<?xml") === 0 && head.indexOf("<svg") !== -1) {
+    return { format: "svg" };
+  }
+  if (head.indexOf("<!doctype html") === 0 || head.indexOf("<html") === 0) {
+    return { format: "html" };
+  }
+  return { format: "unknown" };
+}
+async function convertWithSips(buf) {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  const src = (0, import_node_path3.join)((0, import_node_os2.tmpdir)(), `designagent-img-${(0, import_node_crypto.randomUUID)()}`);
+  const out = `${src}.png`;
+  try {
+    await (0, import_promises2.writeFile)(src, buf);
+    await execFileAsync("sips", ["-s", "format", "png", "-Z", String(MAX_IMAGE_PX), src, "--out", out]);
+    return await (0, import_promises2.readFile)(out);
+  } catch {
+    return null;
+  } finally {
+    await (0, import_promises2.rm)(src, { force: true }).catch(() => {
+    });
+    await (0, import_promises2.rm)(out, { force: true }).catch(() => {
+    });
+  }
+}
+async function ensureFigmaImage(input) {
+  let buf = input;
+  let info = sniffImage(buf);
+  if (info.format === "svg") {
+    throw new Error("This is an SVG, not a bitmap. Use place_svg (svg or path) to place it as vectors.");
+  }
+  if (info.format === "html") {
+    throw new Error("The source returned an HTML page, not an image (a login, consent or error page). Use a direct image URL.");
+  }
+  if (info.format === "unknown") {
+    throw new Error("Not a recognisable image. Figma accepts PNG, JPEG or GIF; check the URL, path or base64 data.");
+  }
+  const tooBig = (i) => Math.max(i.width ?? 0, i.height ?? 0) > MAX_IMAGE_PX;
+  if (info.format === "webp" || info.format === "avif" || info.format === "heic" || tooBig(info)) {
+    const why = tooBig(info) ? `Image is ${info.width}\xD7${info.height} px; Figma's limit is ${MAX_IMAGE_PX} px per side.` : `${info.format.toUpperCase()} images are not supported by Figma (PNG, JPEG or GIF only).`;
+    const converted = await convertWithSips(buf);
+    if (!converted) {
+      throw new Error(`${why} Convert or resize it to PNG/JPEG first, then retry.`);
+    }
+    buf = converted;
+    info = sniffImage(buf);
+    if (info.format !== "png" || tooBig(info)) {
+      throw new Error(`${why} Automatic conversion failed; convert or resize it to PNG/JPEG first, then retry.`);
+    }
+  }
+  return buf;
+}
 async function loadImageBase64(args) {
   let buf;
   if (args.data) {
@@ -25448,6 +25538,7 @@ async function loadImageBase64(args) {
   } else {
     throw new Error('Provide an image source: one of "url", "path", or "data".');
   }
+  buf = await ensureFigmaImage(buf);
   if (buf.length > MAX_IMAGE_BYTES) {
     throw new Error(
       `Image is ${(buf.length / 1024 / 1024).toFixed(1)} MB; max is ${MAX_IMAGE_BYTES / 1024 / 1024} MB. Use a smaller image.`
@@ -25661,7 +25752,7 @@ async function handleServerRequest(command, params) {
   }
 }
 var IMAGE_SOURCE_SCHEMA = {
-  url: external_exports.string().optional().describe("Image URL (fetched by the server)."),
+  url: external_exports.string().optional().describe("Direct image URL (fetched by the server). PNG, JPEG or GIF, up to 4096 px per side and 4 MB; WebP/AVIF/HEIC and oversized images are converted on macOS only. For SVG use place_svg."),
   path: external_exports.string().optional().describe("Absolute local file path to an image."),
   data: external_exports.string().optional().describe("Base64 image data or a data: URL."),
   scaleMode: external_exports.enum(["FILL", "FIT", "CROP", "TILE"]).optional().describe("Default FILL.")
@@ -26146,7 +26237,6 @@ server.registerTool(
     }
   }
 );
-var execFileAsync = (0, import_node_util.promisify)(import_node_child_process.execFile);
 server.registerTool(
   "capture_simulator",
   {
@@ -26270,7 +26360,7 @@ server.registerTool(
 server.registerTool(
   "list_animation_styles",
   {
-    description: "(Beta) List the Figma Motion animation styles available in the current document. Use a returned styleId with apply_animation.",
+    description: "(Beta) List the Figma Motion animation styles available in the current document, with the configurable props each one accepts. Use a returned styleId (or name) with apply_animation.",
     inputSchema: {}
   },
   async () => run("list_animation_styles")
@@ -26281,10 +26371,10 @@ server.registerTool(
     description: "(Beta \u2014 Figma Motion) Apply an animation style to a node. Returns an appliedId you can pass to remove_animation.",
     inputSchema: {
       nodeId: external_exports.string(),
-      styleId: external_exports.string().describe("Animation style id from list_animation_styles."),
-      duration: external_exports.number().optional().describe("Duration in seconds."),
+      styleId: external_exports.string().describe("Animation style id or name from list_animation_styles. Do not guess: an unknown value fails with the list of valid names."),
+      duration: external_exports.number().optional().describe("Duration in seconds (0.3, not 300)."),
       timelineOffset: external_exports.number().optional().describe("Timeline offset in seconds."),
-      properties: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Style-specific configuration props (e.g. direction, distance).")
+      properties: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Style-specific props. Only use the prop names and values list_animation_styles reports for this style.")
     }
   },
   async ({ nodeId, styleId, duration: duration3, timelineOffset, properties }) => run("apply_animation", { nodeId, styleId, duration: duration3, timelineOffset, props: properties })

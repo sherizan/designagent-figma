@@ -2089,16 +2089,43 @@ function imagePaintFromBase64(base64: unknown, scaleMode: unknown): { paint: Ima
   if (!data) {
     throw new Error('No image data received.');
   }
-  const image = figma.createImage(figma.base64Decode(data));
+  let image: Image;
+  try {
+    image = figma.createImage(figma.base64Decode(data));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Figma rejected the image (${detail}). It accepts PNG, JPEG or GIF up to 4096 px per side; convert or resize and retry. For SVG use place_svg.`
+    );
+  }
   return {
     image,
     paint: { type: 'IMAGE', scaleMode: normalizeScaleMode(scaleMode), imageHash: image.hash }
   };
 }
 
+// Figma Motion is Beta and missing on older desktop builds; fail with something actionable.
+function availableAnimationStyles(): AvailableAnimationStyle[] {
+  if (!figma.motion || typeof figma.motion.figmaAnimationStyles !== 'function') {
+    throw new Error('Figma Motion is not available in this Figma build or file. Update Figma Desktop and retry.');
+  }
+  return figma.motion.figmaAnimationStyles();
+}
+
+function nonNegativeSeconds(value: unknown, fallback: number): number {
+  const n = toNumber(value, fallback);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 function selectAndReturn(node: SceneNode): { id: string; name: string; type: string } {
-  figma.currentPage.selection = [node];
-  figma.viewport.scrollAndZoomIntoView([node]);
+  // Selection only works on the current page. The node already exists by now, so a
+  // failure here must not surface as a tool error (the caller would retry and duplicate it).
+  try {
+    figma.currentPage.selection = [node];
+    figma.viewport.scrollAndZoomIntoView([node]);
+  } catch {
+    // node lives on another page: leave the selection alone
+  }
   return { id: node.id, name: node.name, type: node.type };
 }
 
@@ -2757,12 +2784,12 @@ async function runBridgeCommand(
       return selectAndReturn(instance);
     }
     case 'list_animation_styles': {
-      const styles = figma.motion.figmaAnimationStyles();
       return {
-        styles: styles.map((s) => ({
+        styles: availableAnimationStyles().map((s) => ({
           styleId: s.styleId,
           name: s.name,
-          description: s.description ?? null
+          description: s.description ?? null,
+          props: s.props ?? null
         }))
       };
     }
@@ -2771,22 +2798,48 @@ async function runBridgeCommand(
       if (!isSceneNode(node)) {
         throw new Error('apply_animation requires a scene node.');
       }
-      const styleId = String(params.styleId ?? '');
-      if (!styleId) {
+      const wanted = String(params.styleId ?? '').trim();
+      if (!wanted) {
         throw new Error('apply_animation requires a styleId. Call list_animation_styles.');
+      }
+      // Accept the id or the display name; models often pass "Fade in" rather than the id.
+      const styles = availableAnimationStyles();
+      const lower = wanted.toLowerCase();
+      const style =
+        styles.find((s) => s.styleId === wanted) ??
+        styles.find((s) => s.name.toLowerCase() === lower || s.styleId.toLowerCase() === lower);
+      if (!style) {
+        const names = styles.map((s) => s.name).join(', ');
+        throw new Error(`No animation style "${wanted}". Available: ${names || 'none in this file'}.`);
       }
       const config: { duration?: number; timelineOffset?: number; props?: Record<string, unknown> } = {};
       if (params.duration != null) {
-        config.duration = toNumber(params.duration, 0.3);
+        config.duration = nonNegativeSeconds(params.duration, 0.3);
       }
       if (params.timelineOffset != null) {
-        config.timelineOffset = toNumber(params.timelineOffset, 0);
+        config.timelineOffset = nonNegativeSeconds(params.timelineOffset, 0);
       }
       if (params.props && typeof params.props === 'object') {
         config.props = params.props as Record<string, unknown>;
       }
-      const appliedId = node.applyAnimationStyle(styleId, config as AnimationStyleConfiguration);
-      return { id: node.id, name: node.name, appliedId };
+      try {
+        const appliedId = node.applyAnimationStyle(style.styleId, config as AnimationStyleConfiguration);
+        return { id: node.id, name: node.name, styleId: style.styleId, appliedId };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const hints: string[] = [];
+        if (config.props) {
+          hints.push(
+            style.props
+              ? `Valid props for "${style.name}": ${JSON.stringify(style.props)}.`
+              : `"${style.name}" takes no props; retry without properties.`
+          );
+        }
+        if (typeof node.getTopLevelFrame === 'function' && !node.getTopLevelFrame()) {
+          hints.push('The node is not inside a top-level frame; move it into a frame on the page first.');
+        }
+        throw new Error([`Could not apply "${style.name}": ${detail}`, ...hints].join(' '));
+      }
     }
     case 'remove_animation': {
       const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));

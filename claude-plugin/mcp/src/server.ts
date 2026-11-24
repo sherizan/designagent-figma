@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -418,6 +418,108 @@ async function run(command: string, params: Record<string, unknown> = {}, label?
 }
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4 MB — keeps the bridge payload sane
+const MAX_IMAGE_PX = 4096; // figma.createImage rejects anything larger on either side
+const execFileAsync = promisify(execFile);
+
+type SniffedImage = { format: string; width?: number; height?: number };
+
+// Identify an image from its first bytes. figma.createImage only takes PNG, JPEG and GIF
+// up to 4096 px, and fails with an opaque error on anything else — so check here, where
+// we can say what to do instead.
+function sniffImage(buf: Buffer): SniffedImage {
+  if (buf.length >= 24 && buf.readUInt32BE(0) === 0x89504e47) {
+    return { format: 'png', width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  if (buf.length >= 10 && buf.toString('latin1', 0, 4) === 'GIF8') {
+    return { format: 'gif', width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
+  }
+  if (buf.length >= 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+    // Walk the JPEG segments to the first start-of-frame marker, which holds the size.
+    let i = 2;
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 0xff) {
+        i += 1;
+        continue;
+      }
+      const marker = buf[i + 1] ?? 0;
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { format: 'jpeg', width: buf.readUInt16BE(i + 7), height: buf.readUInt16BE(i + 5) };
+      }
+      if (marker === 0xff || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) {
+        i += 2;
+        continue;
+      }
+      i += 2 + buf.readUInt16BE(i + 2);
+    }
+    return { format: 'jpeg' };
+  }
+  if (buf.length >= 12 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') {
+    return { format: 'webp' };
+  }
+  if (buf.length >= 12 && buf.toString('latin1', 4, 8) === 'ftyp') {
+    const brand = buf.toString('latin1', 8, 12);
+    return { format: brand.indexOf('avi') === 0 ? 'avif' : 'heic' };
+  }
+  const head = buf.toString('utf8', 0, Math.min(buf.length, 1024)).replace(/^\uFEFF/, '').trimStart().toLowerCase();
+  if (head.indexOf('<svg') === 0 || (head.indexOf('<?xml') === 0 && head.indexOf('<svg') !== -1)) {
+    return { format: 'svg' };
+  }
+  if (head.indexOf('<!doctype html') === 0 || head.indexOf('<html') === 0) {
+    return { format: 'html' };
+  }
+  return { format: 'unknown' };
+}
+
+// macOS ships `sips`, which reads WebP / AVIF / HEIC and can downscale. Returns a PNG
+// (longest side capped at MAX_IMAGE_PX), or null when the conversion is not possible.
+async function convertWithSips(buf: Buffer): Promise<Buffer | null> {
+  if (process.platform !== 'darwin') {
+    return null;
+  }
+  const src = join(tmpdir(), `designagent-img-${randomUUID()}`);
+  const out = `${src}.png`;
+  try {
+    await writeFile(src, buf);
+    await execFileAsync('sips', ['-s', 'format', 'png', '-Z', String(MAX_IMAGE_PX), src, '--out', out]);
+    return await readFile(out);
+  } catch {
+    return null;
+  } finally {
+    await rm(src, { force: true }).catch(() => {});
+    await rm(out, { force: true }).catch(() => {});
+  }
+}
+
+// Make sure the bytes are something Figma will accept, converting on macOS where we can.
+async function ensureFigmaImage(input: Buffer): Promise<Buffer> {
+  let buf = input;
+  let info = sniffImage(buf);
+  if (info.format === 'svg') {
+    throw new Error('This is an SVG, not a bitmap. Use place_svg (svg or path) to place it as vectors.');
+  }
+  if (info.format === 'html') {
+    throw new Error('The source returned an HTML page, not an image (a login, consent or error page). Use a direct image URL.');
+  }
+  if (info.format === 'unknown') {
+    throw new Error('Not a recognisable image. Figma accepts PNG, JPEG or GIF; check the URL, path or base64 data.');
+  }
+  const tooBig = (i: SniffedImage) => Math.max(i.width ?? 0, i.height ?? 0) > MAX_IMAGE_PX;
+  if (info.format === 'webp' || info.format === 'avif' || info.format === 'heic' || tooBig(info)) {
+    const why = tooBig(info)
+      ? `Image is ${info.width}×${info.height} px; Figma's limit is ${MAX_IMAGE_PX} px per side.`
+      : `${info.format.toUpperCase()} images are not supported by Figma (PNG, JPEG or GIF only).`;
+    const converted = await convertWithSips(buf);
+    if (!converted) {
+      throw new Error(`${why} Convert or resize it to PNG/JPEG first, then retry.`);
+    }
+    buf = converted;
+    info = sniffImage(buf);
+    if (info.format !== 'png' || tooBig(info)) {
+      throw new Error(`${why} Automatic conversion failed; convert or resize it to PNG/JPEG first, then retry.`);
+    }
+  }
+  return buf;
+}
 
 // Resolve an image source (url | path | data) to base64. The server does this
 // IO because the Figma plugin sandbox can't make network/file requests.
@@ -441,6 +543,7 @@ async function loadImageBase64(args: {
   } else {
     throw new Error('Provide an image source: one of "url", "path", or "data".');
   }
+  buf = await ensureFigmaImage(buf);
   if (buf.length > MAX_IMAGE_BYTES) {
     throw new Error(
       `Image is ${(buf.length / 1024 / 1024).toFixed(1)} MB; max is ${MAX_IMAGE_BYTES / 1024 / 1024} MB. Use a smaller image.`
@@ -698,7 +801,7 @@ async function handleServerRequest(command: string, params: Record<string, unkno
 }
 
 const IMAGE_SOURCE_SCHEMA = {
-  url: z.string().optional().describe('Image URL (fetched by the server).'),
+  url: z.string().optional().describe('Direct image URL (fetched by the server). PNG, JPEG or GIF, up to 4096 px per side and 4 MB; WebP/AVIF/HEIC and oversized images are converted on macOS only. For SVG use place_svg.'),
   path: z.string().optional().describe('Absolute local file path to an image.'),
   data: z.string().optional().describe('Base64 image data or a data: URL.'),
   scaleMode: z.enum(['FILL', 'FIT', 'CROP', 'TILE']).optional().describe('Default FILL.')
@@ -1273,8 +1376,6 @@ server.registerTool(
   }
 );
 
-const execFileAsync = promisify(execFile);
-
 server.registerTool(
   'capture_simulator',
   {
@@ -1413,7 +1514,7 @@ server.registerTool(
   'list_animation_styles',
   {
     description:
-      '(Beta) List the Figma Motion animation styles available in the current document. Use a returned styleId with apply_animation.',
+      '(Beta) List the Figma Motion animation styles available in the current document, with the configurable props each one accepts. Use a returned styleId (or name) with apply_animation.',
     inputSchema: {}
   },
   async () => run('list_animation_styles')
@@ -1426,13 +1527,13 @@ server.registerTool(
       '(Beta — Figma Motion) Apply an animation style to a node. Returns an appliedId you can pass to remove_animation.',
     inputSchema: {
       nodeId: z.string(),
-      styleId: z.string().describe('Animation style id from list_animation_styles.'),
-      duration: z.number().optional().describe('Duration in seconds.'),
+      styleId: z.string().describe('Animation style id or name from list_animation_styles. Do not guess: an unknown value fails with the list of valid names.'),
+      duration: z.number().optional().describe('Duration in seconds (0.3, not 300).'),
       timelineOffset: z.number().optional().describe('Timeline offset in seconds.'),
       properties: z
         .record(z.string(), z.unknown())
         .optional()
-        .describe('Style-specific configuration props (e.g. direction, distance).')
+        .describe('Style-specific props. Only use the prop names and values list_animation_styles reports for this style.')
     }
   },
   async ({ nodeId, styleId, duration, timelineOffset, properties }) =>
