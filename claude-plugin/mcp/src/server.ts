@@ -253,6 +253,9 @@ function callPlugin(
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (!brokerSocket || brokerSocket.readyState !== WebSocket.OPEN || !brokerReady) {
+      // Never reached the broker: count the attempt and file it with the other setup gaps.
+      countToolCall(label);
+      countToolCall(`${label}_nc`);
       reject(
         new Error(
           'DesignAgent bridge is starting up or not connected. In Figma, open the DesignAgent plugin and click "Start" on the Claude bridge bar, then retry.'
@@ -283,7 +286,10 @@ function callPlugin(
 // Counts tool-call *names* only — never params, node data, or design content —
 // and posts the tallies to designagent.dev so we know which bridge tools earn
 // their keep. A failed call also counts by reason (name only, no message): `<tool>_err`
-// (tool failed), `<tool>_nc` (plugin not attached), `<tool>_timeout` (no reply).
+// (tool failed), `<tool>_nc` (plugin not attached), `<tool>_timeout` (no reply),
+// `<tool>_pre` (failed server-side before reaching the plugin, e.g. an image that
+// could not be loaded). Operations inside `batch` count as `b_<command>` (+ `_err`);
+// resource reads count as `res_<name>`.
 // Opt out with DESIGNAGENT_TELEMETRY=0. See README "Telemetry".
 
 const TELEMETRY_ENABLED = process.env.DESIGNAGENT_TELEMETRY !== '0';
@@ -296,6 +302,31 @@ const toolCounts = new Map<string, number>();
 function countToolCall(command: string): void {
   if (TELEMETRY_ENABLED) {
     toolCounts.set(command, (toolCounts.get(command) ?? 0) + 1);
+  }
+}
+
+// Tally the operations inside one `batch` reply. Sub-command names are model-written
+// strings, so only names the sandbox actually ran become counters: anything it did not
+// recognise (or a nested batch) is folded into `b_unknown`.
+const COUNTER_NAME = /^[a-z][a-z0-9_]{0,40}$/;
+function countBatchOps(result: unknown): void {
+  const results = (result as { results?: unknown } | null)?.results;
+  if (!Array.isArray(results)) {
+    return;
+  }
+  for (const entry of results) {
+    const r = (entry ?? {}) as { ok?: unknown; command?: unknown; error?: unknown };
+    const command = typeof r.command === 'string' ? r.command : '';
+    const error = typeof r.error === 'string' ? r.error : '';
+    const known =
+      COUNTER_NAME.test(command) &&
+      error.indexOf('Unknown command') !== 0 &&
+      error.indexOf('Nested batch') !== 0;
+    const name = known ? `b_${command}` : 'b_unknown';
+    countToolCall(name);
+    if (!r.ok) {
+      countToolCall(`${name}_err`);
+    }
   }
 }
 
@@ -714,9 +745,10 @@ server.registerTool(
 // --- MCP resources: let Claude read live Figma state without spending a tool call. ---
 // Each read forwards to the plugin over the broker; if the bridge is down we return a
 // readable note in the contents rather than throwing (resources shouldn't hard-fail).
-async function resourceText(uri: URL, command: string, params: Record<string, unknown> = {}) {
+async function resourceText(uri: URL, command: string, label: string) {
   try {
-    const value = await callPlugin(command, params);
+    // Labelled so a resource read is not counted as a call to the tool it rides.
+    const value = await callPlugin(command, {}, undefined, label);
     const text = typeof value === 'string' ? value : JSON.stringify(value);
     return { contents: [{ uri: uri.href, mimeType: 'application/json', text }] };
   } catch (error) {
@@ -735,7 +767,7 @@ server.registerResource(
     description: 'Structured UI spec (hierarchy, tokens, layout, text, components) of what is selected now.',
     mimeType: 'application/json'
   },
-  async (uri) => resourceText(uri, 'get_spec')
+  async (uri) => resourceText(uri, 'get_spec', 'res_selection')
 );
 
 server.registerResource(
@@ -746,7 +778,7 @@ server.registerResource(
     description: 'Bridge status: connected file name, current page, and selection summary.',
     mimeType: 'application/json'
   },
-  async (uri) => resourceText(uri, 'status')
+  async (uri) => resourceText(uri, 'status', 'res_file')
 );
 
 // --- MCP prompts: reusable design workflows, surfaced as /mcp__designagent__<name>. ---
@@ -1200,6 +1232,7 @@ server.registerTool(
       const imageBase64 = await loadImageBase64(args);
       return run('set_image', { nodeId: args.nodeId, imageBase64, scaleMode: args.scaleMode });
     } catch (error) {
+      countToolCall('set_image_pre');
       return fail(error);
     }
   }
@@ -1234,6 +1267,7 @@ server.registerTool(
         height: args.height
       });
     } catch (error) {
+      countToolCall('place_image_pre');
       return fail(error);
     }
   }
@@ -1283,8 +1317,9 @@ server.registerTool(
         y: args.y,
         width: Math.round(pxW / Math.max(1, args.scale ?? 3)),
         height: Math.round(pxH / Math.max(1, args.scale ?? 3))
-      });
+      }, 'capture_simulator');
     } catch (error) {
+      countToolCall('capture_simulator_pre');
       return fail(error);
     }
   }
@@ -1314,6 +1349,7 @@ server.registerTool(
       if (!svg) return fail(new Error('Provide "svg" or "path".'));
       return run('place_svg', { ...args, svg });
     } catch (error) {
+      countToolCall('place_svg_pre');
       return fail(error);
     }
   }
@@ -1365,6 +1401,7 @@ server.registerTool(
         y: args.y
       }, 'place_icon');
     } catch (error) {
+      countToolCall('place_icon_pre');
       return fail(error);
     }
   }
@@ -1559,6 +1596,7 @@ server.registerTool(
     }
   },
   async (args) => {
+    let sent = false;
     try {
       const operations = [];
       for (const op of args.operations) {
@@ -1572,11 +1610,13 @@ server.registerTool(
         }
         operations.push({ command: op.command, params });
       }
+      sent = true;
       const result = (await callPlugin(
         'batch',
         { operations, screenshot: args.screenshot, screenshotScale: args.screenshotScale },
         60_000
       )) as { image?: { base64: string; mimeType: string; name?: string; width?: number; height?: number } } & Record<string, unknown>;
+      countBatchOps(result);
       if (result?.image?.base64) {
         const { image, ...rest } = result;
         return {
@@ -1589,6 +1629,9 @@ server.registerTool(
       }
       return ok(result);
     } catch (error) {
+      if (!sent) {
+        countToolCall('batch_pre');
+      }
       return fail(error);
     }
   }

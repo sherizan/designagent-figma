@@ -25310,6 +25310,8 @@ function connectToBroker() {
 function callPlugin(command, params = {}, timeoutMs = REQUEST_TIMEOUT_MS, label = command) {
   return new Promise((resolve3, reject) => {
     if (!brokerSocket || brokerSocket.readyState !== import_websocket.default.OPEN || !brokerReady) {
+      countToolCall(label);
+      countToolCall(`${label}_nc`);
       reject(
         new Error(
           'DesignAgent bridge is starting up or not connected. In Figma, open the DesignAgent plugin and click "Start" on the Claude bridge bar, then retry.'
@@ -25341,6 +25343,24 @@ var toolCounts = /* @__PURE__ */ new Map();
 function countToolCall(command) {
   if (TELEMETRY_ENABLED) {
     toolCounts.set(command, (toolCounts.get(command) ?? 0) + 1);
+  }
+}
+var COUNTER_NAME = /^[a-z][a-z0-9_]{0,40}$/;
+function countBatchOps(result) {
+  const results = result?.results;
+  if (!Array.isArray(results)) {
+    return;
+  }
+  for (const entry of results) {
+    const r = entry ?? {};
+    const command = typeof r.command === "string" ? r.command : "";
+    const error2 = typeof r.error === "string" ? r.error : "";
+    const known = COUNTER_NAME.test(command) && error2.indexOf("Unknown command") !== 0 && error2.indexOf("Nested batch") !== 0;
+    const name = known ? `b_${command}` : "b_unknown";
+    countToolCall(name);
+    if (!r.ok) {
+      countToolCall(`${name}_err`);
+    }
   }
 }
 var telemetryId;
@@ -25678,9 +25698,9 @@ server.registerTool(
   },
   async ({ nodeId, depth }) => run("get_spec", { nodeId, depth })
 );
-async function resourceText(uri, command, params = {}) {
+async function resourceText(uri, command, label) {
   try {
-    const value = await callPlugin(command, params);
+    const value = await callPlugin(command, {}, void 0, label);
     const text = typeof value === "string" ? value : JSON.stringify(value);
     return { contents: [{ uri: uri.href, mimeType: "application/json", text }] };
   } catch (error2) {
@@ -25698,7 +25718,7 @@ server.registerResource(
     description: "Structured UI spec (hierarchy, tokens, layout, text, components) of what is selected now.",
     mimeType: "application/json"
   },
-  async (uri) => resourceText(uri, "get_spec")
+  async (uri) => resourceText(uri, "get_spec", "res_selection")
 );
 server.registerResource(
   "current-file",
@@ -25708,7 +25728,7 @@ server.registerResource(
     description: "Bridge status: connected file name, current page, and selection summary.",
     mimeType: "application/json"
   },
-  async (uri) => resourceText(uri, "status")
+  async (uri) => resourceText(uri, "status", "res_file")
 );
 server.registerPrompt(
   "analyze_selection",
@@ -26088,6 +26108,7 @@ server.registerTool(
       const imageBase64 = await loadImageBase64(args);
       return run("set_image", { nodeId: args.nodeId, imageBase64, scaleMode: args.scaleMode });
     } catch (error2) {
+      countToolCall("set_image_pre");
       return fail(error2);
     }
   }
@@ -26120,6 +26141,7 @@ server.registerTool(
         height: args.height
       });
     } catch (error2) {
+      countToolCall("place_image_pre");
       return fail(error2);
     }
   }
@@ -26164,8 +26186,9 @@ server.registerTool(
         y: args.y,
         width: Math.round(pxW / Math.max(1, args.scale ?? 3)),
         height: Math.round(pxH / Math.max(1, args.scale ?? 3))
-      });
+      }, "capture_simulator");
     } catch (error2) {
+      countToolCall("capture_simulator_pre");
       return fail(error2);
     }
   }
@@ -26191,6 +26214,7 @@ server.registerTool(
       if (!svg) return fail(new Error('Provide "svg" or "path".'));
       return run("place_svg", { ...args, svg });
     } catch (error2) {
+      countToolCall("place_svg_pre");
       return fail(error2);
     }
   }
@@ -26238,6 +26262,7 @@ server.registerTool(
         y: args.y
       }, "place_icon");
     } catch (error2) {
+      countToolCall("place_icon_pre");
       return fail(error2);
     }
   }
@@ -26396,6 +26421,7 @@ server.registerTool(
     }
   },
   async (args) => {
+    let sent = false;
     try {
       const operations = [];
       for (const op of args.operations) {
@@ -26405,11 +26431,13 @@ server.registerTool(
         }
         operations.push({ command: op.command, params });
       }
+      sent = true;
       const result = await callPlugin(
         "batch",
         { operations, screenshot: args.screenshot, screenshotScale: args.screenshotScale },
         6e4
       );
+      countBatchOps(result);
       if (result?.image?.base64) {
         const { image, ...rest } = result;
         return {
@@ -26422,6 +26450,9 @@ server.registerTool(
       }
       return ok(result);
     } catch (error2) {
+      if (!sent) {
+        countToolCall("batch_pre");
+      }
       return fail(error2);
     }
   }
