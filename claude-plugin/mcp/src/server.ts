@@ -1187,6 +1187,30 @@ server.registerTool(
 );
 
 server.registerTool(
+  'bind_variable',
+  {
+    description:
+      'Bind a Figma variable to a property of a node so the design stays tied to the design system (or pass variable: null to unbind). Works for spacing, radius, stroke weight, opacity, size and min/max, typography, fill/stroke colour, and effect values. The variable type must match the field: FLOAT for numbers, COLOR for fill/stroke/effect.color, STRING for fontFamily/fontStyle/characters, BOOLEAN for visible. Opacity variables are percentages (0–100). min/max and padding/gap need an auto-layout frame or a child of one.',
+    inputSchema: {
+      nodeId: z.string(),
+      field: z
+        .string()
+        .describe(
+          'What to bind. Layout: padding (all four) | paddingHorizontal | paddingVertical | paddingLeft/Right/Top/Bottom | gap (itemSpacing) | counterAxisSpacing | gridRowGap | gridColumnGap. Shape: cornerRadius | topLeftRadius/topRightRadius/bottomLeftRadius/bottomRightRadius | strokeWeight | strokeTopWeight/… | opacity | visible. Size: width | height | minWidth | maxWidth | minHeight | maxHeight. Text nodes: fontSize | fontWeight | lineHeight | letterSpacing | paragraphSpacing | paragraphIndent | fontFamily | fontStyle | characters. Colour: fill | stroke (first solid paint). Effects: effect.color | effect.radius | effect.spread | effect.offsetX | effect.offsetY.'
+        ),
+      variable: z
+        .string()
+        .nullable()
+        .describe('Variable id (VariableID:…), exact name ("spacing/md" or "Collection/spacing/md") from list_variables_and_styles, or a library variable key. null removes the binding.'),
+      effectIndex: z.number().optional().describe('effect.* fields: which effect on the node (default 0).'),
+      start: z.number().optional().describe('Text fields: bind only this character range (with end).'),
+      end: z.number().optional()
+    }
+  },
+  async (args) => run('bind_variable', args as Record<string, unknown>)
+);
+
+server.registerTool(
   'list_variables_and_styles',
   {
     description:

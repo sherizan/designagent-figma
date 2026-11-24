@@ -2104,6 +2104,182 @@ function imagePaintFromBase64(base64: unknown, scaleMode: unknown): { paint: Ima
   };
 }
 
+// ---- bind_variable ----
+// One tool binds (or, with variable: null, unbinds) a variable on any bindable field.
+const NODE_BIND_FIELDS: Record<string, VariableResolvedDataType> = {
+  width: 'FLOAT', height: 'FLOAT', minWidth: 'FLOAT', maxWidth: 'FLOAT', minHeight: 'FLOAT', maxHeight: 'FLOAT',
+  itemSpacing: 'FLOAT', counterAxisSpacing: 'FLOAT', gridRowGap: 'FLOAT', gridColumnGap: 'FLOAT',
+  paddingLeft: 'FLOAT', paddingRight: 'FLOAT', paddingTop: 'FLOAT', paddingBottom: 'FLOAT',
+  cornerRadius: 'FLOAT', topLeftRadius: 'FLOAT', topRightRadius: 'FLOAT', bottomLeftRadius: 'FLOAT', bottomRightRadius: 'FLOAT',
+  strokeWeight: 'FLOAT', strokeTopWeight: 'FLOAT', strokeRightWeight: 'FLOAT', strokeBottomWeight: 'FLOAT', strokeLeftWeight: 'FLOAT',
+  opacity: 'FLOAT', visible: 'BOOLEAN', characters: 'STRING'
+};
+const TEXT_BIND_FIELDS: Record<string, VariableResolvedDataType> = {
+  fontSize: 'FLOAT', fontWeight: 'FLOAT', lineHeight: 'FLOAT', letterSpacing: 'FLOAT',
+  paragraphSpacing: 'FLOAT', paragraphIndent: 'FLOAT', fontFamily: 'STRING', fontStyle: 'STRING'
+};
+const EFFECT_BIND_FIELDS: Record<string, VariableResolvedDataType> = {
+  color: 'COLOR', radius: 'FLOAT', spread: 'FLOAT', offsetX: 'FLOAT', offsetY: 'FLOAT'
+};
+// Shorthands that fan out to several real fields.
+const BIND_ALIASES: Record<string, string[]> = {
+  padding: ['paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom'],
+  paddingHorizontal: ['paddingLeft', 'paddingRight'],
+  paddingVertical: ['paddingTop', 'paddingBottom'],
+  gap: ['itemSpacing']
+};
+
+// Resolve a variable from an id, a local name ("Collection/name" or just "name"), or a library key.
+async function resolveVariableRef(ref: string): Promise<Variable> {
+  if (ref.indexOf('VariableID:') === 0) {
+    const byId = await figma.variables.getVariableByIdAsync(ref);
+    if (byId) return byId;
+    throw new Error(`No variable with id ${ref}. Call list_variables_and_styles.`);
+  }
+  const [locals, collections] = await Promise.all([
+    figma.variables.getLocalVariablesAsync(),
+    figma.variables.getLocalVariableCollectionsAsync()
+  ]);
+  const collectionName = new Map<string, string>();
+  for (const c of collections) collectionName.set(c.id, c.name);
+  const lower = ref.toLowerCase();
+  const matches = locals.filter(
+    (v) =>
+      v.name.toLowerCase() === lower ||
+      `${collectionName.get(v.variableCollectionId) ?? ''}/${v.name}`.toLowerCase() === lower
+  );
+  if (matches.length === 1 && matches[0]) return matches[0];
+  if (matches.length > 1) {
+    const options = matches
+      .map((v) => `${collectionName.get(v.variableCollectionId) ?? '?'}/${v.name} (${v.id})`)
+      .join(', ');
+    throw new Error(`"${ref}" matches several variables: ${options}. Pass the id or "Collection/name".`);
+  }
+  try {
+    return await figma.variables.importVariableByKeyAsync(ref);
+  } catch {
+    throw new Error(`No variable named "${ref}" in this file (and it is not a library variable key). Call list_variables_and_styles.`);
+  }
+}
+
+function assertVariableType(variable: Variable | null, expected: VariableResolvedDataType, field: string): void {
+  if (variable && variable.resolvedType !== expected) {
+    throw new Error(`"${field}" needs a ${expected} variable; "${variable.name}" is ${variable.resolvedType}.`);
+  }
+}
+
+async function bindVariable(params: Record<string, unknown>): Promise<unknown> {
+  const node = await getNodeByIdGuarded(String(params.nodeId ?? ''));
+  if (!isSceneNode(node)) {
+    throw new Error('bind_variable requires a scene node.');
+  }
+  const field = String(params.field ?? '').trim();
+  if (!field) {
+    throw new Error('bind_variable requires a field, e.g. "padding", "cornerRadius", "fontSize", "fill", "effect.radius".');
+  }
+  const ref = params.variable == null ? '' : String(params.variable).trim();
+  const variable = ref ? await resolveVariableRef(ref) : null;
+  const done = (bound: string[]) => ({
+    id: node.id,
+    name: node.name,
+    bound,
+    variable: variable ? { id: variable.id, name: variable.name, type: variable.resolvedType } : null
+  });
+
+  // Paints: fill / stroke bind the colour of the first solid paint.
+  if (field === 'fill' || field === 'stroke') {
+    const key = field === 'fill' ? 'fills' : 'strokes';
+    if (!(key in node)) {
+      throw new Error(`This node has no ${key}.`);
+    }
+    assertVariableType(variable, 'COLOR', field);
+    const target = node as unknown as Record<'fills' | 'strokes', ReadonlyArray<Paint> | PluginAPI['mixed']>;
+    const paints = target[key];
+    if (paints === figma.mixed) {
+      throw new Error(`${key} are mixed on this node; set a single ${field} first.`);
+    }
+    const index = paints.findIndex((p) => p.type === 'SOLID');
+    const current = paints[index];
+    if (index < 0 || !current || current.type !== 'SOLID') {
+      throw new Error(`No solid ${field} to bind. Set a solid ${field} first (set_fill / set_stroke).`);
+    }
+    const next = paints.slice();
+    next[index] = figma.variables.setBoundVariableForPaint(current, 'color', variable);
+    target[key] = next;
+    return done([field]);
+  }
+
+  // Effects: "effect.radius", optional effectIndex.
+  if (field.indexOf('effect.') === 0) {
+    const sub = field.slice('effect.'.length);
+    const expected = EFFECT_BIND_FIELDS[sub];
+    if (!expected) {
+      throw new Error(`Unknown effect field "${sub}". Use effect.color | effect.radius | effect.spread | effect.offsetX | effect.offsetY.`);
+    }
+    if (!('effects' in node)) {
+      throw new Error('This node does not support effects.');
+    }
+    assertVariableType(variable, expected, field);
+    const effects = (node as BlendMixin).effects.slice();
+    const index = Math.max(0, Math.floor(toNumber(params.effectIndex, 0)));
+    const effect = effects[index];
+    if (!effect) {
+      throw new Error(`No effect at index ${index}; the node has ${effects.length}. Add one first (set_shadow / set_effect).`);
+    }
+    effects[index] = figma.variables.setBoundVariableForEffect(effect, sub as VariableBindableEffectField, variable);
+    (node as BlendMixin).effects = effects;
+    return done([field]);
+  }
+
+  // Typography.
+  const textType = TEXT_BIND_FIELDS[field];
+  if (textType) {
+    if (node.type !== 'TEXT') {
+      throw new Error(`"${field}" can only be bound on a text node.`);
+    }
+    assertVariableType(variable, textType, field);
+    await loadFontForExistingText(node);
+    const textField = field as VariableBindableTextField;
+    if (params.start != null && params.end != null) {
+      const start = Math.max(0, Math.floor(toNumber(params.start, 0)));
+      const end = Math.min(node.characters.length, Math.floor(toNumber(params.end, node.characters.length)));
+      node.setRangeBoundVariable(start, end, textField, variable);
+    } else {
+      node.setBoundVariable(textField, variable);
+    }
+    return done([field]);
+  }
+
+  // Plain node fields, including shorthands. Uniform cornerRadius / strokeWeight fall back
+  // to the per-side fields when the node only exposes those.
+  let targets = BIND_ALIASES[field] ?? [field];
+  if (field === 'cornerRadius' && !('cornerRadius' in node) && 'topLeftRadius' in node) {
+    targets = ['topLeftRadius', 'topRightRadius', 'bottomLeftRadius', 'bottomRightRadius'];
+  }
+  const bound: string[] = [];
+  for (const target of targets) {
+    const expected = NODE_BIND_FIELDS[target];
+    if (!expected) {
+      const all = Object.keys(NODE_BIND_FIELDS)
+        .concat(Object.keys(BIND_ALIASES), Object.keys(TEXT_BIND_FIELDS), ['fill', 'stroke', 'effect.<field>'])
+        .join(', ');
+      throw new Error(`Unknown field "${field}". Bindable fields: ${all}.`);
+    }
+    assertVariableType(variable, expected, target);
+    if (!(target in node)) {
+      throw new Error(`This ${node.type.toLowerCase()} node has no "${target}" to bind.`);
+    }
+    try {
+      node.setBoundVariable(target as VariableBindableNodeField, variable);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`Could not bind "${target}": ${detail}`);
+    }
+    bound.push(target);
+  }
+  return done(bound);
+}
+
 // Figma Motion is Beta and missing on older desktop builds; fail with something actionable.
 function availableAnimationStyles(): AvailableAnimationStyle[] {
   if (!figma.motion || typeof figma.motion.figmaAnimationStyles !== 'function') {
@@ -2546,6 +2722,8 @@ async function runBridgeCommand(
       }
       return { ...selectAndReturn(component), key: component.key };
     }
+    case 'bind_variable':
+      return bindVariable(params);
     case 'list_variables_and_styles': {
       const LIMIT = 500;
       const [collections, variables, paintStyles, textStyles, effectStyles] = await Promise.all([
