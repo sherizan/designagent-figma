@@ -1538,7 +1538,7 @@ server.registerTool(
   'list_animation_styles',
   {
     description:
-      '(Beta) List the Figma Motion animation styles available in the current document, with the configurable props each one accepts. Use a returned styleId (or name) with apply_animation.',
+      '(Beta) List the Figma Motion animation styles available in the current document: built-in styles (type FIGMA, with the configurable props each one accepts) and the file\'s local custom styles (type CUSTOM). Use a returned styleId (or name) with apply_animation.',
     inputSchema: {}
   },
   async () => run('list_animation_styles')
@@ -1548,7 +1548,7 @@ server.registerTool(
   'apply_animation',
   {
     description:
-      '(Beta — Figma Motion) Apply an animation style to a node. Returns an appliedId you can pass to remove_animation.',
+      '(Beta — Figma Motion) Apply an animation style to a node. Returns an appliedId you can pass to remove_animation. Custom styles (type CUSTOM in list_animation_styles) accept only timelineOffset. Export the result with export_asset format mp4 / webm / gif.',
     inputSchema: {
       nodeId: z.string(),
       styleId: z.string().describe('Animation style id or name from list_animation_styles. Do not guess: an unknown value fails with the list of valid names.'),
@@ -1856,7 +1856,7 @@ server.registerTool(
   'export_asset',
   {
     description:
-      'Export Figma nodes as real asset files written into the project — SVG for icons/vectors, PNG for images and illustrations. This is the design-to-code way to get icons, logos, and illustrations out of a design, including nodes inside nested component instances (ids like "I123:4;56:7" are handled automatically via a temporary instance). Pass ALL node ids in ONE call — they export sequentially; parallel export calls can wedge the bridge. With format "auto", vector nodes become SVG and everything else PNG. Returns the written file paths; re-exporting a node overwrites its file.',
+      'Export Figma nodes as real asset files written into the project — SVG for icons/vectors, PNG for images and illustrations. This is the design-to-code way to get icons, logos, and illustrations out of a design, including nodes inside nested component instances (ids like "I123:4;56:7" are handled automatically via a temporary instance). Pass ALL node ids in ONE call — they export sequentially; parallel export calls can wedge the bridge. With format "auto", vector nodes become SVG and everything else PNG. For Figma Motion, format "mp4", "webm" or "gif" exports the animation of ONE top-level frame per call (a layer id resolves to its frame; the frame needs at least one animation; Beta, Figma Design only). Returns the written file paths; re-exporting a node overwrites its file.',
     inputSchema: {
       nodeIds: z
         .array(z.string())
@@ -1864,21 +1864,35 @@ server.registerTool(
         .max(50)
         .describe('Node ids to export — e.g. collapsed vector leaves or image-fill nodes from get_spec.'),
       dir: z.string().optional().describe("Project-relative output directory (default 'assets')."),
-      format: z.enum(['auto', 'svg', 'png']).optional().describe("Default 'auto': SVG for vectors, PNG elsewhere."),
-      scale: z.number().optional().describe('PNG export scale, 0.5–4 (default 2). Ignored for SVG.')
+      format: z
+        .enum(['auto', 'svg', 'png', 'mp4', 'webm', 'gif'])
+        .optional()
+        .describe("Default 'auto': SVG for vectors, PNG elsewhere. mp4 / webm / gif export an animated frame and are never chosen automatically."),
+      scale: z.number().optional().describe('PNG export scale, 0.5–4 (default 2). Ignored for SVG. Video: snapped to 0.5 / 0.75 / 1 / 1.5 / 2 / 3 / 4 (default 1).'),
+      fps: z.number().optional().describe('Video only. mp4/webm: 12, 24, 30 or 60 (default 30). gif: 8, 12, 15, 24 or 30.'),
+      quality: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional().describe('mp4/webm only (default HIGH). Lower it if the file is over the 24 MB cap.'),
+      loopCount: z.number().optional().describe('gif only: number of loops, 0 = forever.')
     }
   },
   async (args) => {
     try {
       const result = (await callPlugin(
         'export_asset',
-        { nodeIds: args.nodeIds, format: args.format, scale: args.scale },
-        120_000 // sequential batch of up to 50 exports won't fit the default 20s
+        {
+          nodeIds: args.nodeIds,
+          format: args.format,
+          scale: args.scale,
+          fps: args.fps,
+          quality: args.quality,
+          loopCount: args.loopCount
+        },
+        // A sequential batch of up to 50 exports won't fit the default 20s; video encoding is slower still.
+        args.format === 'mp4' || args.format === 'webm' || args.format === 'gif' ? 300_000 : 120_000
       )) as {
         assets?: Array<{
           nodeId: string;
           name: string;
-          format: 'svg' | 'png';
+          format: 'svg' | 'png' | 'mp4' | 'webm' | 'gif';
           base64: string;
           width: number;
           height: number;

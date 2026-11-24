@@ -2288,6 +2288,18 @@ function availableAnimationStyles(): AvailableAnimationStyle[] {
   return figma.motion.figmaAnimationStyles();
 }
 
+// Local custom animation styles (Update 140). Absent on older builds: treat as none.
+async function localCustomAnimationStyles(): Promise<CustomAnimationStyle[]> {
+  if (typeof figma.getLocalCustomAnimationStylesAsync !== 'function') {
+    return [];
+  }
+  try {
+    return await figma.getLocalCustomAnimationStylesAsync();
+  } catch {
+    return [];
+  }
+}
+
 function nonNegativeSeconds(value: unknown, fallback: number): number {
   const n = toNumber(value, fallback);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
@@ -2962,13 +2974,25 @@ async function runBridgeCommand(
       return selectAndReturn(instance);
     }
     case 'list_animation_styles': {
+      const custom = await localCustomAnimationStyles();
       return {
-        styles: availableAnimationStyles().map((s) => ({
-          styleId: s.styleId,
-          name: s.name,
-          description: s.description ?? null,
-          props: s.props ?? null
-        }))
+        styles: [
+          ...availableAnimationStyles().map((s) => ({
+            styleId: s.styleId,
+            name: s.name,
+            type: 'FIGMA' as const,
+            description: s.description ?? null,
+            props: s.props ?? null
+          })),
+          // Custom styles are fixed bundles: they take a timelineOffset but no duration or props.
+          ...custom.map((s) => ({
+            styleId: s.id,
+            name: s.name,
+            type: 'CUSTOM' as const,
+            description: s.description || null,
+            contains: s.animationEntries.map((e) => e.name)
+          }))
+        ]
       };
     }
     case 'apply_animation': {
@@ -2987,7 +3011,31 @@ async function runBridgeCommand(
         styles.find((s) => s.styleId === wanted) ??
         styles.find((s) => s.name.toLowerCase() === lower || s.styleId.toLowerCase() === lower);
       if (!style) {
-        const names = styles.map((s) => s.name).join(', ');
+        const customStyles = await localCustomAnimationStyles();
+        const custom =
+          customStyles.find((s) => s.id === wanted) ?? customStyles.find((s) => s.name.toLowerCase() === lower);
+        if (custom) {
+          const customConfig: CustomAnimationStyleConfiguration =
+            params.timelineOffset != null
+              ? { type: 'CUSTOM', timelineOffset: nonNegativeSeconds(params.timelineOffset, 0) }
+              : { type: 'CUSTOM' };
+          const ignored = ['duration', 'props'].filter((k) => params[k] != null);
+          try {
+            const appliedId = node.applyAnimationStyle(custom.id, customConfig);
+            return {
+              id: node.id,
+              name: node.name,
+              styleId: custom.id,
+              type: 'CUSTOM',
+              appliedId,
+              ...(ignored.length ? { ignored, note: 'Custom styles take only timelineOffset.' } : {})
+            };
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            throw new Error(`Could not apply custom style "${custom.name}": ${detail}`);
+          }
+        }
+        const names = styles.map((s) => s.name).concat(customStyles.map((s) => `${s.name} (custom)`)).join(', ');
         throw new Error(`No animation style "${wanted}". Available: ${names || 'none in this file'}.`);
       }
       const config: { duration?: number; timelineOffset?: number; props?: Record<string, unknown> } = {};
@@ -3131,7 +3179,7 @@ const ASSET_VECTOR_TYPES = new Set(['VECTOR', 'BOOLEAN_OPERATION', 'STAR', 'POLY
 interface ExportedAsset {
   nodeId: string;
   name: string;
-  format: 'svg' | 'png';
+  format: 'svg' | 'png' | 'mp4' | 'webm' | 'gif';
   base64: string;
   width: number;
   height: number;
@@ -3146,6 +3194,9 @@ async function exportAssets(params: Record<string, unknown>): Promise<{
     : [];
   if (nodeIds.length === 0) {
     throw new Error('Pass nodeIds: the Figma node ids to export.');
+  }
+  if (params.format === 'mp4' || params.format === 'webm' || params.format === 'gif') {
+    return exportVideo(nodeIds, params.format, params);
   }
   const requestedFormat = params.format === 'svg' || params.format === 'png' ? params.format : 'auto';
   const scale = Math.max(0.5, Math.min(4, toNumber(params.scale, 2)));
@@ -3204,6 +3255,93 @@ async function exportAssets(params: Record<string, unknown>): Promise<{
     }
   }
   return { assets, errors };
+}
+
+const VIDEO_SCALES = [0.5, 0.75, 1, 1.5, 2, 3, 4] as const;
+const VIDEO_MAX_BYTES = 24 * 1024 * 1024; // raw bytes; ~32 MB once base64-encoded for the bridge
+
+function nearest<T extends number>(options: ReadonlyArray<T>, value: number, fallback: T): T {
+  let best = fallback;
+  for (const option of options) {
+    if (Math.abs(option - value) < Math.abs(best - value)) best = option;
+  }
+  return best;
+}
+
+// Motion export (Beta): MP4 / WebM / GIF of an animated top-level frame. Figma rejects
+// anything else, so resolve each node to its enclosing top-level frame first. One video
+// per call keeps the bridge payload and the encode time bounded.
+async function exportVideo(
+  nodeIds: string[],
+  format: 'mp4' | 'webm' | 'gif',
+  params: Record<string, unknown>
+): Promise<{ assets: ExportedAsset[]; errors: Array<{ nodeId: string; error: string }> }> {
+  const nodeId = nodeIds[0] ?? '';
+  const errors: Array<{ nodeId: string; error: string }> = nodeIds
+    .slice(1)
+    .map((id) => ({ nodeId: id, error: 'Video export handles one frame per call; export this one separately.' }));
+  try {
+    const node = await getNodeByIdGuarded(nodeId);
+    if (!isSceneNode(node)) {
+      throw new Error(`No node with id ${nodeId}.`);
+    }
+    const frame = node.getTopLevelFrame() ?? (node.parent && node.parent.type === 'PAGE' ? node : undefined);
+    if (!frame || !('exportAsync' in frame)) {
+      throw new Error('Video export needs a top-level frame (a frame placed directly on the page) with animation.');
+    }
+    const scale = nearest(VIDEO_SCALES, toNumber(params.scale, 1), 1);
+    const constraint: VideoExportConstraint = { type: 'SCALE', value: scale };
+    const q = String(params.quality ?? '').toUpperCase();
+    const quality = q === 'LOW' || q === 'MEDIUM' || q === 'HIGH' ? q : undefined;
+    let settings: ExportSettingsMP4 | ExportSettingsWEBM | ExportSettingsGIF;
+    if (format === 'gif') {
+      settings = {
+        format: 'GIF',
+        constraint,
+        ...(params.fps != null ? { fps: nearest([8, 12, 15, 24, 30] as const, toNumber(params.fps, 15), 15) } : {}),
+        ...(params.loopCount != null
+          ? { loopCount: Math.max(0, Math.min(1000, Math.floor(toNumber(params.loopCount, 0)))) }
+          : {})
+      };
+    } else {
+      settings = {
+        format: format === 'mp4' ? 'MP4' : 'WEBM',
+        constraint,
+        ...(params.fps != null ? { fps: nearest([12, 24, 30, 60] as const, toNumber(params.fps, 30), 30) } : {}),
+        ...(quality ? { quality } : {})
+      };
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = await (frame as SceneNode).exportAsync(settings);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Figma could not export "${frame.name}" as ${format.toUpperCase()} (${detail}). The frame needs at least one animation (apply_animation), and video export only works in Figma Design on a recent desktop build.`
+      );
+    }
+    if (bytes.byteLength > VIDEO_MAX_BYTES) {
+      throw new Error(
+        `Video is ${(bytes.byteLength / 1024 / 1024).toFixed(1)} MB; over the ${VIDEO_MAX_BYTES / 1024 / 1024} MB cap. Lower scale, fps or quality.`
+      );
+    }
+    return {
+      assets: [
+        {
+          nodeId: frame.id,
+          name: frame.name,
+          format,
+          base64: figma.base64Encode(bytes),
+          width: 'width' in frame ? Math.round(frame.width * scale) : 0,
+          height: 'height' in frame ? Math.round(frame.height * scale) : 0
+        }
+      ],
+      errors
+    };
+  } catch (error) {
+    errors.unshift({ nodeId, error: error instanceof Error ? error.message : String(error) });
+    return { assets: [], errors };
+  }
 }
 
 // "I<instanceId>;<innerId…>" — clone the top-level instance (fresh plain ids),
