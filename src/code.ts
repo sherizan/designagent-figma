@@ -2939,8 +2939,9 @@ async function runBridgeCommand(
           id: a.id,
           styleId: a.styleId,
           name: a.name,
-          duration: a.duration ?? null,
-          props: a.props ?? null
+          type: a.type ?? 'FIGMA',
+          duration: 'duration' in a ? a.duration ?? null : null,
+          props: 'props' in a ? a.props ?? null : null
         }))
       };
     }
