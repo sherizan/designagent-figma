@@ -24838,13 +24838,22 @@ function chatCodeMatches(candidate) {
 var PROTECTED_DIRS = /* @__PURE__ */ new Set([".claude", ".git", ".github", ".vscode", ".idea", ".husky", ".cursor", ".devcontainer"]);
 var PROTECTED_FILES = /* @__PURE__ */ new Set([".mcp.json", ".envrc", ".npmrc", ".gitconfig", ".gitmodules"]);
 var GUARDED_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write"];
-function realOrSelf(path) {
+function realOrSelf(path, depth = 0) {
   let current = path;
   let rest = "";
   for (; ; ) {
     try {
       return (0, import_node_path.join)((0, import_node_fs.realpathSync)(current), rest);
     } catch {
+      try {
+        if ((0, import_node_fs.lstatSync)(current).isSymbolicLink()) {
+          if (depth > 20) {
+            return import_node_path.sep + "unresolvable-symlink";
+          }
+          return realOrSelf((0, import_node_path.join)((0, import_node_path.resolve)((0, import_node_path.dirname)(current), (0, import_node_fs.readlinkSync)(current)), rest), depth + 1);
+        }
+      } catch {
+      }
       const parent = (0, import_node_path.dirname)(current);
       if (parent === current) {
         return path;

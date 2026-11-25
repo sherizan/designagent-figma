@@ -9,7 +9,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
@@ -68,7 +68,7 @@ const PROTECTED_FILES = new Set(['.mcp.json', '.envrc', '.npmrc', '.gitconfig', 
 // The only built-in tools the chat session gets; all of them go through the guard.
 const GUARDED_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write'];
 
-function realOrSelf(path: string): string {
+function realOrSelf(path: string, depth = 0): string {
   // Resolve symlinks on the deepest part that exists, so a link out of the project
   // (or a not-yet-created file under one) is judged by where it really points.
   let current = path;
@@ -77,6 +77,18 @@ function realOrSelf(path: string): string {
     try {
       return join(realpathSync(current), rest);
     } catch {
+      // realpath also fails on a dangling link, which a write would still follow:
+      // judge it by its target. A chain that never settles is treated as outside.
+      try {
+        if (lstatSync(current).isSymbolicLink()) {
+          if (depth > 20) {
+            return sep + 'unresolvable-symlink';
+          }
+          return realOrSelf(join(resolve(dirname(current), readlinkSync(current)), rest), depth + 1);
+        }
+      } catch {
+        // does not exist at all: keep walking up
+      }
       const parent = dirname(current);
       if (parent === current) {
         return path;
