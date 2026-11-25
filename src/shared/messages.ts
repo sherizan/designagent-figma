@@ -55,4 +55,5 @@ export type ToPluginMessage =
   | { type: 'PREFS_LOAD' }
   | { type: 'CHAT_CODE_SAVE'; code: string }
   | { type: 'LAST_ROOT_SAVE'; root: string }
-  | { type: 'ALLOW_EDITS_SAVE'; allow: boolean };
+  | { type: 'ALLOW_EDITS_SAVE'; allow: boolean }
+  | { type: 'CURSOR_MODE'; on: boolean };

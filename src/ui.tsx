@@ -796,6 +796,11 @@ function App(): JSX.Element {
     }
   }, [bridgeStatus, sessions.length]);
 
+  // Claude's cursor shows on the canvas only while a chat turn is running.
+  useEffect(() => {
+    postPluginMessage({ type: 'CURSOR_MODE', on: chatBusy });
+  }, [chatBusy]);
+
   // Returning user: quietly re-select the project they used last time, so the
   // picker only ever shows once (or when that project isn't open).
   useEffect(() => {
