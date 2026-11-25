@@ -3687,6 +3687,33 @@ figma.ui.onmessage = (message: ToPluginMessage) => {
     return;
   }
 
+  // Per-user panel preferences (chat pairing code, last project): kept in this
+  // user's plugin storage, never in the file.
+  if (message.type === 'PREFS_LOAD') {
+    const read = (key: string): Promise<string> =>
+      figma.clientStorage
+        .getAsync(key)
+        .then((value) => (typeof value === 'string' ? value : ''))
+        .catch(() => '');
+    void Promise.all([read('chatCode'), read('lastRoot'), read('allowEdits')]).then(
+      ([chatCode, lastRoot, allowEdits]) =>
+        figma.ui.postMessage({ type: 'PREFS', chatCode, lastRoot, allowEdits: allowEdits === 'yes' })
+    );
+    return;
+  }
+  if (message.type === 'CHAT_CODE_SAVE') {
+    void figma.clientStorage.setAsync('chatCode', message.code).catch(() => undefined);
+    return;
+  }
+  if (message.type === 'ALLOW_EDITS_SAVE') {
+    void figma.clientStorage.setAsync('allowEdits', message.allow ? 'yes' : '').catch(() => undefined);
+    return;
+  }
+  if (message.type === 'LAST_ROOT_SAVE') {
+    void figma.clientStorage.setAsync('lastRoot', message.root).catch(() => undefined);
+    return;
+  }
+
   if (message.type === 'RESIZE') {
     // Follow the panel's content height (clamped) so the window stays compact.
     const height = Math.max(120, Math.min(720, Math.round(message.height)));

@@ -11,6 +11,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { WebSocket } from 'ws';
 import { runBroker, BROKER_PROTOCOL_VERSION, BUILD_MTIME } from './broker';
+import { runChatGuard } from './chat';
 import { resolveProjectRoot, deriveProjectLabel } from './project-root';
 
 // DesignAgent MCP server.
@@ -1983,7 +1984,10 @@ async function main(): Promise<void> {
   process.stdin.on('end', exit);
 }
 
-if (IS_BROKER) {
+if (process.argv.includes('--chat-guard')) {
+  // PreToolUse hook for the in-panel chat: keeps file tools inside the project.
+  runChatGuard();
+} else if (IS_BROKER) {
   // This process is the persistent relay daemon, not an MCP server.
   runBroker();
 } else {

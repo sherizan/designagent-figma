@@ -6,6 +6,8 @@ import {
   BridgeBar,
   type BridgeStatus,
   CapabilityView,
+  type ChatMessage,
+  ChatPanel,
   EmptyState,
   ExportPanel,
   Footer,
@@ -15,7 +17,10 @@ import {
   type MainTab,
   MainTabs,
   ProjectPicker,
-  type SessionInfo
+  type SessionInfo,
+  SetupCard,
+  UpdateBanner,
+  isOlderVersion
 } from './ui_components';
 import type { DesignTreeNode } from './shared/designtree';
 import { UI_STYLES } from './ui_theme';
@@ -144,10 +149,36 @@ function App(): JSX.Element {
   const [analyzing, setAnalyzing] = useState<
     { nodeId: string; nodeName: string; nodeType: string } | null
   >(null);
-  const [bridgeEnabled, setBridgeEnabled] = useState<boolean>(false);
+  // The bridge connects as soon as the panel opens; Stop (in the menu) turns it off.
+  const [bridgeEnabled, setBridgeEnabled] = useState<boolean>(true);
+  // True once we've failed to connect for a few seconds: only then show Setup.
+  const [connectSlow, setConnectSlow] = useState<boolean>(false);
+  // Preferences from plugin storage (pairing code, last project). The project gate
+  // waits for them so a remembered project never flashes the picker.
+  const [prefsLoaded, setPrefsLoaded] = useState<boolean>(false);
+  const lastRootRef = useRef<string>('');
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>('off');
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [projectConfirmed, setProjectConfirmed] = useState<boolean>(false);
+  // In-panel chat: only offered when the broker says it can run Claude Code for us.
+  const [chatSupported, setChatSupported] = useState<boolean>(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatBusy, setChatBusy] = useState<boolean>(false);
+  const [chatAllowEdits, setChatAllowEdits] = useState<boolean>(false);
+  // Pairing code from ~/.designagent-chat-code, pasted once and kept in plugin storage.
+  const [chatCode, setChatCode] = useState<string>('');
+  const chatCodeRef = useRef<string>('');
+  const saveChatCode = (code: string) => {
+    chatCodeRef.current = code;
+    setChatCode(code);
+    postPluginMessage({ type: 'CHAT_CODE_SAVE', code });
+  };
+  useEffect(() => {
+    postPluginMessage({ type: 'PREFS_LOAD' });
+    // Outside Figma (or if storage is slow) don't hold the UI back.
+    const timer = window.setTimeout(() => setPrefsLoaded(true), 800);
+    return () => window.clearTimeout(timer);
+  }, []);
   const [designMd, setDesignMd] = useState<{
     checked: boolean;
     exists: boolean;
@@ -197,6 +228,15 @@ function App(): JSX.Element {
     const listener = (event: MessageEvent<{ pluginMessage?: ToUIMessage }>) => {
       const message = event.data.pluginMessage;
       if (!message) {
+        return;
+      }
+
+      if (message.type === 'PREFS') {
+        chatCodeRef.current = message.chatCode;
+        setChatCode(message.chatCode);
+        lastRootRef.current = message.lastRoot;
+        setChatAllowEdits(message.allowEdits);
+        setPrefsLoaded(true);
         return;
       }
 
@@ -373,6 +413,8 @@ function App(): JSX.Element {
           serverInstanceId?: string;
           sessions?: unknown;
           sessionId?: string;
+          chat?: unknown;
+          event?: unknown;
         };
         try {
           msg = JSON.parse(messageEvent.data);
@@ -396,6 +438,7 @@ function App(): JSX.Element {
             }
           }
           serverInstanceId.current = incoming;
+          setChatSupported(msg.chat === true);
           reconnectAttempt.current = 0;
           setBridgeStatus('connected');
           setLastHeartbeatAt(lastServerMessageAt.current);
@@ -408,10 +451,15 @@ function App(): JSX.Element {
               id: String(s.id ?? ''),
               label: String(s.label ?? ''),
               root: String(s.root ?? ''),
-              selected: Boolean(s.selected)
+              selected: Boolean(s.selected),
+              pluginVersion: typeof s.pluginVersion === 'string' ? s.pluginVersion : ''
             }))
             .filter((s) => s.id);
           setSessions(list);
+          return;
+        }
+        if (msg.type === 'chat_event' && msg.event && typeof msg.event === 'object') {
+          applyChatEvent(msg.event as Record<string, unknown>);
           return;
         }
         if (msg.type === 'ping') {
@@ -480,6 +528,8 @@ function App(): JSX.Element {
         if (socketRef.current === socket) {
           socketRef.current = null;
         }
+        // The broker stops the run when we drop, so don't leave the chat spinning.
+        setChatBusy(false);
         if (cancelled) {
           return;
         }
@@ -551,6 +601,88 @@ function App(): JSX.Element {
     };
   }, [bridgeEnabled]);
 
+  // Fold one streamed chat event from the broker into the last assistant message.
+  function applyChatEvent(event: Record<string, unknown>): void {
+    const kind = String(event.kind ?? '');
+    if (kind === 'reset') {
+      setChatMessages([]);
+      setChatBusy(false);
+      return;
+    }
+    if (kind === 'start') {
+      setChatBusy(true);
+      return;
+    }
+    if (kind === 'done') {
+      setChatBusy(false);
+      if (event.needsPairing === true) {
+        // The broker rejected our code: forget it so the panel asks again.
+        chatCodeRef.current = '';
+        setChatCode('');
+        postPluginMessage({ type: 'CHAT_CODE_SAVE', code: '' });
+      }
+    }
+    setChatMessages((previous) => {
+      const messages = previous.slice();
+      let last = messages[messages.length - 1];
+      if (!last || last.role !== 'assistant') {
+        last = { role: 'assistant', parts: [] };
+        messages.push(last);
+      } else {
+        last = { ...last, parts: last.parts.slice() };
+        messages[messages.length - 1] = last;
+      }
+      const parts = last.parts;
+      const tail = parts[parts.length - 1];
+      if (kind === 'text') {
+        const text = String(event.text ?? '');
+        if (tail && tail.type === 'text') {
+          parts[parts.length - 1] = { type: 'text', text: tail.text + text };
+        } else if (text.trim()) {
+          parts.push({ type: 'text', text });
+        }
+      } else if (kind === 'tool') {
+        parts.push({ type: 'tool', id: String(event.id ?? ''), name: String(event.name ?? 'tool'), state: 'running' });
+      } else if (kind === 'tool_done') {
+        const index = parts.findIndex((part) => part.type === 'tool' && part.id === event.id);
+        const found = parts[index];
+        if (found && found.type === 'tool') {
+          parts[index] = { ...found, state: event.ok === false ? 'error' : 'ok' };
+        }
+      } else if (kind === 'done') {
+        // Anything still spinning never got a result (stopped or crashed).
+        last.parts = parts.map((part) =>
+          part.type === 'tool' && part.state === 'running' ? { ...part, state: 'error' } : part
+        );
+        if (event.ok === false) {
+          last.error = String(event.error ?? 'Something went wrong.');
+        }
+      }
+      return messages;
+    });
+  }
+
+  const sendBridge = (payload: Record<string, unknown>): boolean => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    socket.send(JSON.stringify({ ...payload, code: chatCodeRef.current }));
+    return true;
+  };
+
+  const sendChat = (text: string) => {
+    if (!sendBridge({ type: 'chat_send', text, allowEdits: chatAllowEdits })) {
+      return;
+    }
+    setChatBusy(true);
+    setChatMessages((previous) => [
+      ...previous,
+      { role: 'user', parts: [{ type: 'text', text }] },
+      { role: 'assistant', parts: [] }
+    ]);
+  };
+
   function newId(prefix = ''): string {
     const uuid =
       typeof crypto !== 'undefined' && crypto.randomUUID
@@ -595,6 +727,11 @@ function App(): JSX.Element {
     }
     socket.send(JSON.stringify({ type: 'select_session', sessionId }));
     setProjectConfirmed(true);
+    const root = sessions.find((s) => s.id === sessionId)?.root ?? '';
+    if (root) {
+      lastRootRef.current = root;
+      postPluginMessage({ type: 'LAST_ROOT_SAVE', root });
+    }
   };
 
   // Render a tree in the sandbox and await the result (UI-initiated, not a bridge call).
@@ -659,6 +796,29 @@ function App(): JSX.Element {
     }
   }, [bridgeStatus, sessions.length]);
 
+  // Returning user: quietly re-select the project they used last time, so the
+  // picker only ever shows once (or when that project isn't open).
+  useEffect(() => {
+    if (bridgeStatus !== 'connected' || projectConfirmed || !prefsLoaded || sessions.length < 2) {
+      return;
+    }
+    const remembered = sessions.find((s) => s.root && s.root === lastRootRef.current);
+    if (remembered) {
+      selectSession(remembered.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bridgeStatus, projectConfirmed, prefsLoaded, sessions]);
+
+  // Setup only appears after the connection has been failing for a few seconds.
+  useEffect(() => {
+    if (!bridgeEnabled || bridgeStatus === 'connected') {
+      setConnectSlow(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setConnectSlow(true), 3000);
+    return () => window.clearTimeout(timer);
+  }, [bridgeEnabled, bridgeStatus === 'connected']);
+
   // Re-check whenever the bridge connects; clear when it drops.
   useEffect(() => {
     if (bridgeStatus === 'connected') {
@@ -716,6 +876,13 @@ function App(): JSX.Element {
 
   const errorHelpLink = error ? getErrorHelpLink(error) : undefined;
 
+  // The Claude Code plugin behind the selected project is older than this panel.
+  const currentSession = sessions.find((s) => s.selected) ?? sessions[0];
+  const outdatedFrom =
+    currentSession && isOlderVersion(currentSession.pluginVersion, __PLUGIN_VERSION__)
+      ? currentSession.pluginVersion
+      : null;
+
   return (
     <div className="app-shell" ref={shellRef}>
       <style>{UI_STYLES}</style>
@@ -728,10 +895,22 @@ function App(): JSX.Element {
           onReconnect={() => forceReconnect.current?.()}
         />
 
-        {bridgeStatus === 'connected' && sessions.length >= 2 && !projectConfirmed ? (
-          <ProjectPicker variant="gate" sessions={sessions} onSelect={selectSession} />
+        {!bridgeEnabled ? (
+          <p className="connecting-line">The bridge is off. Press Start to connect to Claude Code.</p>
+        ) : bridgeStatus !== 'connected' ? (
+          connectSlow ? (
+            <SetupCard />
+          ) : (
+            <div className="connecting-line">
+              <span className="loading-spinner" aria-hidden="true" />
+              <span>Connecting to Claude Code…</span>
+            </div>
+          )
+        ) : sessions.length >= 2 && !projectConfirmed ? (
+          prefsLoaded ? <ProjectPicker variant="gate" sessions={sessions} onSelect={selectSession} /> : null
         ) : (
           <>
+            {outdatedFrom !== null ? <UpdateBanner from={outdatedFrom} /> : null}
             {bridgeStatus === 'connected' ? (
               <div className="panel">
                 {sessions.length >= 1 ? (
@@ -742,6 +921,23 @@ function App(): JSX.Element {
                     Connected, but no project folder is linked yet. Run Claude from inside
                     your project directory so DesignAgent knows which folder to read &amp; write.
                   </p>
+                ) : chatSupported ? (
+                  <ChatPanel
+                    messages={chatMessages}
+                    paired={chatCode !== ''}
+                    onPair={saveChatCode}
+                    busy={chatBusy}
+                    projectLabel={(sessions.find((s) => s.selected) ?? sessions[0])?.label ?? ''}
+                    allowEdits={chatAllowEdits}
+                    onAllowEditsChange={(allow) => {
+                      // Remembered for this user, so the confirm only happens once.
+                      setChatAllowEdits(allow);
+                      postPluginMessage({ type: 'ALLOW_EDITS_SAVE', allow });
+                    }}
+                    onSend={sendChat}
+                    onStop={() => sendBridge({ type: 'chat_stop' })}
+                    onReset={() => sendBridge({ type: 'chat_reset' })}
+                  />
                 ) : (
                   <p className="bridge-explainer" style={{ marginTop: 6 }}>
                     Connected — ask Claude in your terminal to read or build in this file.

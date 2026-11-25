@@ -17,6 +17,8 @@ import { appendFileSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
+import type { IncomingMessage } from 'node:http';
+import { chatCode, chatCodeMatches, createChatRunner } from './chat';
 
 // Bump when the broker<->server wire protocol changes incompatibly. A newer MCP
 // server that finds an older broker asks it to shut down and respawns a current one.
@@ -83,6 +85,12 @@ export function runBroker(): void {
   const wssList: WebSocketServer[] = [];
   let idleTimer: NodeJS.Timeout | null = null;
 
+  // In-panel chat: runs the local Claude Code headless and streams it to the plugin.
+  const chat = createChatRunner({
+    emit: (event) => send(plugin, { type: 'chat_event', event }),
+    log: blog
+  });
+
   function activeServer(): ServerClient | null {
     return servers.length > 0 ? servers[servers.length - 1]! : null;
   }
@@ -129,7 +137,7 @@ export function runBroker(): void {
     if (!plugin || !active) {
       return;
     }
-    send(plugin, { type: 'hello_ack', serverInstanceId: active.sessionId, pid: process.pid });
+    send(plugin, { type: 'hello_ack', serverInstanceId: active.sessionId, pid: process.pid, chat: true });
   }
 
   // Tell the plugin which projects are connected and which is the effective target.
@@ -149,6 +157,11 @@ export function runBroker(): void {
         continue;
       }
       byRoot.set(s.root, s); // registration order → newer overwrites older
+    }
+    // The effective target represents its own root, even when a newer session shares
+    // it (the in-panel chat's MCP server registers for the same folder on every turn).
+    if (target && isUsableRoot(target.root)) {
+      byRoot.set(target.root, target);
     }
     send(plugin, {
       type: 'sessions',
@@ -202,7 +215,25 @@ export function runBroker(): void {
     armIdleTimer();
   }
 
-  function handleConnection(socket: WebSocket): void {
+  // Browser origin of each connection ('' for non-browser clients such as MCP servers).
+  const originOf = new WeakMap<WebSocket, string>();
+
+  // Chat runs an agent on this machine, so it is held to a higher bar than the rest
+  // of the plugin channel: the Figma panel's origin (an opaque "null" iframe, or
+  // figma.com) and the pairing code. An ordinary web page fails the first check; a
+  // sandboxed iframe or a local process still needs the code.
+  function chatAllowed(socket: WebSocket, code: unknown): boolean {
+    const origin = originOf.get(socket) ?? '';
+    const originOk = origin === '' || origin === 'null' || /^https:\/\/([a-z0-9-]+\.)?figma\.com$/.test(origin);
+    if (!originOk) {
+      blog(`chat refused: origin ${origin}.`);
+      return false;
+    }
+    return chatCodeMatches(code);
+  }
+
+  function handleConnection(socket: WebSocket, request?: IncomingMessage): void {
+    originOf.set(socket, String(request?.headers.origin ?? ''));
     alive.add(socket);
     socket.on('pong', () => alive.add(socket));
 
@@ -223,6 +254,9 @@ export function runBroker(): void {
         root?: string;
         label?: string;
         pluginVersion?: unknown;
+        text?: unknown;
+        allowEdits?: unknown;
+        code?: unknown;
       };
       try {
         msg = JSON.parse(data.toString());
@@ -322,6 +356,46 @@ export function runBroker(): void {
           send(target.socket, msg);
           return;
         }
+        // In-panel chat: run the user's own Claude Code in the selected project.
+        if (
+          (msg.type === 'chat_send' || msg.type === 'chat_stop' || msg.type === 'chat_reset') &&
+          !chatAllowed(socket, msg.code)
+        ) {
+          send(plugin, {
+            type: 'chat_event',
+            event: { kind: 'done', ok: false, needsPairing: true, error: 'Pairing code missing or wrong.' }
+          });
+          return;
+        }
+        if (msg.type === 'chat_send' && typeof msg.text === 'string' && msg.text.trim()) {
+          const target = routeTarget();
+          if (!target || !isUsableRoot(target.root)) {
+            send(plugin, {
+              type: 'chat_event',
+              event: {
+                kind: 'done',
+                ok: false,
+                error: 'No project folder is linked. Run Claude Code once inside your project folder.'
+              }
+            });
+            return;
+          }
+          // Pin the project: the chat's own MCP server registers as a newer session,
+          // and without a pin the plugin would re-pair to it and back on every turn.
+          if (!selectedSessionId) {
+            selectedSessionId = target.sessionId;
+          }
+          chat.send({ root: target.root, text: msg.text.trim(), allowEdits: msg.allowEdits === true });
+          return;
+        }
+        if (msg.type === 'chat_stop') {
+          chat.stop();
+          return;
+        }
+        if (msg.type === 'chat_reset') {
+          chat.reset();
+          return;
+        }
         // The plugin picks which connected project to use for filesystem ops.
         if (msg.type === 'select_session' && typeof msg.sessionId === 'string') {
           if (servers.some((s) => s.sessionId === msg.sessionId)) {
@@ -369,6 +443,7 @@ export function runBroker(): void {
     socket.on('close', () => {
       if (socket === plugin) {
         plugin = null;
+        chat.stop(); // nobody is watching the reply any more
         blog('plugin disconnected.');
       } else {
         dropServer(socket);
@@ -434,6 +509,11 @@ export function runBroker(): void {
     listen(BIND_HOSTS[1], false); // ::1 — best-effort
   }
 
+  try {
+    chatCode(); // make sure the pairing code exists before the panel asks for it
+  } catch (error) {
+    blog(`could not create the chat pairing code: ${error instanceof Error ? error.message : String(error)}`);
+  }
   armIdleTimer();
   blog(`broker started (protocol v${BROKER_PROTOCOL_VERSION}, pid ${process.pid}).`);
 }

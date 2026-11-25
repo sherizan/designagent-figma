@@ -88,8 +88,8 @@ function CopyCommand({ command }: { command: string }): JSX.Element {
   );
 }
 
-// The app's top bar — styled like a header (flat, no card). It's the Claude
-// Bridge title + live status, with Start/Stop and a Setup disclosure.
+// The app's top bar: title + live status. Reconnect / Stop are rarely needed, so
+// they live behind a small menu; when the bridge is off the only action is Start.
 export function BridgeBar({
   status,
   enabled,
@@ -98,10 +98,7 @@ export function BridgeBar({
   onReconnect
 }: BridgeBarProps): JSX.Element {
   const meta = BRIDGE_META[status];
-  // Setup is only relevant until the bridge connects — hide the whole card once
-  // connected so the panel stays compact. The disclosure stays open while it's
-  // shown (it re-appears if the connection later drops).
-  const showSetup = status !== 'connected';
+  const [menuOpen, setMenuOpen] = React.useState(false);
   return (
     <div className="bridge-bar">
       <div className="bridge-bar-row">
@@ -122,54 +119,118 @@ export function BridgeBar({
               />
               <span>{meta.label}</span>
             </span>
-            {status === 'connected' && lastHeartbeatAt !== null ? (
-              <HeartbeatReadout at={lastHeartbeatAt} />
-            ) : null}
           </div>
         </div>
         <div className="bridge-actions">
           {enabled ? (
-            <button type="button" className="btn" onClick={onReconnect}>
-              Reconnect
+            <div className="bridge-menu">
+              <button
+                type="button"
+                className="btn bridge-menu-button"
+                aria-label="Bridge options"
+                aria-expanded={menuOpen}
+                onClick={() => setMenuOpen((open) => !open)}
+              >
+                ⋯
+              </button>
+              {menuOpen ? (
+                <div className="bridge-menu-list" role="menu">
+                  {status === 'connected' && lastHeartbeatAt !== null ? (
+                    <HeartbeatReadout at={lastHeartbeatAt} />
+                  ) : null}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onReconnect();
+                    }}
+                  >
+                    Reconnect
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onToggle();
+                    }}
+                  >
+                    Stop
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <button type="button" className="btn-primary" onClick={onToggle}>
+              Start
             </button>
-          ) : null}
-          <button type="button" className={enabled ? 'btn' : 'btn-primary'} onClick={onToggle}>
-            {enabled ? 'Stop' : 'Start'}
-          </button>
+          )}
         </div>
       </div>
-
-      {showSetup ? (
-        <details className="bridge-setup" open>
-          <summary>Setup</summary>
-          <p className="bridge-setup-lead">
-            {status === 'off'
-              ? 'Click Start. First time? Claude Code needs the DesignAgent plugin — run these once in Claude Code:'
-              : "Claude Code isn't running with the DesignAgent plugin. Install it once in Claude Code:"}
-          </p>
-          {INSTALL_COMMANDS.map((command) => (
-            <CopyCommand key={command} command={command} />
-          ))}
-          <p className="bridge-setup-lead">
-            Then run <code>claude</code> inside your project folder — the dot turns green when Claude
-            is connected.
-          </p>
-        </details>
-      ) : null}
-
-      <details className="bridge-setup">
-        <summary>Update</summary>
-        <ol className="bridge-steps">
-          <li>
-            In Claude Code: <code>/plugins</code>, find <strong>designagent</strong>, choose{' '}
-            <strong>Update now</strong> (or enable auto-updates).
-          </li>
-          <li>
-            Run <code>/reload-plugins</code>.
-          </li>
-        </ol>
-      </details>
     </div>
+  );
+}
+
+// Shown only when the bridge can't reach Claude Code: the first-time install steps.
+export function SetupCard(): JSX.Element {
+  return (
+    <div className="panel">
+      <div className="section-subtitle" style={{ marginTop: 0 }}>
+        Connect Claude Code
+      </div>
+      <p className="bridge-setup-lead">
+        DesignAgent can't find Claude Code with its plugin. First time? Run these once in Claude Code:
+      </p>
+      {INSTALL_COMMANDS.map((command) => (
+        <CopyCommand key={command} command={command} />
+      ))}
+      <p className="bridge-setup-lead">
+        Then run <code>claude</code> inside your project folder. This panel connects on its own.
+      </p>
+    </div>
+  );
+}
+
+// "0.23.0" < "0.25.0". Anything unparseable (or missing: a pre-0.19 plugin) is older.
+export function isOlderVersion(candidate: string, reference: string): boolean {
+  const parse = (v: string): number[] | null => {
+    const match = /^(\d+)\.(\d+)\.(\d+)/.exec(v.trim());
+    return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+  };
+  const ref = parse(reference);
+  if (!ref) {
+    return false;
+  }
+  const cand = parse(candidate);
+  if (!cand) {
+    return true;
+  }
+  for (let i = 0; i < 3; i++) {
+    if (cand[i]! !== ref[i]!) {
+      return cand[i]! < ref[i]!;
+    }
+  }
+  return false;
+}
+
+// One line, shown only when the Claude Code plugin is older than this panel.
+export function UpdateBanner({ from }: { from: string }): JSX.Element {
+  return (
+    <details className="update-banner">
+      <summary>
+        Update available{from ? ` · Claude Code plugin ${from} → ${__PLUGIN_VERSION__}` : ''}
+      </summary>
+      <ol className="bridge-steps">
+        <li>
+          In Claude Code: <code>/plugins</code>, find <strong>designagent</strong>, choose{' '}
+          <strong>Update now</strong> (or enable auto-updates).
+        </li>
+        <li>
+          Run <code>/reload-plugins</code>.
+        </li>
+      </ol>
+    </details>
   );
 }
 
@@ -206,6 +267,7 @@ export interface SessionInfo {
   label: string;
   root: string;
   selected: boolean;
+  pluginVersion: string;
 }
 
 interface ProjectPickerProps {
@@ -574,6 +636,260 @@ export function Footer(): JSX.Element {
       <a href="https://www.designagent.dev" target="_blank" rel="noreferrer">
         DesignAgent.dev
       </a>
+    </div>
+  );
+}
+
+// ---- In-panel chat (prototype) ----
+// The broker runs the user's own Claude Code headless and streams it here.
+
+export type ChatPart =
+  | { type: 'text'; text: string }
+  | { type: 'tool'; id: string; name: string; state: 'running' | 'ok' | 'error' };
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  parts: ChatPart[];
+  error?: string;
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  status: 'Checking the file',
+  take_screenshot: 'Looking at the design',
+  get_spec: 'Reading the selection',
+  get_design_md: 'Reading the design spec',
+  list_page_nodes: 'Reading the page',
+  list_variables_and_styles: 'Reading variables and styles',
+  html_to_design: 'Building the layout',
+  batch: 'Making several edits',
+  ToolSearch: 'Finding the right tool',
+  Read: 'Reading a project file',
+  Glob: 'Searching the project',
+  Grep: 'Searching the project',
+  Edit: 'Editing a project file',
+  Write: 'Writing a project file'
+};
+
+function toolLabel(name: string): string {
+  const known = TOOL_LABELS[name];
+  if (known) {
+    return known;
+  }
+  const words = name.replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+// Just enough markdown for chat replies: **bold** and `code`.
+function renderInline(text: string): React.ReactNode[] {
+  return text.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/g).map((piece, index) => {
+    if (piece.length > 4 && piece.startsWith('**') && piece.endsWith('**')) {
+      return <strong key={index}>{piece.slice(2, -2)}</strong>;
+    }
+    if (piece.length > 2 && piece.startsWith('`') && piece.endsWith('`')) {
+      return <code key={index}>{piece.slice(1, -1)}</code>;
+    }
+    return <React.Fragment key={index}>{piece}</React.Fragment>;
+  });
+}
+
+const CHAT_SUGGESTIONS = [
+  'Tidy the spacing in my selection',
+  'Rename the layers in my selection',
+  'Design a pricing card next to my selection'
+];
+
+interface ChatPanelProps {
+  messages: ChatMessage[];
+  paired: boolean;
+  onPair: (code: string) => void;
+  busy: boolean;
+  projectLabel: string;
+  allowEdits: boolean;
+  onAllowEditsChange: (value: boolean) => void;
+  onSend: (text: string) => void;
+  onStop: () => void;
+  onReset: () => void;
+}
+
+export function ChatPanel({
+  messages,
+  paired,
+  onPair,
+  busy,
+  projectLabel,
+  allowEdits,
+  onAllowEditsChange,
+  onSend,
+  onStop,
+  onReset
+}: ChatPanelProps): JSX.Element {
+  const [draft, setDraft] = React.useState('');
+  const listRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Keep the newest text in view while the reply streams in.
+  React.useEffect(() => {
+    const list = listRef.current;
+    if (list) {
+      list.scrollTop = list.scrollHeight;
+    }
+  }, [messages, busy]);
+
+  const [codeDraft, setCodeDraft] = React.useState('');
+  const [confirmEdits, setConfirmEdits] = React.useState(false);
+
+  if (!paired) {
+    return (
+      <div className="chat">
+        <p className="bridge-explainer">
+          Chat here instead of the terminal. Pair this panel with your Claude Code once: run this in a
+          terminal, then paste the code.
+        </p>
+        <CopyCommand command={'pbcopy < ~/.designagent-chat-code && echo "Code copied. Paste it in the DesignAgent panel in Figma."'} />
+        <div className="chat-input">
+          <textarea
+            value={codeDraft}
+            rows={1}
+            placeholder="Paste pairing code"
+            onChange={(event) => setCodeDraft(event.target.value)}
+          />
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={codeDraft.trim().length < 32}
+            onClick={() => onPair(codeDraft.trim())}
+          >
+            Pair
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const submit = (text: string): void => {
+    const trimmed = text.trim();
+    if (!trimmed || busy) {
+      return;
+    }
+    onSend(trimmed);
+    setDraft('');
+  };
+
+  return (
+    <div className="chat">
+      {messages.length === 0 ? (
+        <div className="chat-empty">
+          <p className="bridge-explainer">
+            Ask Claude to read or change this file. It runs your own Claude Code
+            {projectLabel ? (
+              <>
+                {' '}
+                in <strong>{projectLabel}</strong>
+              </>
+            ) : null}
+            .
+          </p>
+          <div className="chat-suggestions">
+            {CHAT_SUGGESTIONS.map((suggestion) => (
+              <button key={suggestion} type="button" className="chat-suggestion" onClick={() => submit(suggestion)}>
+                {suggestion}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="chat-list" ref={listRef}>
+          {messages.map((message, index) => {
+            const isLast = index === messages.length - 1;
+            const empty = message.parts.every((part) => part.type === 'text' && !part.text.trim());
+            return (
+              <div key={index} className={`chat-msg chat-msg-${message.role}`}>
+                {message.parts.map((part, partIndex) =>
+                  part.type === 'text' ? (
+                    part.text.trim() ? (
+                      <div key={partIndex} className="chat-text">
+                        {renderInline(part.text.trim())}
+                      </div>
+                    ) : null
+                  ) : (
+                    <div key={partIndex} className={`chat-tool chat-tool-${part.state}`}>
+                      <span className="chat-tool-mark" aria-hidden="true">
+                        {part.state === 'running' ? '' : part.state === 'ok' ? '✓' : '!'}
+                      </span>
+                      <span>{toolLabel(part.name)}</span>
+                    </div>
+                  )
+                )}
+                {message.role === 'assistant' && isLast && busy && empty ? (
+                  <div className="chat-tool chat-tool-running">
+                    <span className="chat-tool-mark" aria-hidden="true" />
+                    <span>Starting Claude Code…</span>
+                  </div>
+                ) : null}
+                {message.error ? <div className="chat-error">{message.error}</div> : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="chat-input">
+        <textarea
+          value={draft}
+          rows={2}
+          placeholder="Ask Claude about this file…"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              submit(draft);
+            }
+          }}
+        />
+        {busy ? (
+          <button type="button" className="btn" onClick={onStop}>
+            Stop
+          </button>
+        ) : (
+          <button type="button" className="btn-primary" disabled={!draft.trim()} onClick={() => submit(draft)}>
+            Send
+          </button>
+        )}
+      </div>
+
+      <div className="chat-options">
+        {confirmEdits ? (
+          <span className="chat-check">
+            <span>Claude will change files in {projectLabel || 'your project'} without asking.</span>
+            <button
+              type="button"
+              className="chat-link"
+              onClick={() => {
+                onAllowEditsChange(true);
+                setConfirmEdits(false);
+              }}
+            >
+              Allow
+            </button>
+            <button type="button" className="chat-link" onClick={() => setConfirmEdits(false)}>
+              Cancel
+            </button>
+          </span>
+        ) : (
+          <label className="chat-check">
+            <input
+              type="checkbox"
+              checked={allowEdits}
+              onChange={(event) => (event.target.checked ? setConfirmEdits(true) : onAllowEditsChange(false))}
+            />
+            <span>Let Claude edit my files</span>
+          </label>
+        )}
+        {messages.length > 0 ? (
+          <button type="button" className="chat-link" disabled={busy} onClick={onReset}>
+            New chat
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

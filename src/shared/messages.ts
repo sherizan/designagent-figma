@@ -20,6 +20,7 @@ export type ToUIMessage =
       error?: string;
     }
   | { type: 'APPLY_DESIGN_MD_RESULT'; ok: boolean; result?: unknown; error?: string }
+  | { type: 'PREFS'; chatCode: string; lastRoot: string; allowEdits: boolean }
   | { type: 'ERROR'; message: string };
 
 export type ToPluginMessage =
@@ -50,4 +51,8 @@ export type ToPluginMessage =
       useDesignSystem?: boolean;
     }
   | { type: 'REFRESH_REQUEST' }
-  | { type: 'RESIZE'; height: number };
+  | { type: 'RESIZE'; height: number }
+  | { type: 'PREFS_LOAD' }
+  | { type: 'CHAT_CODE_SAVE'; code: string }
+  | { type: 'LAST_ROOT_SAVE'; root: string }
+  | { type: 'ALLOW_EDITS_SAVE'; allow: boolean };

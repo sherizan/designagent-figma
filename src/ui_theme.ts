@@ -743,4 +743,39 @@ export const UI_STYLES = `
   .project-switch-label { opacity: 0.6; color: var(--text-muted); }
   .project-switch-select { font: inherit; font-size: 11px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 2px 4px; }
   .project-switch-current { font-size: 11px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* In-panel chat */
+  .chat { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+  .chat-empty { display: flex; flex-direction: column; gap: 10px; }
+  .chat-suggestions { display: flex; flex-direction: column; gap: 6px; }
+  .chat-suggestion { text-align: left; padding: 8px 10px; border-color: var(--border); background: var(--surface-soft); color: var(--text); font-weight: 500; }
+  .chat-list { display: flex; flex-direction: column; gap: 10px; max-height: 380px; overflow-y: auto; padding-right: 2px; }
+  .chat-msg { display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
+  .chat-msg-user { align-self: flex-end; max-width: 88%; background: var(--accent-soft); border-radius: 12px 12px 3px 12px; padding: 7px 11px; }
+  .chat-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.55; color: var(--text); }
+  .chat-text code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+  .chat-tool { display: inline-flex; align-items: center; gap: 7px; align-self: flex-start; font-size: 11.5px; color: var(--text-muted); background: var(--surface-soft); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px 2px 8px; }
+  .chat-tool-mark { width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; line-height: 1; color: var(--ok); }
+  .chat-tool-running .chat-tool-mark { border-radius: 50%; border: 1.5px solid var(--border-strong); border-top-color: var(--accent); animation: da-spin 720ms linear infinite; }
+  .chat-tool-error .chat-tool-mark { color: var(--danger-text); font-weight: 700; }
+  .chat-error { font-size: 12px; line-height: 1.5; color: var(--danger-text); background: var(--danger-bg); border: 1px solid var(--danger-border); border-radius: 8px; padding: 6px 10px; overflow-wrap: anywhere; }
+  .chat-input { display: flex; align-items: flex-end; gap: 8px; }
+  .chat-input textarea { flex: 1; min-width: 0; resize: none; font: inherit; font-size: 13px; line-height: 1.45; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px; padding: 8px 10px; outline: none; }
+  .chat-input textarea:focus { border-color: var(--primary-bg); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .chat-input textarea::placeholder { color: var(--text-dim); }
+  .chat-options { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--text-muted); }
+  .chat-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .chat-check input { margin: 0; accent-color: var(--primary-bg); }
+  .chat-link { border: none; background: none; padding: 0; font-size: 11.5px; color: var(--accent); font-weight: 600; }
+  .chat-link:hover { background: none; text-decoration: underline; color: var(--accent); }
+
+  .bridge-menu { position: relative; }
+  .bridge-menu-button { padding: 3px 9px; font-size: 16px; line-height: 1; letter-spacing: 1px; }
+  .bridge-menu-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 10; min-width: 150px; display: flex; flex-direction: column; gap: 2px; padding: 6px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 6px 20px rgba(35, 32, 28, 0.14); }
+  .bridge-menu-list button { border: none; background: none; text-align: left; padding: 6px 8px; border-radius: 6px; color: var(--text); }
+  .bridge-menu-list button:hover { background: var(--surface-hover); }
+  .bridge-menu-list .bridge-heartbeat { padding: 2px 8px 6px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+  .update-banner { margin-top: 0; padding: 8px 12px; background: var(--accent-soft); border-color: transparent; }
+  .update-banner summary { font-size: 12px; color: var(--accent); }
+  .connecting-line { display: flex; align-items: center; gap: 10px; padding: 4px 2px; font-size: 12.5px; color: var(--text-muted); }
 `;
