@@ -2981,7 +2981,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve3.call(this, root, ref);
+      let _sch = resolve4.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3008,7 +3008,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve3(root, ref) {
+    function resolve4(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3639,7 +3639,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve3(baseURI, relativeURI, options) {
+    function resolve4(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -3897,7 +3897,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve3,
+      resolve: resolve4,
       resolveComponent,
       equal,
       serialize,
@@ -9134,7 +9134,7 @@ var require_websocket = __commonJS({
     var http = require("http");
     var net = require("net");
     var tls = require("tls");
-    var { randomBytes, createHash } = require("crypto");
+    var { randomBytes: randomBytes2, createHash } = require("crypto");
     var { Duplex, Readable } = require("stream");
     var { URL: URL2 } = require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -9672,7 +9672,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes(16).toString("base64");
+      const key = randomBytes2(16).toString("base64");
       const request = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -10566,14 +10566,14 @@ var require_websocket_server = __commonJS({
 });
 
 // src/server.ts
-var import_node_child_process = require("node:child_process");
-var import_node_crypto = require("node:crypto");
+var import_node_child_process2 = require("node:child_process");
+var import_node_crypto2 = require("node:crypto");
 var import_promises = require("node:dns/promises");
 var import_promises2 = require("node:fs/promises");
 var import_node_net = require("node:net");
-var import_node_os2 = require("node:os");
+var import_node_os3 = require("node:os");
 var import_node_util = require("node:util");
-var import_node_path3 = require("node:path");
+var import_node_path4 = require("node:path");
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -22667,7 +22667,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
+        await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -22684,7 +22684,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -22762,7 +22762,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve3(parseResult.data);
+            resolve4(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -23023,12 +23023,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve3, interval);
+      const timeoutId = setTimeout(resolve4, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -24128,7 +24128,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
+      await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -24777,12 +24777,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve3) => {
+    return new Promise((resolve4) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve3();
+        resolve4();
       } else {
-        this._stdout.once("drain", resolve3);
+        this._stdout.once("drain", resolve4);
       }
     });
   }
@@ -24799,13 +24799,337 @@ var import_websocket = __toESM(require_websocket(), 1);
 var import_websocket_server = __toESM(require_websocket_server(), 1);
 
 // src/broker.ts
+var import_node_fs2 = require("node:fs");
+var import_node_os2 = require("node:os");
+var import_node_path2 = require("node:path");
+
+// src/chat.ts
+var import_node_child_process = require("node:child_process");
+var import_node_crypto = require("node:crypto");
 var import_node_fs = require("node:fs");
 var import_node_os = require("node:os");
 var import_node_path = require("node:path");
+var CHAT_CODE_FILE = (0, import_node_path.join)((0, import_node_os.homedir)(), ".designagent-chat-code");
+function chatCode() {
+  try {
+    const existing = (0, import_node_fs.readFileSync)(CHAT_CODE_FILE, "utf8").trim();
+    if (existing.length >= 32) {
+      return existing;
+    }
+  } catch {
+  }
+  const code = (0, import_node_crypto.randomBytes)(24).toString("hex");
+  (0, import_node_fs.writeFileSync)(CHAT_CODE_FILE, code + "\n", { mode: 384 });
+  return code;
+}
+function chatCodeMatches(candidate) {
+  if (typeof candidate !== "string") {
+    return false;
+  }
+  let expected;
+  try {
+    expected = Buffer.from(chatCode());
+  } catch {
+    return false;
+  }
+  const given = Buffer.from(candidate.trim());
+  return given.length === expected.length && (0, import_node_crypto.timingSafeEqual)(given, expected);
+}
+var GUARDED_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write"];
+function realOrSelf(path) {
+  let current = path;
+  let rest = "";
+  for (; ; ) {
+    try {
+      return (0, import_node_path.join)((0, import_node_fs.realpathSync)(current), rest);
+    } catch {
+      const parent = (0, import_node_path.dirname)(current);
+      if (parent === current) {
+        return path;
+      }
+      rest = (0, import_node_path.join)(current.slice(parent.length + (parent.endsWith(import_node_path.sep) ? 0 : 1)), rest);
+      current = parent;
+    }
+  }
+}
+function runChatGuard() {
+  const root = process.env.DESIGNAGENT_CHAT_ROOT ?? "";
+  let raw = "";
+  process.stdin.on("data", (chunk) => {
+    raw += chunk.toString("utf8");
+  });
+  process.stdin.on("end", () => {
+    const block = (why) => {
+      process.stderr.write(`Blocked by DesignAgent chat: ${why} Only files inside the project folder are available here.`);
+      process.exit(2);
+    };
+    if (!root) {
+      block("no project folder is set.");
+    }
+    let input;
+    try {
+      input = JSON.parse(raw);
+    } catch {
+      return block("unreadable tool request.");
+    }
+    const realRoot = realOrSelf((0, import_node_path.resolve)(root));
+    const base = typeof input.cwd === "string" && input.cwd ? input.cwd : root;
+    const params = input.tool_input ?? {};
+    const inside = (candidate) => {
+      const expanded = candidate.startsWith("~") ? (0, import_node_path.join)((0, import_node_os.homedir)(), candidate.slice(1)) : candidate;
+      const real = realOrSelf((0, import_node_path.isAbsolute)(expanded) ? (0, import_node_path.resolve)(expanded) : (0, import_node_path.resolve)(base, expanded));
+      return real === realRoot || real.startsWith(realRoot + import_node_path.sep);
+    };
+    for (const key of ["file_path", "path", "notebook_path"]) {
+      const value = params[key];
+      if (typeof value === "string" && value && !inside(value)) {
+        block(`${value} is outside the project.`);
+      }
+    }
+    const pattern = params.pattern;
+    if (typeof params.glob === "string" && /(^|[\\/])\.\.([\\/]|$)|^[\\/~]/.test(params.glob)) {
+      block("that file filter reaches outside the project.");
+    }
+    if (typeof pattern === "string" && "pattern" in params && !("output_mode" in params) && /(^|[\\/])\.\.([\\/]|$)|^[\\/~]/.test(pattern) && typeof params.path !== "string") {
+      block("that search pattern reaches outside the project.");
+    }
+    process.exit(0);
+  });
+}
+var MCP_NAME = "designagent";
+var TOOL_PREFIX = `mcp__${MCP_NAME}__`;
+var STRIP_ENV = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|CLAUDE_CODE_(ENTRYPOINT|MESSAGING_SOCKET|MESSAGING_TOKEN|EXECPATH|SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|CHILD_NOTES_DIR|SSE_PORT))$/;
+var SYSTEM_APPEND = [
+  "You are being driven from the DesignAgent panel inside Figma, not a terminal.",
+  "The person typing is a designer looking at their Figma file.",
+  `Act on the open file with the ${MCP_NAME} tools; call status first to see the file and the current selection.`,
+  "After you change the design, take a screenshot to check the result.",
+  "Reply in short plain sentences. No code or file paths unless asked. The panel is narrow: no tables."
+].join(" ");
+function findClaude() {
+  const override = process.env.DESIGNAGENT_CLAUDE_BIN?.trim();
+  if (override) {
+    return override;
+  }
+  const home = (0, import_node_os.homedir)();
+  const candidates = [
+    (0, import_node_path.join)(home, ".local", "bin", "claude"),
+    (0, import_node_path.join)(home, ".claude", "local", "claude"),
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude"
+  ];
+  for (const candidate of candidates) {
+    if ((0, import_node_fs.existsSync)(candidate)) {
+      return candidate;
+    }
+  }
+  return "claude";
+}
+function createChatRunner(deps) {
+  let child = null;
+  const sessionByRoot = /* @__PURE__ */ new Map();
+  function stop() {
+    if (child) {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+      }
+    }
+  }
+  function send(opts) {
+    if (child) {
+      deps.emit({ kind: "done", ok: false, error: "Claude is still working on the last message." });
+      return;
+    }
+    const mcpConfig = JSON.stringify({
+      mcpServers: {
+        [MCP_NAME]: {
+          command: process.execPath,
+          args: [__filename],
+          env: { DESIGNAGENT_PROJECT_DIR: opts.root }
+        }
+      }
+    });
+    const guard = `"${process.execPath}" "${__filename}" --chat-guard`;
+    const settings = JSON.stringify({
+      hooks: {
+        PreToolUse: [{ matcher: GUARDED_TOOLS.join("|"), hooks: [{ type: "command", command: guard }] }]
+      }
+    });
+    const args = [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--include-partial-messages",
+      "--strict-mcp-config",
+      "--mcp-config",
+      mcpConfig,
+      "--allowedTools",
+      `mcp__${MCP_NAME}`,
+      "Read",
+      "Glob",
+      "Grep",
+      "--tools",
+      [...GUARDED_TOOLS, "ToolSearch"].join(","),
+      "--settings",
+      settings,
+      "--append-system-prompt",
+      SYSTEM_APPEND
+    ];
+    if (opts.allowEdits) {
+      args.push("--permission-mode", "acceptEdits");
+    }
+    const resume = sessionByRoot.get(opts.root);
+    if (resume) {
+      args.push("--resume", resume);
+    }
+    const model = process.env.DESIGNAGENT_CHAT_MODEL?.trim();
+    if (model) {
+      args.push("--model", model);
+    }
+    const env = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (!STRIP_ENV.test(key)) {
+        env[key] = value;
+      }
+    }
+    env.DESIGNAGENT_CHAT_ROOT = opts.root;
+    let proc;
+    try {
+      proc = (0, import_node_child_process.spawn)(findClaude(), args, { cwd: opts.root, env, stdio: ["pipe", "pipe", "pipe"] });
+      proc.stdin?.on("error", () => void 0);
+      proc.stdin?.end(opts.text);
+    } catch (error2) {
+      deps.emit({
+        kind: "done",
+        ok: false,
+        error: `Could not start Claude Code: ${error2 instanceof Error ? error2.message : String(error2)}`
+      });
+      return;
+    }
+    child = proc;
+    deps.log(`chat: started claude (pid ${proc.pid}) in ${opts.root}${resume ? " (resumed)" : ""}.`);
+    deps.emit({ kind: "start" });
+    let finished = false;
+    let buffer = "";
+    let stderrTail = "";
+    const finish = (event) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      deps.emit(event);
+    };
+    const handleLine = (line) => {
+      let evt;
+      try {
+        evt = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (typeof evt.session_id === "string" && evt.session_id) {
+        sessionByRoot.set(opts.root, evt.session_id);
+      }
+      if (evt.type === "stream_event") {
+        const inner = evt.event;
+        if (inner?.type === "content_block_delta" && inner.delta?.type === "text_delta" && inner.delta.text) {
+          deps.emit({ kind: "text", text: inner.delta.text });
+        } else if (inner?.type === "content_block_start" && inner.content_block?.type === "tool_use") {
+          const name = String(inner.content_block.name ?? "tool");
+          deps.emit({
+            kind: "tool",
+            id: String(inner.content_block.id ?? ""),
+            name: name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : name
+          });
+        } else if (inner?.type === "message_stop") {
+          deps.emit({ kind: "text", text: "\n\n" });
+        }
+        return;
+      }
+      if (evt.type === "user") {
+        const content = evt.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block?.type === "tool_result") {
+              deps.emit({ kind: "tool_done", id: String(block.tool_use_id ?? ""), ok: block.is_error !== true });
+            }
+          }
+        }
+        return;
+      }
+      if (evt.type === "result") {
+        const isError = evt.is_error === true || evt.subtype !== "success";
+        if (child === proc) {
+          child = null;
+        }
+        setTimeout(() => {
+          if (proc.exitCode === null && proc.signalCode === null) {
+            proc.kill("SIGTERM");
+          }
+        }, 5e3).unref();
+        finish({
+          kind: "done",
+          ok: !isError,
+          error: isError ? String(evt.result ?? evt.subtype ?? "Claude Code reported an error.") : void 0,
+          costUsd: typeof evt.total_cost_usd === "number" ? evt.total_cost_usd : void 0
+        });
+      }
+    };
+    proc.stdout?.on("data", (chunk) => {
+      buffer += chunk.toString("utf8");
+      let newline = buffer.indexOf("\n");
+      while (newline !== -1) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (line) {
+          handleLine(line);
+        }
+        newline = buffer.indexOf("\n");
+      }
+    });
+    proc.stderr?.on("data", (chunk) => {
+      stderrTail = (stderrTail + chunk.toString("utf8")).slice(-600);
+    });
+    proc.on("error", (error2) => {
+      if (child === proc) {
+        child = null;
+      }
+      finish({
+        kind: "done",
+        ok: false,
+        error: error2.code === "ENOENT" ? "Claude Code was not found on this machine. Install it, or set DESIGNAGENT_CLAUDE_BIN to its path." : `Could not start Claude Code: ${error2.message}`
+      });
+    });
+    proc.on("close", (code, signal) => {
+      if (child === proc) {
+        child = null;
+      }
+      deps.log(`chat: claude exited (code ${code}, signal ${signal}).`);
+      if (signal) {
+        finish({ kind: "done", ok: false, error: "Stopped." });
+      } else {
+        finish({
+          kind: "done",
+          ok: false,
+          error: stderrTail.trim() || `Claude Code exited with code ${code} before replying.`
+        });
+      }
+    });
+  }
+  function reset() {
+    stop();
+    sessionByRoot.clear();
+    deps.emit({ kind: "reset" });
+  }
+  return { send, stop, reset, busy: () => child !== null };
+}
+
+// src/broker.ts
 var BROKER_PROTOCOL_VERSION = 2;
 var BUILD_MTIME = (() => {
   try {
-    return (0, import_node_fs.statSync)(__filename).mtimeMs;
+    return (0, import_node_fs2.statSync)(__filename).mtimeMs;
   } catch {
     return 0;
   }
@@ -24814,14 +25138,14 @@ var PORT = Number(process.env.DESIGNAGENT_BRIDGE_PORT ?? 3790);
 var BIND_HOSTS = ["127.0.0.1", "::1"];
 var HEARTBEAT_MS = 2e4;
 var IDLE_MS = Number(process.env.DESIGNAGENT_BROKER_IDLE_MS ?? 6e4);
-var LOG_FILE = (0, import_node_path.join)((0, import_node_os.tmpdir)(), "designagent-broker.log");
-var HOME = (0, import_node_os.homedir)();
+var LOG_FILE = (0, import_node_path2.join)((0, import_node_os2.tmpdir)(), "designagent-broker.log");
+var HOME = (0, import_node_os2.homedir)();
 function isUsableRoot(root) {
   return !!root && root !== "?" && root !== HOME;
 }
 function blog(...args) {
   try {
-    (0, import_node_fs.appendFileSync)(LOG_FILE, `[broker ${(/* @__PURE__ */ new Date()).toISOString()}] ${args.join(" ")}
+    (0, import_node_fs2.appendFileSync)(LOG_FILE, `[broker ${(/* @__PURE__ */ new Date()).toISOString()}] ${args.join(" ")}
 `);
   } catch {
   }
@@ -24834,6 +25158,10 @@ function runBroker() {
   const requestOrigin = /* @__PURE__ */ new Map();
   const wssList = [];
   let idleTimer = null;
+  const chat = createChatRunner({
+    emit: (event) => send(plugin, { type: "chat_event", event }),
+    log: blog
+  });
   function activeServer() {
     return servers.length > 0 ? servers[servers.length - 1] : null;
   }
@@ -24864,7 +25192,7 @@ function runBroker() {
     if (!plugin || !active) {
       return;
     }
-    send(plugin, { type: "hello_ack", serverInstanceId: active.sessionId, pid: process.pid });
+    send(plugin, { type: "hello_ack", serverInstanceId: active.sessionId, pid: process.pid, chat: true });
   }
   function broadcastSessions() {
     if (!plugin) {
@@ -24877,6 +25205,9 @@ function runBroker() {
         continue;
       }
       byRoot.set(s.root, s);
+    }
+    if (target && isUsableRoot(target.root)) {
+      byRoot.set(target.root, target);
     }
     send(plugin, {
       type: "sessions",
@@ -24925,7 +25256,18 @@ function runBroker() {
     broadcastSessions();
     armIdleTimer();
   }
-  function handleConnection(socket) {
+  const originOf = /* @__PURE__ */ new WeakMap();
+  function chatAllowed(socket, code) {
+    const origin = originOf.get(socket) ?? "";
+    const originOk = origin === "" || origin === "null" || /^https:\/\/([a-z0-9-]+\.)?figma\.com$/.test(origin);
+    if (!originOk) {
+      blog(`chat refused: origin ${origin}.`);
+      return false;
+    }
+    return chatCodeMatches(code);
+  }
+  function handleConnection(socket, request) {
+    originOf.set(socket, String(request?.headers.origin ?? ""));
     alive.add(socket);
     socket.on("pong", () => alive.add(socket));
     socket.on("message", (data) => {
@@ -25012,6 +25354,40 @@ function runBroker() {
           send(target.socket, msg);
           return;
         }
+        if ((msg.type === "chat_send" || msg.type === "chat_stop" || msg.type === "chat_reset") && !chatAllowed(socket, msg.code)) {
+          send(plugin, {
+            type: "chat_event",
+            event: { kind: "done", ok: false, needsPairing: true, error: "Pairing code missing or wrong." }
+          });
+          return;
+        }
+        if (msg.type === "chat_send" && typeof msg.text === "string" && msg.text.trim()) {
+          const target = routeTarget();
+          if (!target || !isUsableRoot(target.root)) {
+            send(plugin, {
+              type: "chat_event",
+              event: {
+                kind: "done",
+                ok: false,
+                error: "No project folder is linked. Run Claude Code once inside your project folder."
+              }
+            });
+            return;
+          }
+          if (!selectedSessionId) {
+            selectedSessionId = target.sessionId;
+          }
+          chat.send({ root: target.root, text: msg.text.trim(), allowEdits: msg.allowEdits === true });
+          return;
+        }
+        if (msg.type === "chat_stop") {
+          chat.stop();
+          return;
+        }
+        if (msg.type === "chat_reset") {
+          chat.reset();
+          return;
+        }
         if (msg.type === "select_session" && typeof msg.sessionId === "string") {
           if (servers.some((s) => s.sessionId === msg.sessionId)) {
             selectedSessionId = msg.sessionId;
@@ -25053,6 +25429,7 @@ function runBroker() {
     socket.on("close", () => {
       if (socket === plugin) {
         plugin = null;
+        chat.stop();
         blog("plugin disconnected.");
       } else {
         dropServer(socket);
@@ -25106,20 +25483,25 @@ function runBroker() {
   if (BIND_HOSTS[1]) {
     listen(BIND_HOSTS[1], false);
   }
+  try {
+    chatCode();
+  } catch (error2) {
+    blog(`could not create the chat pairing code: ${error2 instanceof Error ? error2.message : String(error2)}`);
+  }
   armIdleTimer();
   blog(`broker started (protocol v${BROKER_PROTOCOL_VERSION}, pid ${process.pid}).`);
 }
 
 // src/project-root.ts
-var import_node_fs2 = require("node:fs");
-var import_node_path2 = require("node:path");
+var import_node_fs3 = require("node:fs");
+var import_node_path3 = require("node:path");
 function findGitRoot(start) {
-  let dir = (0, import_node_path2.resolve)(start);
+  let dir = (0, import_node_path3.resolve)(start);
   for (; ; ) {
-    if ((0, import_node_fs2.existsSync)((0, import_node_path2.resolve)(dir, ".git"))) {
+    if ((0, import_node_fs3.existsSync)((0, import_node_path3.resolve)(dir, ".git"))) {
       return dir;
     }
-    const parent = (0, import_node_path2.dirname)(dir);
+    const parent = (0, import_node_path3.dirname)(dir);
     if (parent === dir) {
       return null;
     }
@@ -25129,22 +25511,22 @@ function findGitRoot(start) {
 function resolveProjectRoot(opts) {
   const override = opts.projectDirEnv?.trim();
   if (override) {
-    return (0, import_node_path2.resolve)(override);
+    return (0, import_node_path3.resolve)(override);
   }
   const workspace = opts.claudeProjectDir?.trim();
   if (workspace) {
-    return (0, import_node_path2.resolve)(workspace);
+    return (0, import_node_path3.resolve)(workspace);
   }
   const gitRoot = (opts.gitRootOf ?? findGitRoot)(opts.cwd);
   if (gitRoot) {
-    return (0, import_node_path2.resolve)(gitRoot);
+    return (0, import_node_path3.resolve)(gitRoot);
   }
-  return (0, import_node_path2.resolve)(opts.cwd);
+  return (0, import_node_path3.resolve)(opts.cwd);
 }
 function deriveProjectLabel(root) {
-  const parts = (0, import_node_path2.resolve)(root).split(import_node_path2.sep).filter(Boolean);
+  const parts = (0, import_node_path3.resolve)(root).split(import_node_path3.sep).filter(Boolean);
   if (parts.length === 0) {
-    return (0, import_node_path2.resolve)(root);
+    return (0, import_node_path3.resolve)(root);
   }
   return parts.slice(-2).join("/");
 }
@@ -25153,7 +25535,7 @@ function deriveProjectLabel(root) {
 var IS_BROKER = process.argv.includes("--broker");
 var PORT2 = Number(process.env.DESIGNAGENT_BRIDGE_PORT ?? 3790);
 var REQUEST_TIMEOUT_MS = 2e4;
-var SERVER_INSTANCE_ID = (0, import_node_crypto.randomUUID)();
+var SERVER_INSTANCE_ID = (0, import_node_crypto2.randomUUID)();
 function log(...args) {
   console.error("[designagent-mcp]", ...args);
 }
@@ -25170,7 +25552,7 @@ function spawnBrokerIfStale() {
   }
   lastSpawnAt = now;
   try {
-    const child = (0, import_node_child_process.spawn)(process.execPath, [__filename, "--broker"], {
+    const child = (0, import_node_child_process2.spawn)(process.execPath, [__filename, "--broker"], {
       detached: true,
       stdio: "ignore",
       env: process.env
@@ -25308,7 +25690,7 @@ function connectToBroker() {
   });
 }
 function callPlugin(command, params = {}, timeoutMs = REQUEST_TIMEOUT_MS, label = command) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     if (!brokerSocket || brokerSocket.readyState !== import_websocket.default.OPEN || !brokerReady) {
       countToolCall(label);
       countToolCall(`${label}_nc`);
@@ -25319,13 +25701,13 @@ function callPlugin(command, params = {}, timeoutMs = REQUEST_TIMEOUT_MS, label 
       );
       return;
     }
-    const id = (0, import_node_crypto.randomUUID)();
+    const id = (0, import_node_crypto2.randomUUID)();
     const timer = setTimeout(() => {
       pending.delete(id);
       countToolCall(`${label}_timeout`);
       reject(new Error(`DesignAgent plugin did not respond within ${timeoutMs / 1e3}s.`));
     }, timeoutMs);
-    pending.set(id, { resolve: resolve3, reject, timer, command: label });
+    pending.set(id, { resolve: resolve4, reject, timer, command: label });
     try {
       brokerSocket.send(JSON.stringify({ type: "request", id, command, params }));
       countToolCall(label);
@@ -25366,13 +25748,13 @@ function countBatchOps(result) {
 var telemetryId;
 async function getTelemetryId() {
   if (!telemetryId) {
-    const idFile = (0, import_node_path3.join)((0, import_node_os2.homedir)(), ".designagent-id");
+    const idFile = (0, import_node_path4.join)((0, import_node_os3.homedir)(), ".designagent-id");
     telemetryId = await (0, import_promises2.readFile)(idFile, "utf8").then(
       (raw) => raw.trim() || void 0,
       () => void 0
     );
     if (!telemetryId) {
-      telemetryId = (0, import_node_crypto.randomUUID)();
+      telemetryId = (0, import_node_crypto2.randomUUID)();
       await (0, import_promises2.writeFile)(idFile, telemetryId).catch(() => {
       });
     }
@@ -25383,7 +25765,7 @@ var pluginVersion;
 async function getPluginVersion() {
   if (!pluginVersion) {
     try {
-      const raw = await (0, import_promises2.readFile)((0, import_node_path3.resolve)(__dirname, "../.claude-plugin/plugin.json"), "utf8");
+      const raw = await (0, import_promises2.readFile)((0, import_node_path4.resolve)(__dirname, "../.claude-plugin/plugin.json"), "utf8");
       pluginVersion = JSON.parse(raw).version || "0.0.0";
     } catch {
       pluginVersion = "0.0.0";
@@ -25433,7 +25815,7 @@ async function run(command, params = {}, label) {
 }
 var MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 var MAX_IMAGE_PX = 4096;
-var execFileAsync = (0, import_node_util.promisify)(import_node_child_process.execFile);
+var execFileAsync = (0, import_node_util.promisify)(import_node_child_process2.execFile);
 function sniffImage(buf) {
   if (buf.length >= 24 && buf.readUInt32BE(0) === 2303741511) {
     return { format: "png", width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
@@ -25480,7 +25862,7 @@ async function convertWithSips(buf) {
   if (process.platform !== "darwin") {
     return null;
   }
-  const src = (0, import_node_path3.join)((0, import_node_os2.tmpdir)(), `designagent-img-${(0, import_node_crypto.randomUUID)()}`);
+  const src = (0, import_node_path4.join)((0, import_node_os3.tmpdir)(), `designagent-img-${(0, import_node_crypto2.randomUUID)()}`);
   const out = `${src}.png`;
   try {
     await (0, import_promises2.writeFile)(src, buf);
@@ -25553,22 +25935,22 @@ var PROJECT_ROOT = resolveProjectRoot({
 });
 var PROJECT_LABEL = deriveProjectLabel(PROJECT_ROOT);
 function resolveInProject(path) {
-  const abs = (0, import_node_path3.resolve)(PROJECT_ROOT, path);
-  const rel = (0, import_node_path3.relative)(PROJECT_ROOT, abs);
-  if (rel.startsWith("..") || (0, import_node_path3.isAbsolute)(rel)) {
+  const abs = (0, import_node_path4.resolve)(PROJECT_ROOT, path);
+  const rel = (0, import_node_path4.relative)(PROJECT_ROOT, abs);
+  if (rel.startsWith("..") || (0, import_node_path4.isAbsolute)(rel)) {
     throw new Error("Path is outside the project directory.");
   }
   return abs;
 }
-var READABLE_ROOTS = [PROJECT_ROOT, (0, import_node_os2.tmpdir)(), "/tmp", "/private/tmp"].map((r) => (0, import_node_path3.resolve)(r));
+var READABLE_ROOTS = [PROJECT_ROOT, (0, import_node_os3.tmpdir)(), "/tmp", "/private/tmp"].map((r) => (0, import_node_path4.resolve)(r));
 function isReadable(abs) {
   return READABLE_ROOTS.some((root) => {
-    const rel = (0, import_node_path3.relative)(root, abs);
-    return rel === "" || !rel.startsWith("..") && !(0, import_node_path3.isAbsolute)(rel);
+    const rel = (0, import_node_path4.relative)(root, abs);
+    return rel === "" || !rel.startsWith("..") && !(0, import_node_path4.isAbsolute)(rel);
   });
 }
 function resolveReadable(path) {
-  const abs = (0, import_node_path3.resolve)(PROJECT_ROOT, path);
+  const abs = (0, import_node_path4.resolve)(PROJECT_ROOT, path);
   if (!isReadable(abs)) {
     throw new Error("Path is outside the project directory (or the OS temp folder).");
   }
@@ -25650,7 +26032,7 @@ var LOCAL_ASSET_MIME = {
   ".svg": "image/svg+xml"
 };
 async function inlineLocalAssets(html, htmlPath) {
-  const baseDir = (0, import_node_path3.dirname)(resolveReadable(htmlPath));
+  const baseDir = (0, import_node_path4.dirname)(resolveReadable(htmlPath));
   const refs = /* @__PURE__ */ new Set();
   for (const m of html.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["']/gi)) refs.add(m[1]);
   for (const m of html.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) refs.add(m[1]);
@@ -25660,10 +26042,10 @@ async function inlineLocalAssets(html, htmlPath) {
     if (budget <= 0) break;
     if (/^(https?:|data:|blob:|#)/i.test(ref)) continue;
     const clean = ref.split(/[?#]/)[0] ?? "";
-    const mime = LOCAL_ASSET_MIME[(0, import_node_path3.extname)(clean).toLowerCase()];
+    const mime = LOCAL_ASSET_MIME[(0, import_node_path4.extname)(clean).toLowerCase()];
     if (!mime) continue;
     try {
-      const abs = (0, import_node_path3.resolve)(baseDir, clean);
+      const abs = (0, import_node_path4.resolve)(baseDir, clean);
       if (!isReadable(abs)) continue;
       const buf = await (0, import_promises2.readFile)(abs);
       if (buf.length > MAX_IMAGE_BYTES) continue;
@@ -25696,7 +26078,7 @@ async function listHtmlFiles() {
     }
     for (const entry of entries) {
       if (results.length >= 100) break;
-      const full = (0, import_node_path3.resolve)(dir, entry.name);
+      const full = (0, import_node_path4.resolve)(dir, entry.name);
       if (entry.isDirectory()) {
         if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
         await walk(full, depth + 1);
@@ -25707,9 +26089,9 @@ async function listHtmlFiles() {
         } catch {
         }
         results.push({
-          path: (0, import_node_path3.relative)(PROJECT_ROOT, full),
+          path: (0, import_node_path4.relative)(PROJECT_ROOT, full),
           name: entry.name,
-          dir: (0, import_node_path3.relative)(PROJECT_ROOT, dir) || ".",
+          dir: (0, import_node_path4.relative)(PROJECT_ROOT, dir) || ".",
           size
         });
       }
@@ -26279,7 +26661,7 @@ server.registerTool(
       if (process.platform !== "darwin") {
         throw new Error("capture_simulator needs macOS with Xcode command-line tools.");
       }
-      const file = (0, import_node_path3.join)((0, import_node_os2.tmpdir)(), `designagent-sim-${(0, import_node_crypto.randomUUID)()}.png`);
+      const file = (0, import_node_path4.join)((0, import_node_os3.tmpdir)(), `designagent-sim-${(0, import_node_crypto2.randomUUID)()}.png`);
       await execFileAsync("xcrun", ["simctl", "io", args.device ?? "booted", "screenshot", file]);
       let buf = await (0, import_promises2.readFile)(file);
       const pxW = buf.readUInt32BE(16);
@@ -26729,7 +27111,9 @@ async function main() {
   process.stdin.on("close", exit);
   process.stdin.on("end", exit);
 }
-if (IS_BROKER) {
+if (process.argv.includes("--chat-guard")) {
+  runChatGuard();
+} else if (IS_BROKER) {
   runBroker();
 } else {
   main().catch((error2) => {
