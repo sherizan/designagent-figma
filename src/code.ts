@@ -1403,6 +1403,7 @@ async function createDesignTreeInner(message: {
         ok: true,
         result: { id: frame.id, name: frame.name, rendering: true }
       });
+      void moveCursorTo(frame.id);
       // Paint children in the background; a failure here leaves a partial but
       // targetable frame (the caller already has its id) — surface via console.
       const t0 = Date.now();
@@ -2445,10 +2446,248 @@ function selectAndReturn(node: SceneNode): { id: string; name: string; type: str
   return { id: node.id, name: node.name, type: node.type };
 }
 
+// ---- Claude's cursor (in-panel chat) ----
+// Figma gives plugins no real multiplayer cursor, so while a chat turn runs we draw
+// one: a small locked layer at the top of the page that glides to whatever Claude
+// just made or changed. It is a real layer, so it is removed before any command
+// that reads or exports the canvas, when the turn ends, and when the plugin closes.
+const CURSOR_KEY = 'designagentCursor';
+const CURSOR_TIP = 2; // arrow tip offset inside its 18px box
+const CURSOR_READS = /^(status|get_|list_|take_screenshot|export_|console_logs)/;
+let cursorMode = false;
+let cursorNode: FrameNode | null = null;
+let cursorScale = 1;
+let cursorPoint: { x: number; y: number } | null = null;
+let cursorMove = 0; // token: a newer move cancels an older glide
+
+function removeCursorNode(): void {
+  cursorMove += 1;
+  const node = cursorNode;
+  cursorNode = null;
+  try {
+    if (node && !node.removed) {
+      node.remove();
+    }
+  } catch {
+    // already gone
+  }
+}
+
+// Leftovers from a crashed or force-closed run on the page we can see.
+function sweepCursorNodes(): void {
+  removeCursorNode();
+  try {
+    for (const child of figma.currentPage.children) {
+      if (child.getPluginData(CURSOR_KEY) === '1') {
+        child.remove();
+      }
+    }
+  } catch {
+    // page not ready
+  }
+}
+
+async function buildCursorNode(): Promise<FrameNode> {
+  const wrapper = figma.createFrame();
+  wrapper.name = 'Claude';
+  wrapper.fills = [];
+  wrapper.clipsContent = false;
+  wrapper.resize(18, 18);
+  wrapper.setPluginData(CURSOR_KEY, '1');
+  const arrow = figma.createNodeFromSvg(
+    '<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">' +
+      '<path d="M2 2 L15.5 7.5 L9.6 9.6 L7.5 15.5 Z" fill="#d97757" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>'
+  );
+  arrow.name = 'Arrow';
+  wrapper.appendChild(arrow);
+  try {
+    await figma.loadFontAsync({ family: 'Inter', style: 'Medium' });
+    const label = figma.createFrame();
+    label.name = 'Label';
+    label.layoutMode = 'HORIZONTAL';
+    label.primaryAxisSizingMode = 'AUTO';
+    label.counterAxisSizingMode = 'AUTO';
+    label.paddingLeft = 7;
+    label.paddingRight = 7;
+    label.paddingTop = 2;
+    label.paddingBottom = 3;
+    label.cornerRadius = 9;
+    label.topLeftRadius = 2;
+    label.fills = [{ type: 'SOLID', color: { r: 0.851, g: 0.467, b: 0.341 } }];
+    const text = figma.createText();
+    text.fontName = { family: 'Inter', style: 'Medium' };
+    text.fontSize = 11;
+    text.characters = 'Claude';
+    text.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+    label.appendChild(text);
+    wrapper.appendChild(label);
+    label.x = 13;
+    label.y = 15;
+  } catch {
+    // no Inter: the arrow alone is enough
+  }
+  wrapper.locked = true;
+  return wrapper;
+}
+
+function placeCursor(node: FrameNode, point: { x: number; y: number }): void {
+  node.x = point.x - CURSOR_TIP * cursorScale;
+  node.y = point.y - CURSOR_TIP * cursorScale;
+}
+
+// The cursor layer, built if needed, sized for the current zoom and on top of the page.
+async function ensureCursorNode(token: number): Promise<FrameNode | null> {
+  if (!cursorNode || cursorNode.removed) {
+    const built = await buildCursorNode();
+    if (token !== cursorMove || !cursorMode) {
+      built.remove();
+      return null;
+    }
+    cursorNode = built;
+    cursorScale = 1;
+  }
+  const node = cursorNode;
+  // Keep the cursor the same size on screen whatever the zoom.
+  const wanted = 1 / Math.max(0.02, figma.viewport.zoom);
+  if (Math.abs(wanted / cursorScale - 1) > 0.15) {
+    node.locked = false;
+    node.rescale(wanted / cursorScale);
+    node.locked = true;
+    cursorScale = wanted;
+  }
+  figma.currentPage.appendChild(node); // stay above whatever was just created
+  return node;
+}
+
+// Put the cursor back where it was (after a read took it off the canvas), or at the
+// middle of the view when the turn has not touched anything yet. No glide.
+async function restoreCursor(): Promise<void> {
+  if (!cursorMode || (cursorNode && !cursorNode.removed)) {
+    return;
+  }
+  const token = (cursorMove += 1);
+  try {
+    const node = await ensureCursorNode(token);
+    if (!node) {
+      return;
+    }
+    cursorPoint = cursorPoint ?? { x: figma.viewport.center.x, y: figma.viewport.center.y };
+    placeCursor(node, cursorPoint);
+  } catch (error) {
+    console.warn('cursor:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function moveCursorTo(nodeId: string): Promise<void> {
+  if (!cursorMode) {
+    return;
+  }
+  const token = (cursorMove += 1);
+  try {
+    const target = await getNodeByIdGuarded(nodeId);
+    if (token !== cursorMove || !cursorMode || !target || !('absoluteBoundingBox' in target)) {
+      return;
+    }
+    const box = (target as SceneNode).absoluteBoundingBox;
+    // Only nodes on the page we are looking at.
+    let owner: BaseNode | null = target;
+    while (owner && owner.type !== 'PAGE') {
+      owner = owner.parent;
+    }
+    if (!box || owner !== figma.currentPage) {
+      return;
+    }
+    const to = { x: box.x + box.width * 0.72, y: box.y + box.height * 0.72 };
+
+    // Follow: pan (never zoom) when the target sits outside the view.
+    const view = figma.viewport.bounds;
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    if (cx < view.x || cx > view.x + view.width || cy < view.y || cy > view.y + view.height) {
+      figma.viewport.center = { x: cx, y: cy };
+    }
+
+    const node = await ensureCursorNode(token);
+    if (!node) {
+      return;
+    }
+
+    const from = cursorPoint ?? { x: to.x - 60 * cursorScale, y: to.y - 40 * cursorScale };
+    const STEPS = 9;
+    for (let step = 1; step <= STEPS; step++) {
+      if (token !== cursorMove || node.removed) {
+        return;
+      }
+      const t = 1 - Math.pow(1 - step / STEPS, 3); // ease-out
+      const point = { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+      placeCursor(node, point);
+      cursorPoint = point;
+      await new Promise((done) => setTimeout(done, 28));
+    }
+  } catch (error) {
+    console.warn('cursor:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+// The node a finished command made or touched, if any.
+function cursorTargetOf(result: unknown, params: Record<string, unknown>): string | null {
+  const idOf = (value: unknown): string | null => {
+    const id = value && typeof value === 'object' ? (value as { id?: unknown }).id : undefined;
+    return typeof id === 'string' && id ? id : null;
+  };
+  const direct = idOf(result);
+  if (direct) {
+    return direct;
+  }
+  const list = result && typeof result === 'object' ? (result as { results?: unknown }).results : undefined;
+  if (Array.isArray(list)) {
+    for (let i = list.length - 1; i >= 0; i--) {
+      const entry = list[i] as { ok?: unknown; result?: unknown } | undefined;
+      const id = entry && entry.ok ? idOf(entry.result) : null;
+      if (id) {
+        return id;
+      }
+    }
+  }
+  return typeof params.nodeId === 'string' && params.nodeId ? params.nodeId : null;
+}
+
+let cursorLinger: ReturnType<typeof setTimeout> | null = null;
+
+function setCursorMode(on: boolean): void {
+  if (cursorLinger) {
+    clearTimeout(cursorLinger);
+    cursorLinger = null;
+  }
+  if (on) {
+    // Present for the whole turn: start on the selection, or mid-view.
+    cursorMode = true;
+    const selected = figma.currentPage.selection[0];
+    if (selected) {
+      void moveCursorTo(selected.id);
+    } else {
+      void restoreCursor();
+    }
+    return;
+  }
+  // Let the last move land and be seen before the cursor leaves.
+  cursorLinger = setTimeout(() => {
+    cursorLinger = null;
+    cursorMode = false;
+    cursorPoint = null;
+    sweepCursorNodes();
+  }, 1500);
+}
+
 async function runBridgeCommand(
   command: string,
   params: Record<string, unknown>
 ): Promise<unknown> {
+  // Claude's cursor is a real layer: take it off the canvas before anything reads or
+  // exports the page, so it never shows up in a spec, a node list or a screenshot.
+  if (cursorNode && CURSOR_READS.test(command)) {
+    removeCursorNode();
+  }
   switch (command) {
     case 'status': {
       const selection = figma.currentPage.selection;
@@ -3630,6 +3869,16 @@ async function handleBridgeCommand(
   try {
     const result = await runBridgeCommand(command, params);
     postToUI({ type: 'BRIDGE_RESULT', id, ok: true, result });
+    if (cursorMode) {
+      // A write moves the cursor to what it touched; a read only took it off the
+      // canvas for a moment, so put it straight back.
+      const targetId = CURSOR_READS.test(command) ? null : cursorTargetOf(result, params);
+      if (targetId) {
+        void moveCursorTo(targetId);
+      } else {
+        void restoreCursor();
+      }
+    }
   } catch (error) {
     postToUI({
       type: 'BRIDGE_RESULT',
@@ -3637,6 +3886,7 @@ async function handleBridgeCommand(
       ok: false,
       error: error instanceof Error ? error.message : String(error)
     });
+    void restoreCursor();
   }
 }
 
@@ -3645,6 +3895,10 @@ figma.showUI(__html__, {
   height: PANEL_SIZE.height,
   themeColors: true
 });
+
+// A cursor left behind by a crashed run, and the one on screen when we close.
+sweepCursorNodes();
+figma.on('close', () => sweepCursorNodes());
 
 figma.on('selectionchange', () => {
   invalidateCache();
@@ -3711,6 +3965,11 @@ figma.ui.onmessage = (message: ToPluginMessage) => {
   }
   if (message.type === 'LAST_ROOT_SAVE') {
     void figma.clientStorage.setAsync('lastRoot', message.root).catch(() => undefined);
+    return;
+  }
+
+  if (message.type === 'CURSOR_MODE') {
+    setCursorMode(message.on);
     return;
   }
 
