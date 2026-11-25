@@ -53,6 +53,20 @@ lives in the sandbox (`src/code.ts`) and is exposed to Claude by the MCP server 
 `src/ui.tsx` (root) + `src/ui_components.tsx` (component library) + `src/ui_theme.ts`
 (CSS-in-JS). Match the existing style/structure in these files when adding UI.
 
+### In-panel chat — `claude-plugin/mcp/src/chat.ts`
+
+The panel can drive the user's own Claude Code: on `chat_send` the **broker** spawns
+`claude -p` (stream-json, one process per turn, `--resume` per project) in the selected project
+and relays the stream to the panel as `chat_event`. The broker port is reachable by any local
+page or process, so chat is gated: a pairing code (`~/.designagent-chat-code`, sent with every
+chat message), an Origin check, and a `PreToolUse` guard (`server.js --chat-guard`) that keeps
+Read/Glob/Grep/Edit/Write inside the project and off config paths. Keep those three intact when
+changing chat. While a turn runs, the sandbox draws "Claude's cursor" (a locked top-level layer,
+removed before any read/export command and when the turn ends).
+
+A newer-built `server.js` takes over the broker, so after `/plugin` updates the released build may
+replace a local one: rebuild `claude-plugin/mcp` and start it once to get the repo broker back.
+
 ## Conventions
 
 - TypeScript strict mode + `noUncheckedIndexedAccess`; JSX is `react-jsx`. Target es2015.
@@ -90,8 +104,8 @@ There are no automated tests — verification is visual, in Figma Desktop.
 1. Build: `npm run build` (or keep `npm run watch` running).
 2. Load DesignAgent via **Plugins → Development → Import plugin from manifest…** → repo-root
    `manifest.json` (first time only; after that just re-run it).
-3. In the DesignAgent panel, click **Enable** on the "Claude bridge" bar — the dot turns green
-   when the MCP is connected. Then use the designagent MCP tools (all prefixed
+3. Open the DesignAgent panel — it connects on its own, and the dot turns green when the MCP is
+   connected. Then use the designagent MCP tools (all prefixed
    `mcp__plugin_designagent_designagent__`):
    - `status` — confirm the bridge; see the file / page / current selection
    - `get_spec`, `get_design_md`, `list_page_nodes` — inspect what the plugin extracts

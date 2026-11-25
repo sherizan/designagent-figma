@@ -82,8 +82,8 @@ The plugin bundles the `designagent` MCP server (`mcp/server.js`), launched by C
 Code over stdio. It opens a local WebSocket server on `ws://localhost:3790`; the
 DesignAgent plugin's UI connects to it.
 
-1. Open the **DesignAgent** plugin in Figma and click **Enable** on the "Claude bridge"
-   bar — the dot turns green when connected.
+1. Open the **DesignAgent** plugin in Figma. It connects on its own; the dot turns green
+   when connected. (Stop and Reconnect are in the `⋯` menu.)
 2. In Claude Code, the bridge tools are available immediately (`status`,
    `get_design_md`, `get_spec`, `focus`, `annotate`, `set_auto_layout`, …). Try: *"Use
    DesignAgent to read my current Figma selection and build it."*

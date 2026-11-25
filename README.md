@@ -23,9 +23,23 @@ Figma plugin: [DesignAgent — Claude bridge](https://www.figma.com/community/pl
    /plugin marketplace add sherizan/designagent
    /plugin install designagent@designagent
    ```
-3. **Connect the bridge:** open the DesignAgent plugin in Figma and click **Start** on the Claude
-   bridge bar — the dot turns green when connected.
+3. **Connect the bridge:** run `claude` inside your project folder, then open the DesignAgent
+   plugin in Figma. It connects on its own; the dot turns green when connected.
 4. In Claude Code, try: *"Use DesignAgent to read my current Figma selection and build it."*
+
+### Chat inside Figma (beta)
+
+You can also type to Claude in the DesignAgent panel instead of the terminal. The panel runs your
+own Claude Code headless in the selected project, so it uses the login you already have.
+
+- **Pair once.** The panel shows a command that copies a pairing code from
+  `~/.designagent-chat-code`; paste it into the panel. The command is macOS-only for now.
+- **Files stay in the project.** Chat can read, and with "Let Claude edit my files" ticked, edit
+  files inside the project folder only. It has no shell or web access, and cannot write tool or
+  editor configuration (`.claude`, `.git`, `.vscode`, `.mcp.json` and similar).
+- **Claude's cursor.** While a chat turn runs, a small "Claude" cursor layer moves across the canvas
+  to what it is changing. It is removed when the turn ends.
+- One Claude Code session must be open for the project, so the bridge knows the folder.
 
 See [designagent.dev](https://designagent.dev) for the full tool reference and workflows.
 
