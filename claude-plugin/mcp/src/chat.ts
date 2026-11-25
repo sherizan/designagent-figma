@@ -61,6 +61,10 @@ export function chatCodeMatches(candidate: unknown): boolean {
   return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
+// Places the chat may read but never write (compared lower-case).
+const PROTECTED_DIRS = new Set(['.claude', '.git', '.github', '.vscode', '.idea', '.husky', '.cursor', '.devcontainer']);
+const PROTECTED_FILES = new Set(['.mcp.json', '.envrc', '.npmrc', '.gitconfig', '.gitmodules']);
+
 // The only built-in tools the chat session gets; all of them go through the guard.
 const GUARDED_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write'];
 
@@ -99,7 +103,7 @@ export function runChatGuard(): void {
     if (!root) {
       block('no project folder is set.');
     }
-    let input: { cwd?: unknown; tool_input?: Record<string, unknown> };
+    let input: { cwd?: unknown; tool_name?: unknown; tool_input?: Record<string, unknown> };
     try {
       input = JSON.parse(raw) as typeof input;
     } catch {
@@ -108,25 +112,38 @@ export function runChatGuard(): void {
     const realRoot = realOrSelf(resolve(root));
     const base = typeof input.cwd === 'string' && input.cwd ? input.cwd : root;
     const params = input.tool_input ?? {};
-    const inside = (candidate: string): boolean => {
+    const toolName = typeof input.tool_name === 'string' ? input.tool_name : '';
+    const writes = toolName !== 'Read' && toolName !== 'Glob' && toolName !== 'Grep';
+    const realOf = (candidate: string): string => {
       const expanded = candidate.startsWith('~') ? join(homedir(), candidate.slice(1)) : candidate;
-      const real = realOrSelf(isAbsolute(expanded) ? resolve(expanded) : resolve(base, expanded));
-      return real === realRoot || real.startsWith(realRoot + sep);
+      return realOrSelf(isAbsolute(expanded) ? resolve(expanded) : resolve(base, expanded));
     };
     for (const key of ['file_path', 'path', 'notebook_path']) {
       const value = params[key];
-      if (typeof value === 'string' && value && !inside(value)) {
+      if (typeof value !== 'string' || !value) {
+        continue;
+      }
+      const real = realOf(value);
+      if (real !== realRoot && !real.startsWith(realRoot + sep)) {
         block(`${value} is outside the project.`);
       }
+      // Never write tool, editor or repo configuration: a planted hook or server
+      // entry there would run with the user's rights the next time it is loaded.
+      if (writes) {
+        const parts = real.slice(realRoot.length).toLowerCase().split(sep).filter(Boolean);
+        const last = parts[parts.length - 1] ?? '';
+        if (parts.some((part) => PROTECTED_DIRS.has(part)) || PROTECTED_FILES.has(last)) {
+          block(`${value} is a configuration file that chat is not allowed to change.`);
+        }
+      }
     }
-    // Glob patterns can carry their own directory part.
-    const pattern = params.pattern;
-    if (typeof params.glob === 'string' && /(^|[\\/])\.\.([\\/]|$)|^[\\/~]/.test(params.glob)) {
-      block('that file filter reaches outside the project.');
-    }
-    if (typeof pattern === 'string' && 'pattern' in params && !('output_mode' in params) && /(^|[\\/])\.\.([\\/]|$)|^[\\/~]/.test(pattern) && typeof params.path !== 'string') {
-      // Glob tool (no path given) with an absolute or parent-relative pattern.
-      block('that search pattern reaches outside the project.');
+    // File globs carry their own directory part, whatever `path` says: no "..",
+    // and no absolute or home-relative start (including inside {a,b} alternatives).
+    // Grep's `pattern` is a regex over file contents, so only its `glob` is checked.
+    const escapes = (glob: unknown): boolean =>
+      typeof glob === 'string' && (glob.includes('..') || /(^|[{,])\s*[\\/~]/.test(glob));
+    if (escapes(params.glob) || (toolName !== 'Grep' && escapes(params.pattern))) {
+      block('that file pattern reaches outside the project.');
     }
     process.exit(0);
   });

@@ -24835,6 +24835,8 @@ function chatCodeMatches(candidate) {
   const given = Buffer.from(candidate.trim());
   return given.length === expected.length && (0, import_node_crypto.timingSafeEqual)(given, expected);
 }
+var PROTECTED_DIRS = /* @__PURE__ */ new Set([".claude", ".git", ".github", ".vscode", ".idea", ".husky", ".cursor", ".devcontainer"]);
+var PROTECTED_FILES = /* @__PURE__ */ new Set([".mcp.json", ".envrc", ".npmrc", ".gitconfig", ".gitmodules"]);
 var GUARDED_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write"];
 function realOrSelf(path) {
   let current = path;
@@ -24875,23 +24877,32 @@ function runChatGuard() {
     const realRoot = realOrSelf((0, import_node_path.resolve)(root));
     const base = typeof input.cwd === "string" && input.cwd ? input.cwd : root;
     const params = input.tool_input ?? {};
-    const inside = (candidate) => {
+    const toolName = typeof input.tool_name === "string" ? input.tool_name : "";
+    const writes = toolName !== "Read" && toolName !== "Glob" && toolName !== "Grep";
+    const realOf = (candidate) => {
       const expanded = candidate.startsWith("~") ? (0, import_node_path.join)((0, import_node_os.homedir)(), candidate.slice(1)) : candidate;
-      const real = realOrSelf((0, import_node_path.isAbsolute)(expanded) ? (0, import_node_path.resolve)(expanded) : (0, import_node_path.resolve)(base, expanded));
-      return real === realRoot || real.startsWith(realRoot + import_node_path.sep);
+      return realOrSelf((0, import_node_path.isAbsolute)(expanded) ? (0, import_node_path.resolve)(expanded) : (0, import_node_path.resolve)(base, expanded));
     };
     for (const key of ["file_path", "path", "notebook_path"]) {
       const value = params[key];
-      if (typeof value === "string" && value && !inside(value)) {
+      if (typeof value !== "string" || !value) {
+        continue;
+      }
+      const real = realOf(value);
+      if (real !== realRoot && !real.startsWith(realRoot + import_node_path.sep)) {
         block(`${value} is outside the project.`);
       }
+      if (writes) {
+        const parts = real.slice(realRoot.length).toLowerCase().split(import_node_path.sep).filter(Boolean);
+        const last = parts[parts.length - 1] ?? "";
+        if (parts.some((part) => PROTECTED_DIRS.has(part)) || PROTECTED_FILES.has(last)) {
+          block(`${value} is a configuration file that chat is not allowed to change.`);
+        }
+      }
     }
-    const pattern = params.pattern;
-    if (typeof params.glob === "string" && /(^|[\\/])\.\.([\\/]|$)|^[\\/~]/.test(params.glob)) {
-      block("that file filter reaches outside the project.");
-    }
-    if (typeof pattern === "string" && "pattern" in params && !("output_mode" in params) && /(^|[\\/])\.\.([\\/]|$)|^[\\/~]/.test(pattern) && typeof params.path !== "string") {
-      block("that search pattern reaches outside the project.");
+    const escapes = (glob) => typeof glob === "string" && (glob.includes("..") || /(^|[{,])\s*[\\/~]/.test(glob));
+    if (escapes(params.glob) || toolName !== "Grep" && escapes(params.pattern)) {
+      block("that file pattern reaches outside the project.");
     }
     process.exit(0);
   });
@@ -25141,7 +25152,19 @@ var IDLE_MS = Number(process.env.DESIGNAGENT_BROKER_IDLE_MS ?? 6e4);
 var LOG_FILE = (0, import_node_path2.join)((0, import_node_os2.tmpdir)(), "designagent-broker.log");
 var HOME = (0, import_node_os2.homedir)();
 function isUsableRoot(root) {
-  return !!root && root !== "?" && root !== HOME;
+  if (!root || root === "?") {
+    return false;
+  }
+  let real = root;
+  let home = HOME;
+  try {
+    real = (0, import_node_fs2.realpathSync)(root);
+    home = (0, import_node_fs2.realpathSync)(HOME);
+  } catch {
+    return false;
+  }
+  const withSlash = real.endsWith("/") ? real : real + "/";
+  return !(home + "/").startsWith(withSlash);
 }
 function blog(...args) {
   try {
@@ -25293,6 +25316,14 @@ function runBroker() {
         return;
       }
       if (msg.type === "register" && msg.role === "mcp-server") {
+        if (originOf.get(socket)) {
+          blog(`register refused: browser origin ${originOf.get(socket)}.`);
+          try {
+            socket.close();
+          } catch {
+          }
+          return;
+        }
         const version2 = typeof msg.version === "number" ? msg.version : 0;
         const buildMtime = typeof msg.buildMtime === "number" ? msg.buildMtime : 0;
         send(socket, {

@@ -13,7 +13,7 @@
 // connected for IDLE_MS, so it never orphans. Logs to a temp file (its stdio is
 // ignored by the detached spawn).
 
-import { appendFileSync, statSync } from 'node:fs';
+import { appendFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -54,7 +54,22 @@ const HOME = homedir();
 // work in. We compute this in the broker so it filters stale OLD-build servers
 // too — they never learn a new wire flag, but the broker can still spot them.
 function isUsableRoot(root: string): boolean {
-  return !!root && root !== '?' && root !== HOME;
+  if (!root || root === '?') {
+    return false;
+  }
+  // Judge the folder by where it really is, and refuse the home directory and
+  // anything above it ("/", "/Users"): a root that wide would hand the in-panel
+  // chat the whole machine.
+  let real = root;
+  let home = HOME;
+  try {
+    real = realpathSync(root);
+    home = realpathSync(HOME);
+  } catch {
+    return false; // not an existing folder
+  }
+  const withSlash = real.endsWith('/') ? real : real + '/';
+  return !(home + '/').startsWith(withSlash);
 }
 
 function blog(...args: unknown[]): void {
@@ -284,6 +299,18 @@ export function runBroker(): void {
 
       // ---- per-session MCP server registers ----
       if (msg.type === 'register' && msg.role === 'mcp-server') {
+        // MCP servers are Node processes and send no Origin. A socket that has one is
+        // a web page; letting it register would let it choose the project folder
+        // that the in-panel chat runs in.
+        if (originOf.get(socket)) {
+          blog(`register refused: browser origin ${originOf.get(socket)}.`);
+          try {
+            socket.close();
+          } catch {
+            // ignore
+          }
+          return;
+        }
         const version = typeof msg.version === 'number' ? msg.version : 0;
         const buildMtime = typeof msg.buildMtime === 'number' ? msg.buildMtime : 0;
         send(socket, {
