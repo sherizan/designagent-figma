@@ -1293,7 +1293,7 @@ function nextCanvasPosition(
   let maxRight = -Infinity;
   let minTop = Infinity;
   for (const child of container.children) {
-    if (child.id === excludeId || !('x' in child) || !('width' in child)) continue;
+    if (child.id === excludeId || isCursorLayer(child) || !('x' in child) || !('width' in child)) continue;
     const node = child as SceneNode & LayoutMixin;
     maxRight = Math.max(maxRight, node.x + node.width);
     minTop = Math.min(minTop, node.y);
@@ -2459,6 +2459,22 @@ let cursorNode: FrameNode | null = null;
 let cursorScale = 1;
 let cursorPoint: { x: number; y: number } | null = null;
 let cursorMove = 0; // token: a newer move cancels an older glide
+let cursorReads = 0; // read/export commands in flight: the cursor must stay off the canvas
+let cursorMoves = 0; // moves in flight: a restore must not cancel them
+
+// Our own layer: never a design node. Auto-placement and node lists skip it.
+function isCursorLayer(node: BaseNode): boolean {
+  try {
+    return 'getPluginData' in node && node.getPluginData(CURSOR_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+// Drawing needs an editable design file (not Dev Mode, FigJam or view-only).
+function cursorAllowed(): boolean {
+  return cursorMode && cursorReads === 0 && figma.editorType === 'figma';
+}
 
 function removeCursorNode(): void {
   cursorMove += 1;
@@ -2478,7 +2494,7 @@ function sweepCursorNodes(): void {
   removeCursorNode();
   try {
     for (const child of figma.currentPage.children) {
-      if (child.getPluginData(CURSOR_KEY) === '1') {
+      if (isCursorLayer(child)) {
         child.remove();
       }
     }
@@ -2537,9 +2553,13 @@ function placeCursor(node: FrameNode, point: { x: number; y: number }): void {
 
 // The cursor layer, built if needed, sized for the current zoom and on top of the page.
 async function ensureCursorNode(token: number): Promise<FrameNode | null> {
+  if (!cursorAllowed()) {
+    return null;
+  }
   if (!cursorNode || cursorNode.removed) {
     const built = await buildCursorNode();
-    if (token !== cursorMove || !cursorMode) {
+    // A read may have started (or the turn ended) while the font loaded.
+    if (token !== cursorMove || !cursorAllowed()) {
       built.remove();
       return null;
     }
@@ -2562,7 +2582,7 @@ async function ensureCursorNode(token: number): Promise<FrameNode | null> {
 // Put the cursor back where it was (after a read took it off the canvas), or at the
 // middle of the view when the turn has not touched anything yet. No glide.
 async function restoreCursor(): Promise<void> {
-  if (!cursorMode || (cursorNode && !cursorNode.removed)) {
+  if (!cursorAllowed() || cursorMoves > 0 || (cursorNode && !cursorNode.removed)) {
     return;
   }
   const token = (cursorMove += 1);
@@ -2579,10 +2599,11 @@ async function restoreCursor(): Promise<void> {
 }
 
 async function moveCursorTo(nodeId: string): Promise<void> {
-  if (!cursorMode) {
+  if (!cursorMode || figma.editorType !== 'figma') {
     return;
   }
   const token = (cursorMove += 1);
+  cursorMoves += 1;
   try {
     const target = await getNodeByIdGuarded(nodeId);
     if (token !== cursorMove || !cursorMode || !target || !('absoluteBoundingBox' in target)) {
@@ -2626,6 +2647,8 @@ async function moveCursorTo(nodeId: string): Promise<void> {
     }
   } catch (error) {
     console.warn('cursor:', error instanceof Error ? error.message : String(error));
+  } finally {
+    cursorMoves -= 1;
   }
 }
 
@@ -2679,15 +2702,29 @@ function setCursorMode(on: boolean): void {
   }, 1500);
 }
 
+// Claude's cursor is a real layer: keep it off the canvas for as long as anything is
+// reading or exporting the page, so it never shows up in a spec, a node list or a
+// screenshot. The counter also stops a move that finishes mid-read from redrawing it.
 async function runBridgeCommand(
   command: string,
   params: Record<string, unknown>
 ): Promise<unknown> {
-  // Claude's cursor is a real layer: take it off the canvas before anything reads or
-  // exports the page, so it never shows up in a spec, a node list or a screenshot.
-  if (cursorNode && CURSOR_READS.test(command)) {
-    removeCursorNode();
+  if (!CURSOR_READS.test(command)) {
+    return runBridgeCommandInner(command, params);
   }
+  cursorReads += 1;
+  removeCursorNode();
+  try {
+    return await runBridgeCommandInner(command, params);
+  } finally {
+    cursorReads -= 1;
+  }
+}
+
+async function runBridgeCommandInner(
+  command: string,
+  params: Record<string, unknown>
+): Promise<unknown> {
   switch (command) {
     case 'status': {
       const selection = figma.currentPage.selection;
@@ -2718,7 +2755,7 @@ async function runBridgeCommand(
       return { selectedNode: core.selectedNode, intent: core.intent, uiSpec: core.uiSpec };
     }
     case 'list_page_nodes': {
-      const nodes = figma.currentPage.children.map((child) => ({
+      const nodes = figma.currentPage.children.filter((child) => !isCursorLayer(child)).map((child) => ({
         id: child.id,
         name: child.name,
         type: child.type,
@@ -3564,9 +3601,11 @@ async function runBridgeCommand(
         }
         if (targetId) {
           try {
-            const image = await enqueueExport(() =>
-              takeScreenshot({ nodeId: targetId, scale: params.screenshotScale ?? 1 })
-            );
+            // Same rule as a standalone screenshot: no cursor layer while exporting.
+            const image = await runBridgeCommand('take_screenshot', {
+              nodeId: targetId,
+              scale: params.screenshotScale ?? 1
+            });
             return { count: results.length, results, image };
           } catch (error) {
             return {
@@ -3906,6 +3945,16 @@ figma.on('selectionchange', () => {
 });
 
 figma.on('currentpagechange', () => {
+  // A cursor stranded on this page by an earlier crashed run (ours follows us).
+  try {
+    for (const child of figma.currentPage.children) {
+      if (isCursorLayer(child) && child !== cursorNode) {
+        child.remove();
+      }
+    }
+  } catch {
+    // page not ready
+  }
   invalidateCache();
   void computeAndPostAnalysis();
 });
