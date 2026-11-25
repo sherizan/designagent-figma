@@ -194,7 +194,7 @@ function connectToBroker(): void {
       if (msg.ok) {
         if (!bridgeCounted) {
           bridgeCounted = true;
-          countToolCall('bridge_connect');
+          countToolCall(IS_CHAT_TURN ? 'chat_bridge_connect' : 'bridge_connect');
         }
         entry.resolve(msg.result);
       } else {
@@ -252,6 +252,9 @@ function callPlugin(
   timeoutMs: number = REQUEST_TIMEOUT_MS,
   label: string = command // telemetry name, for tools that ride another command (place_icon → place_svg)
 ): Promise<unknown> {
+  if (IS_CHAT_TURN) {
+    countToolCall('chat_tool'); // tool calls that came from the in-panel chat
+  }
   return new Promise((resolve, reject) => {
     if (!brokerSocket || brokerSocket.readyState !== WebSocket.OPEN || !brokerReady) {
       // Never reached the broker: count the attempt and file it with the other setup gaps.
@@ -298,11 +301,24 @@ const TELEMETRY_URL =
   process.env.DESIGNAGENT_TELEMETRY_URL ?? 'https://designagent.dev/api/telemetry';
 const TELEMETRY_FLUSH_MS = 5 * 60 * 1000;
 
+// Set by the broker for the server it starts on each in-panel chat message.
+const IS_CHAT_TURN = process.env.DESIGNAGENT_CHAT_TURN === '1';
+
 const toolCounts = new Map<string, number>();
+
+let chatFlushTimer: NodeJS.Timeout | null = null;
 
 function countToolCall(command: string): void {
   if (TELEMETRY_ENABLED) {
     toolCounts.set(command, (toolCounts.get(command) ?? 0) + 1);
+    // A chat turn's server lives for seconds, far less than the 5-minute flush, and
+    // may be killed before its shutdown flush lands: send soon after each burst.
+    if (IS_CHAT_TURN && !chatFlushTimer) {
+      chatFlushTimer = setTimeout(() => {
+        chatFlushTimer = null;
+        void flushTelemetry();
+      }, 1500);
+    }
   }
 }
 
@@ -1962,7 +1978,9 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log(`DesignAgent MCP server ready (stdio). instance=${SERVER_INSTANCE_ID} pid=${process.pid}`);
-  countToolCall('server_start'); // funnel: Claude plugin installed + session started
+  // funnel: Claude plugin installed + session started. A chat turn starts its own
+  // server, so it gets its own counter and never inflates the session funnel.
+  countToolCall(IS_CHAT_TURN ? 'chat_turn' : 'server_start');
 
   // Connect to the bridge broker (spawning it if needed) once we're up.
   connectToBroker();
@@ -1982,6 +2000,10 @@ async function main(): Promise<void> {
   };
   process.stdin.on('close', exit);
   process.stdin.on('end', exit);
+  // Hosts often signal the server right after (or instead of) closing stdin; without
+  // these the default handler kills the process mid-flush and the last counts are lost.
+  process.on('SIGTERM', exit);
+  process.on('SIGINT', exit);
 }
 
 if (process.argv.includes('--chat-guard')) {

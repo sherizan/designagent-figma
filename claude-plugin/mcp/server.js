@@ -24966,7 +24966,8 @@ function createChatRunner(deps) {
         [MCP_NAME]: {
           command: process.execPath,
           args: [__filename],
-          env: { DESIGNAGENT_PROJECT_DIR: opts.root }
+          // CHAT_TURN: lets telemetry count this as a chat message, not a new session.
+          env: { DESIGNAGENT_PROJECT_DIR: opts.root, DESIGNAGENT_CHAT_TURN: "1" }
         }
       }
     });
@@ -25692,7 +25693,7 @@ function connectToBroker() {
       if (msg.ok) {
         if (!bridgeCounted) {
           bridgeCounted = true;
-          countToolCall("bridge_connect");
+          countToolCall(IS_CHAT_TURN ? "chat_bridge_connect" : "bridge_connect");
         }
         entry.resolve(msg.result);
       } else {
@@ -25730,6 +25731,9 @@ function connectToBroker() {
   });
 }
 function callPlugin(command, params = {}, timeoutMs = REQUEST_TIMEOUT_MS, label = command) {
+  if (IS_CHAT_TURN) {
+    countToolCall("chat_tool");
+  }
   return new Promise((resolve4, reject) => {
     if (!brokerSocket || brokerSocket.readyState !== import_websocket.default.OPEN || !brokerReady) {
       countToolCall(label);
@@ -25761,10 +25765,18 @@ function callPlugin(command, params = {}, timeoutMs = REQUEST_TIMEOUT_MS, label 
 var TELEMETRY_ENABLED = process.env.DESIGNAGENT_TELEMETRY !== "0";
 var TELEMETRY_URL = process.env.DESIGNAGENT_TELEMETRY_URL ?? "https://designagent.dev/api/telemetry";
 var TELEMETRY_FLUSH_MS = 5 * 60 * 1e3;
+var IS_CHAT_TURN = process.env.DESIGNAGENT_CHAT_TURN === "1";
 var toolCounts = /* @__PURE__ */ new Map();
+var chatFlushTimer = null;
 function countToolCall(command) {
   if (TELEMETRY_ENABLED) {
     toolCounts.set(command, (toolCounts.get(command) ?? 0) + 1);
+    if (IS_CHAT_TURN && !chatFlushTimer) {
+      chatFlushTimer = setTimeout(() => {
+        chatFlushTimer = null;
+        void flushTelemetry();
+      }, 1500);
+    }
   }
 }
 var COUNTER_NAME = /^[a-z][a-z0-9_]{0,40}$/;
@@ -27138,7 +27150,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log(`DesignAgent MCP server ready (stdio). instance=${SERVER_INSTANCE_ID} pid=${process.pid}`);
-  countToolCall("server_start");
+  countToolCall(IS_CHAT_TURN ? "chat_turn" : "server_start");
   connectToBroker();
   setInterval(() => void flushTelemetry(), TELEMETRY_FLUSH_MS).unref();
   let exiting = false;
@@ -27150,6 +27162,8 @@ async function main() {
   };
   process.stdin.on("close", exit);
   process.stdin.on("end", exit);
+  process.on("SIGTERM", exit);
+  process.on("SIGINT", exit);
 }
 if (process.argv.includes("--chat-guard")) {
   runChatGuard();

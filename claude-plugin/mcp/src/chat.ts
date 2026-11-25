@@ -229,7 +229,8 @@ export function createChatRunner(deps: {
         [MCP_NAME]: {
           command: process.execPath,
           args: [__filename],
-          env: { DESIGNAGENT_PROJECT_DIR: opts.root }
+          // CHAT_TURN: lets telemetry count this as a chat message, not a new session.
+          env: { DESIGNAGENT_PROJECT_DIR: opts.root, DESIGNAGENT_CHAT_TURN: '1' }
         }
       }
     });

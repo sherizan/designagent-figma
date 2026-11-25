@@ -43,7 +43,8 @@ tool names with call counts, the plugin version, and a random install id (a UUID
 `~/.designagent-id`). It never includes tool parameters, node names, file names, or any design
 content. Failed calls are counted the same way under `<tool>_err` and similar suffixes, and
 operations run inside `batch` under `b_<tool>` (still just the name of a built-in tool, never
-the error text or anything you typed). Opt out by setting `DESIGNAGENT_TELEMETRY=0` in your environment.
+the error text or anything you typed). A message sent from the in-panel chat is counted as
+`chat_turn`: the count only, never the message. Opt out by setting `DESIGNAGENT_TELEMETRY=0` in your environment.
 
 ## Development
 
